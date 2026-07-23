@@ -15,6 +15,7 @@ targets:
       CODE_SIGN_IDENTITY: ""
       CODE_SIGNING_REQUIRED: "NO"
       CODE_SIGNING_ALLOWED: "NO"
+      FRAMEWORK_SEARCH_PATHS: "$(inherited)"
     dependencies:
-      - framework: ARKit.framework
-      - framework: RealityKit.framework
+      - sdk: ARKit.framework
+      - sdk: RealityKit.framework
