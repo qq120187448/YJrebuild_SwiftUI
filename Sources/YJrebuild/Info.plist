@@ -21,15 +21,26 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchScreenColor</string>
+		<key>UIImageName</key>
+		<string></string>
+	</dict>
+	<key>UIStatusBarHidden</key>
+	<true/>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<false/>
+	<key>UIRequiresFullScreen</key>
+	<true/>
+	<key>UIStatusBarStyle</key>
+	<string>UIStatusBarStyleDarkContent</string>
 	<key>NSCameraUsageDescription</key>
 	<string>用于3D物体扫描和实时取景预览，需要访问摄像头进行LiDAR建模</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>用于保存扫描生成的3D模型文件和截图到相册</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>用于将扫描结果保存到您的照片库</string>
-	<key>UIStatusBarHidden</key>
-	<true/>
-	<key>UIViewControllerBasedStatusBarAppearance</key>
-	<false/>
 </dict>
 </plist>
