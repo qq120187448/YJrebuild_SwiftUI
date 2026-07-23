@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleName</key><string>YJrebuild</string>
+<key>CFBundleName</key><string>????</string>
 <key>CFBundleIdentifier</key><string>com.youjiscan.yjrebuild</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>CFBundleShortVersionString</key><string>1.0</string>
-<key>NSCameraUsageDescription</key><string>For 3D scanning</string>
-<key>NSPhotoLibraryUsageDescription</key><string>For saving scans</string>
+<key>UIRequiredDeviceCapabilities</key><array><string>armv7</string><string>arkit</string><string>lidar</string></array>
+<key>NSCameraUsageDescription</key><string>??3D?????????????????????LiDAR??</string>
+<key>NSPhotoLibraryUsageDescription</key><string>?????????3D??????????</string>
+<key>NSPhotoLibraryAddUsageDescription</key><string>???????????????</string>
 </dict></plist>
