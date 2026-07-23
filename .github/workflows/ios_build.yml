@@ -1,0 +1,27 @@
+name: iOS Build
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install xcodegen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Build unsigned IPA
+        run: |
+          xcodebuild -project YJrebuild.xcodeproj -scheme YJrebuild -sdk iphoneos -configuration Release -derivedDataPath ./DerivedData CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+      - name: Package IPA
+        run: |
+          APP=$(find ./DerivedData -name "YJrebuild.app" -type d | head -1)
+          mkdir -p Payload; cp -R "$APP" Payload/; zip -r YJrebuild.ipa Payload/; rm -rf Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YJrebuild-iOS
+          path: YJrebuild.ipa
+          retention-days: 14
