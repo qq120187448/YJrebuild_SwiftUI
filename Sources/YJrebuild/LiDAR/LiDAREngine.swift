@@ -31,22 +31,24 @@ final class LiDAREngine: NSObject, ObservableObject, ARSessionDelegate {
         guard isScanning else { return }
         for anchor in anchors {
             guard let ma = anchor as? ARMeshAnchor else { continue }
-            DispatchQueue.main.async { self?.meshVertexCount += ma.geometry.vertices.count }
-        }
-    }
-
-    func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
-        DispatchQueue.main.async {
-            switch camera.trackingState {
-            case .normal: self.trackingOK = true
-            case .limited, .notAvailable: self.trackingOK = false
-            @unknown default: break
+            let vc = ma.geometry.vertices.count
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.meshVertexCount += vc
             }
         }
     }
 
+    func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
+        let normal = camera.trackingState == .normal
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.trackingOK = normal
+        }
+    }
+
     func session(_ session: ARSession, didFailWithError error: Error) {
-        DispatchQueue.main.async { self?.isScanning = false }
+        DispatchQueue.main.async { [weak self] in self?.isScanning = false }
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {}
