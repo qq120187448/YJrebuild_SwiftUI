@@ -1,0 +1,17 @@
+name: YJrebuild
+targets:
+  YJrebuild:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - Sources/YJrebuild
+    info:
+      path: Sources/YJrebuild/Info.plist
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.youjiscan.yjrebuild
+      SWIFT_VERSION: "5.0"
+      TARGETED_DEVICE_FAMILY: "1"
+      CODE_SIGN_IDENTITY: ""
+      CODE_SIGNING_REQUIRED: "NO"
+      CODE_SIGNING_ALLOWED: "NO"
