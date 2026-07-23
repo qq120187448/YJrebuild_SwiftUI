@@ -1,4 +1,5 @@
 ﻿import ARKit
+import RealityKit
 import Foundation
 
 final class LiDAREngine: NSObject, ObservableObject, ARSessionDelegate {
@@ -12,7 +13,7 @@ final class LiDAREngine: NSObject, ObservableObject, ARSessionDelegate {
     override init() {
         super.init()
         guard ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) else {
-            errorMessage = "Device does not support LiDAR. Requires iPhone 12 Pro or newer."
+            errorMessage = "Device does not support LiDAR"
             return
         }
         let config = ARWorldTrackingConfiguration()
@@ -22,48 +23,30 @@ final class LiDAREngine: NSObject, ObservableObject, ARSessionDelegate {
         arView.automaticallyConfigureSession = false
     }
 
-    func startScanning() {
-        isScanning = true
-        meshVertexCount = 0
-    }
-
-    func stopScanning() {
-        isScanning = false
-        arView.session.pause()
-    }
-
+    func startScanning() { isScanning = true; meshVertexCount = 0 }
+    func stopScanning() { isScanning = false; arView.session.pause() }
     deinit { stopScanning() }
-
-    func exportMeshData() -> Data? {
-        let header = "# YJrebuild LiDAR\n# Vertices: " + String(meshVertexCount) + "\n"
-        return header.data(using: .utf8)
-    }
 
     func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
         guard isScanning else { return }
         for anchor in anchors {
-            guard let meshAnchor = anchor as? ARMeshAnchor else { continue }
-            DispatchQueue.main.async { [weak self] in
-                self?.meshVertexCount += meshAnchor.geometry.vertices.count
-            }
+            guard let ma = anchor as? ARMeshAnchor else { continue }
+            DispatchQueue.main.async { self?.meshVertexCount += ma.geometry.vertices.count }
         }
     }
 
     func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
-        DispatchQueue.main.async { [weak self] in
+        DispatchQueue.main.async {
             switch camera.trackingState {
-            case .normal: self?.trackingOK = true
-            case .limited, .notAvailable: self?.trackingOK = false
+            case .normal: self.trackingOK = true
+            case .limited, .notAvailable: self.trackingOK = false
             @unknown default: break
             }
         }
     }
 
     func session(_ session: ARSession, didFailWithError error: Error) {
-        DispatchQueue.main.async { [weak self] in
-            self?.errorMessage = error.localizedDescription
-            self?.isScanning = false
-        }
+        DispatchQueue.main.async { self?.isScanning = false }
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {}
