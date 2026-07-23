@@ -1,4 +1,5 @@
 ﻿import SwiftUI
+import ARKit
 
 struct ContentView: View {
     @State private var selectedTab = 0
@@ -67,3 +68,4 @@ struct CameraPlaceholderView: View {
         }
     }
 }
+
