@@ -1,10 +1,6 @@
-import ARKit
-import RealityKit
-import Combine
+﻿import ARKit
 import Foundation
 
-/// LiDAR ???? - ???????
-/// ????? Mac + Xcode ?????????
 final class LiDAREngine: NSObject, ObservableObject, ARSessionDelegate {
     @Published var isScanning = false
     @Published var meshVertexCount: Int = 0
@@ -16,7 +12,7 @@ final class LiDAREngine: NSObject, ObservableObject, ARSessionDelegate {
     override init() {
         super.init()
         guard ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) else {
-            errorMessage = "?????LiDAR???iPhone 12 Pro???"
+            errorMessage = "Device does not support LiDAR. Requires iPhone 12 Pro or newer."
             return
         }
         let config = ARWorldTrackingConfiguration()
@@ -38,15 +34,11 @@ final class LiDAREngine: NSObject, ObservableObject, ARSessionDelegate {
 
     deinit { stopScanning() }
 
-    // Export placeholder
     func exportMeshData() -> Data? {
-        let header = "# YJrebuild LiDAR Export
-# Vertices: \(meshVertexCount)
-"
+        let header = "# YJrebuild LiDAR\n# Vertices: " + String(meshVertexCount) + "\n"
         return header.data(using: .utf8)
     }
 
-    // ARSessionDelegate minimal
     func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
         guard isScanning else { return }
         for anchor in anchors {
