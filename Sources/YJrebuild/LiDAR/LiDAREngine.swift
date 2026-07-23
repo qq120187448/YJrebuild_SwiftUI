@@ -1,60 +1,47 @@
 import ARKit
 import RealityKit
 import Combine
-import os.log
 
-/// LiDAR ???? - ?? ARSession ?????mesh ???????
-final class LiDAREngine: NSObject, ObservableObject {
-    // MARK: - Published State
+/// LiDAR ???? - ?? ARSession ? mesh ??
+final class LiDAREngine: NSObject, ObservableObject, ARSessionDelegate {
+    // MARK: - Published
     @Published var isScanning = false
     @Published var scanProgress: Float = 0.0
     @Published var scannedAreaEstimate: Float = 0.0
     @Published var meshVertexCount: Int = 0
-    @Published var sessionState: ARSession.State = .initializing
+    @Published var trackingNormal = true
     @Published var errorMessage: String?
 
-    // MARK: - ARKit Properties
+    // MARK: - ARKit
     let arView = ARView(frame: .zero)
     private var meshAnchors: [ARMeshAnchor] = []
     private var cancellables = Set<AnyCancellable>()
-    private let log = Logger(subsystem: "com.youjiscan.yjrebuild", category: "LiDAR")
-
-    // MARK: - Memory Management
-    private let maxMeshAnchors = 500
-    private let memoryWarningThreshold: UInt64 = 300 * 1024 * 1024 // 300MB
+    private let maxAnchors = 500
+    private let memoryThreshold: UInt64 = 300 * 1024 * 1024 // 300MB
 
     override init() {
         super.init()
-        setupARSession()
-        observeMemoryPressure()
+        setupSession()
+        observeMemory()
     }
 
     deinit {
         stopScanning()
-        log.info("LiDAREngine deinitialized - all resources cleaned")
     }
 
-    // MARK: - Session Setup
-    private func setupARSession() {
+    // MARK: - Setup
+    private func setupSession() {
         guard ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) else {
-            errorMessage = "?????LiDAR?????iPhone 12 Pro?????"
+            errorMessage = "?????LiDAR"
             return
         }
-
         let config = ARWorldTrackingConfiguration()
         config.sceneReconstruction = .mesh
         config.environmentTexturing = .automatic
-        config.frameSemantics = [.smoothedSceneDepth, .sceneDepth]
         arView.session.delegate = self
         arView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
         arView.automaticallyConfigureSession = false
-        arView.renderOptions = [
-            .disableCameraGrain,
-            .disableMotionBlur,
-            .disableAREnvironmentLighting
-        ]
-
-        log.info("ARSession configured with LiDAR mesh reconstruction")
+        arView.renderOptions = [.disableCameraGrain, .disableMotionBlur]
     }
 
     // MARK: - Scan Control
@@ -62,59 +49,41 @@ final class LiDAREngine: NSObject, ObservableObject {
         guard !isScanning else { return }
         isScanning = true
         scanProgress = 0.0
-        scannedAreaEstimate = 0.0
         meshVertexCount = 0
+        scannedAreaEstimate = 0.0
         meshAnchors.removeAll(keepingCapacity: true)
-        log.info("Scan started")
     }
 
     func stopScanning() {
         isScanning = false
         arView.session.pause()
-        log.info("Scan stopped - \(self.meshVertexCount) vertices captured")
-
-        // Force cleanup
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.performMemoryCleanup()
+            self?.cleanup()
         }
     }
 
-    func resumeScanning() {
-        guard !isScanning else { return }
-        let config = ARWorldTrackingConfiguration()
-        config.sceneReconstruction = .mesh
-        arView.session.run(config)
-        isScanning = true
-        log.info("Scan resumed")
-    }
-
-    // MARK: - Memory Cleanup
-    private func performMemoryCleanup() {
+    private func cleanup() {
         meshAnchors.removeAll(keepingCapacity: false)
         cancellables.removeAll()
         URLCache.shared.removeAllCachedResponses()
-        log.info("Memory cleanup completed")
     }
 
-    private func observeMemoryPressure() {
+    // MARK: - Memory
+    private func observeMemory() {
         NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)
             .sink { [weak self] _ in
-                self?.log.warning("Memory warning received - trimming anchors")
-                if self?.meshAnchors.count ?? 0 > 100 {
-                    self?.trimOldAnchors()
-                }
+                if (self?.meshAnchors.count ?? 0) > 100 { self?.trimAnchors() }
             }
             .store(in: &cancellables)
     }
 
-    private func trimOldAnchors() {
+    private func trimAnchors() {
         let excess = meshAnchors.count - 100
         guard excess > 0 else { return }
         meshAnchors.removeFirst(excess)
-        log.info("Trimmed \(excess) old anchors")
     }
 
-    private func checkMemoryPressure() -> Bool {
+    private func checkMemory() -> Bool {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
         let result = withUnsafeMutablePointer(to: &info) {
@@ -122,143 +91,84 @@ final class LiDAREngine: NSObject, ObservableObject {
                 task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
             }
         }
-        if result == KERN_SUCCESS {
-            let usedMemory = info.phys_footprint
-            if usedMemory > memoryWarningThreshold {
-                log.warning("Memory pressure: \(usedMemory / 1024 / 1024)MB used")
-                return true
-            }
-        }
-        return false
+        return result == KERN_SUCCESS && info.phys_footprint > memoryThreshold
     }
 
-    // MARK: - Mesh Export
+    // MARK: - Export
     func exportMeshData() -> Data? {
-        guard !meshAnchors.isEmpty else {
-            log.warning("No mesh data to export")
-            return nil
-        }
-        // Export as OBJ string
-        var objString = "# YJrebuild LiDAR Mesh Export\n"
-        objString += "# Vertices: \(meshVertexCount)\n\n"
+        guard !meshAnchors.isEmpty else { return nil }
+        var obj = "# YJrebuild LiDAR\n# Vertices: \(meshVertexCount)\n"
         for anchor in meshAnchors {
-            let mesh = anchor.geometry
-            for i in 0..<mesh.vertices.count {
-                let v = mesh.vertices.buffer.contents().advanced(by: i * mesh.vertices.stride).assumingMemoryBound(to: SIMD3<Float>.self).pointee
-                objString += "v \(v.x) \(v.y) \(v.z)\n"
+            let verts = anchor.geometry.vertices
+            let faces = anchor.geometry.faces
+            let vBuf = verts.buffer.contents()
+            let fBuf = faces.buffer.contents()
+
+            for i in 0..<verts.count {
+                let base = vBuf.advanced(by: i * verts.stride)
+                let ptr = base.assumingMemoryBound(to: (Float, Float, Float).self).pointee
+                obj += "v \(ptr.0) \(ptr.1) \(ptr.2)\n"
             }
-            for i in 0..<mesh.faces.count {
-                let f = mesh.faces.buffer.contents().advanced(by: i * mesh.faces.stride).assumingMemoryBound(to: SIMD3<Int32>.self).pointee
-                objString += "f \(f.x + 1) \(f.y + 1) \(f.z + 1)\n"
+            for i in 0..<faces.count {
+                let base = fBuf.advanced(by: i * faces.bytesPerIndex * faces.indexCountPerPrimitive)
+                let ptr = base.assumingMemoryBound(to: (UInt32, UInt32, UInt32).self).pointee
+                obj += "f \(ptr.0 + 1) \(ptr.1 + 1) \(ptr.2 + 1)\n"
             }
         }
-        return objString.data(using: .utf8)
+        return obj.data(using: .utf8)
     }
-}
 
-// MARK: - ARSessionDelegate
-extension LiDAREngine: ARSessionDelegate {
+    // MARK: - ARSessionDelegate
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard isScanning else { return }
-
-        // Update scanning progress
         DispatchQueue.main.async { [weak self] in
-            self?.sessionState = .running
-            self?.scanProgress = min(self?.scanProgress ?? 0 + 0.001, 1.0)
+            self?.scanProgress = min((self?.scanProgress ?? 0) + 0.001, 1.0)
         }
-
-        // Check memory every ~60 frames
-        if frame.timestamp.truncatingRemainder(dividingBy: 60) < 1 {
-            if checkMemoryPressure() {
-                DispatchQueue.main.async { [weak self] in
-                    self?.trimOldAnchors()
-                }
-            }
+        if Int(frame.timestamp) % 60 == 0 && checkMemory() {
+            DispatchQueue.main.async { [weak self] in self?.trimAnchors() }
         }
     }
 
     func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
         for anchor in anchors {
             guard let meshAnchor = anchor as? ARMeshAnchor, isScanning else { continue }
-
-            if meshAnchors.count >= maxMeshAnchors {
-                meshAnchors.removeFirst(50)
-            }
+            if meshAnchors.count >= maxAnchors { meshAnchors.removeFirst(50) }
             meshAnchors.append(meshAnchor)
-
-            let vertexCount = meshAnchor.geometry.vertices.count
-            let faceCount = meshAnchor.geometry.faces.count
-
             DispatchQueue.main.async { [weak self] in
-                self?.meshVertexCount += vertexCount
-                self?.scannedAreaEstimate += Float(faceCount) * 0.0001
+                self?.meshVertexCount += meshAnchor.geometry.vertices.count
+                self?.scannedAreaEstimate += Float(meshAnchor.geometry.faces.count) * 0.0001
             }
         }
     }
 
-    func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
-        // Mesh updates are handled by RealityKit rendering
-    }
-
+    func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {}
     func session(_ session: ARSession, didRemove anchors: [ARAnchor]) {
-        meshAnchors.removeAll { anchor in
-            anchors.contains { $0.identifier == anchor.identifier }
-        }
+        meshAnchors.removeAll { a in anchors.contains { $0.identifier == a.identifier } }
     }
 
     func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
         DispatchQueue.main.async { [weak self] in
             switch camera.trackingState {
-            case .normal:
-                self?.sessionState = .running
-            case .limited(let reason):
-                self?.sessionState = .limited(reason)
-            case .notAvailable:
-                self?.errorMessage = "????????"
+            case .normal: self?.trackingNormal = true
+            case .limited: self?.trackingNormal = false
+            case .notAvailable: self?.errorMessage = "?????"
+            @unknown default: break
             }
         }
     }
 
     func sessionWasInterrupted(_ session: ARSession) {
-        DispatchQueue.main.async { [weak self] in
-            self?.sessionState = .interrupted
-        }
+        DispatchQueue.main.async { [weak self] in self?.isScanning = false }
     }
 
     func sessionInterruptionEnded(_ session: ARSession) {
-        DispatchQueue.main.async { [weak self] in
-            self?.resumeScanning()
-        }
+        DispatchQueue.main.async { [weak self] in self?.startScanning() }
     }
 
     func session(_ session: ARSession, didFailWithError error: Error) {
         DispatchQueue.main.async { [weak self] in
             self?.errorMessage = "????: \(error.localizedDescription)"
             self?.isScanning = false
-        }
-    }
-}
-
-extension ARSession.State: @retroactive Equatable {
-    public static func == (lhs: ARSession.State, rhs: ARSession.State) -> Bool {
-        switch (lhs, rhs) {
-        case (.initializing, .initializing), (.running, .running), (.interrupted, .interrupted):
-            return true
-        case (.limited(let a), .limited(let b)):
-            return a == b
-        default:
-            return false
-        }
-    }
-}
-
-extension ARCamera.TrackingState.Reason: @retroactive Equatable {
-    public static func == (lhs: ARCamera.TrackingState.Reason, rhs: ARCamera.TrackingState.Reason) -> Bool {
-        switch (lhs, rhs) {
-        case (.initializing, .initializing), (.relocalizing, .relocalizing), (.excessiveMotion, .excessiveMotion), (.insufficientFeatures, .insufficientFeatures):
-            return true
-        default:
-            return false
         }
     }
 }
