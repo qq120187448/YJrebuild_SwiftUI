@@ -11,7 +11,7 @@ struct SceneKitPreviewView: UIViewRepresentable {
         view.scene = scene
         view.allowsCameraControl = true
         view.autoenablesDefaultLighting = true
-        view.backgroundColor = UIColor(hex: "1A1A1A")
+        view.backgroundColor = UIColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1.0)
         view.antialiasingMode = .multisampling4X
         return view
     }
@@ -52,3 +52,4 @@ struct SceneKitPreviewView: UIViewRepresentable {
         return scene
     }
 }
+
