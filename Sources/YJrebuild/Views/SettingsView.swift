@@ -1,13 +1,51 @@
 import SwiftUI
+
 struct SettingsView: View {
     var body: some View {
         List {
-            Section("general") { SettingRow(title: "scan_mode", value: "object"); SettingRow(title: "auto_save", value: "on") }
-            Section("storage") { SettingRow(title: "path", value: "/Documents"); SettingRow(title: "cache", value: "128 MB") }
-            Section("camera") { SettingRow(title: "fps", value: "30"); SettingRow(title: "lidar_quality", value: "high") }
-            Section("about") { SettingRow(title: "version", value: "1.0.0") }
-            Section { Button("clear_all", role: .destructive, action: {}) }
-        }.listStyle(.insetGrouped)
+            Section("??") {
+                SettingRow(title: "??????", value: "??")
+                SettingRow(title: "??????", value: "??")
+                SettingRow(title: "???????", value: "??")
+            }
+            Section("??") {
+                SettingRow(title: "??????", value: "/Documents/????")
+                SettingRow(title: "????", value: "128 MB")
+                SettingRow(title: "????3D??", value: "")
+            }
+            Section("??? LiDAR") {
+                SettingRow(title: "???????", value: "??")
+                SettingRow(title: "????", value: "30 fps")
+                SettingRow(title: "LiDAR ????", value: "?")
+            }
+            Section("?????") {
+                SettingRow(title: "????", value: "???")
+                SettingRow(title: "????", value: "???")
+            }
+            Section("??") {
+                SettingRow(title: "App ??", value: "1.0.0")
+                SettingRow(title: "????", value: "")
+                SettingRow(title: "????", value: "")
+            }
+            Section {
+                Button("????????", role: .destructive) {}
+            }
+        }
+        .listStyle(.insetGrouped)
+        .background(Color(hex: "F2F2F7"))
     }
 }
-struct SettingRow: View { let title: String; var value: String = ""; var body: some View { HStack { Text(title); Spacer(); Text(value).foregroundColor(Color(hex: "8E8E93")) } } }
+
+struct SettingRow: View {
+    let title: String
+    var value: String = ""
+    var body: some View {
+        HStack {
+            Text(title).font(.system(size: 15))
+            Spacer()
+            Text(value)
+                .font(.system(size: 13))
+                .foregroundColor(Color(hex: "8E8E93"))
+        }
+    }
+}
