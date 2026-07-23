@@ -1,4 +1,4 @@
-name: YJrebuild
+﻿name: YJrebuild
 targets:
   YJrebuild:
     type: application
@@ -19,3 +19,7 @@ targets:
     dependencies:
       - sdk: ARKit.framework
       - sdk: RealityKit.framework
+      - sdk: SceneKit.framework
+      - sdk: AVFoundation.framework
+      - sdk: Vision.framework
+      - sdk: UIKit.framework
