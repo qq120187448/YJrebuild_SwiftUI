@@ -1,0 +1,16 @@
+# Local SDKs and caches
+.pub_cache/
+flutter_sdk/
+.agents/
+
+# Xcode
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+
+# macOS
+.DS_Store
+
+# GitHub Actions output
+Build/

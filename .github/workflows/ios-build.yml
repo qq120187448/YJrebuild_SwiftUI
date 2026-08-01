@@ -1,0 +1,36 @@
+name: iOS Build
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build:
+    name: Build iOS app without signing
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build
+        run: |
+          xcodebuild \
+            -project LiDARScanQuantApp/RoomPlanDemo.xcodeproj \
+            -target RoomPlanDemo \
+            -configuration Debug \
+            -sdk iphoneos \
+            -derivedDataPath Build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: RoomPlanDemo-Debug
+          path: Build/Build/Products/Debug-iphoneos/RoomPlanDemo.app
