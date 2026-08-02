@@ -19,6 +19,47 @@ extension CapturedRoom {
     }
 }
 
+private extension CapturedRoom {
+    var allSurfaces: [Surface] {
+        walls + doors + windows + openings + floors
+    }
+
+    var boundingSize: simd_float3 {
+        guard !allSurfaces.isEmpty else { return .zero }
+
+        var minPoint = SIMD3<Float>(x: .greatestFiniteMagnitude,
+                                    y: .greatestFiniteMagnitude,
+                                    z: .greatestFiniteMagnitude)
+        var maxPoint = SIMD3<Float>(x: -.greatestFiniteMagnitude,
+                                    y: -.greatestFiniteMagnitude,
+                                    z: -.greatestFiniteMagnitude)
+
+        for surface in allSurfaces {
+            let size = surface.dimensions
+            let columns = surface.transform.columns
+            let center = SIMD3<Float>(columns.3.x, columns.3.y, columns.3.z)
+            let axisX = SIMD3<Float>(columns.0.x, columns.0.y, columns.0.z)
+            let axisY = SIMD3<Float>(columns.1.x, columns.1.y, columns.1.z)
+            let offsetX = axisX * (size.x * 0.5)
+            let offsetY = axisY * (size.y * 0.5)
+
+            for signX in [Float(-1), Float(1)] {
+                for signY in [Float(-1), Float(1)] {
+                    let point = center + offsetX * signX + offsetY * signY
+                    minPoint.x = min(minPoint.x, point.x)
+                    minPoint.y = min(minPoint.y, point.y)
+                    minPoint.z = min(minPoint.z, point.z)
+                    maxPoint.x = max(maxPoint.x, point.x)
+                    maxPoint.y = max(maxPoint.y, point.y)
+                    maxPoint.z = max(maxPoint.z, point.z)
+                }
+            }
+        }
+
+        return maxPoint - minPoint
+    }
+}
+
 struct RoomExportDocument: Encodable {
     let schemaVersion: Int
     let createdAt: Date
@@ -30,10 +71,10 @@ struct RoomExportDocument: Encodable {
     init(room: CapturedRoom) {
         schemaVersion = 1
         createdAt = Date()
-        dimensions = RoomExportRoomSize(size: room.dimensions)
-        surfaces = room.surfaces.map(RoomExportSurface.init)
+        dimensions = RoomExportRoomSize(size: room.boundingSize)
+        surfaces = room.allSurfaces.map(RoomExportSurface.init)
         objects = room.objects.map(RoomExportObject.init)
-        summary = RoomExportSummary(surfaces: room.surfaces, objects: room.objects)
+        summary = RoomExportSummary(surfaces: room.allSurfaces, objects: room.objects)
     }
 }
 
@@ -82,6 +123,7 @@ struct RoomExportSurface: Encodable {
         case .door: return "door"
         case .window: return "window"
         case .opening: return "opening"
+        case .floor: return "floor"
         @unknown default: return "unknown"
         }
     }
@@ -153,8 +195,14 @@ struct RoomExportSummary: Encodable {
 
     init(surfaces: [CapturedRoom.Surface], objects: [CapturedRoom.Object]) {
         let walls = surfaces.filter { $0.category == .wall }
-        let doors = surfaces.filter { $0.category == .door }
-        let windows = surfaces.filter { $0.category == .window }
+        let doors = surfaces.filter {
+            if case .door = $0.category { return true }
+            return false
+        }
+        let windows = surfaces.filter {
+            if case .window = $0.category { return true }
+            return false
+        }
         let openings = surfaces.filter { $0.category == .opening }
 
         surfaceCount = surfaces.count
