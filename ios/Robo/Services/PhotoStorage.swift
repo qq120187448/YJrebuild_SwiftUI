@@ -19,12 +19,21 @@ enum PhotoStorage {
         return (label, fileName)
     }
 
-    static func load(label: String, fileName: String) -> XLSXWriter.ImageAttachment? {
+    static func load(
+        label: String,
+        fileName: String,
+        componentID: String? = nil
+    ) -> XLSXWriter.ImageAttachment? {
         guard let url = try? directory().appendingPathComponent(fileName),
               let data = try? Data(contentsOf: url) else {
             return nil
         }
-        return XLSXWriter.ImageAttachment(label: label, data: data, fileExtension: "jpg")
+        return XLSXWriter.ImageAttachment(
+            label: label,
+            data: data,
+            fileExtension: "jpg",
+            componentID: componentID
+        )
     }
 
     static func delete(fileName: String) {

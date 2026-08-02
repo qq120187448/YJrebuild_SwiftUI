@@ -21,6 +21,7 @@ final class RoomScanRecord {
     var usdzData: Data?
     var photoLabels: [String] = []
     var photoFileNames: [String] = []
+    var photoComponentIDs: [String] = []
 
     init(
         roomName: String,
@@ -39,7 +40,8 @@ final class RoomScanRecord {
         quantityJSON: Data,
         usdzData: Data? = nil,
         photoLabels: [String] = [],
-        photoFileNames: [String] = []
+        photoFileNames: [String] = [],
+        photoComponentIDs: [String] = []
     ) {
         self.roomName = roomName
         self.capturedAt = Date()
@@ -59,5 +61,6 @@ final class RoomScanRecord {
         self.usdzData = usdzData
         self.photoLabels = photoLabels
         self.photoFileNames = photoFileNames
+        self.photoComponentIDs = photoComponentIDs
     }
 }

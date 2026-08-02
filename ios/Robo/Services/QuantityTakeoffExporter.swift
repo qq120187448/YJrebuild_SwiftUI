@@ -22,6 +22,23 @@ enum QuantityTakeoffExporter {
         return labels
     }
 
+    static func componentLabels(room: CapturedRoom) -> [UUID: String] {
+        var map: [UUID: String] = [:]
+        for (index, door) in room.doors.enumerated() {
+            map[door.identifier] = "门\(index + 1)"
+        }
+        for (index, window) in room.windows.enumerated() {
+            map[window.identifier] = "窗\(index + 1)"
+        }
+        for (index, opening) in room.openings.enumerated() {
+            map[opening.identifier] = "洞口\(index + 1)"
+        }
+        for (index, object) in room.objects.enumerated() {
+            map[object.identifier] = "\(objectCategoryName(object.category))\(index + 1)"
+        }
+        return map
+    }
+
     static func makeItems(room: CapturedRoom, roomType: String) -> [QuantityTakeoffItem] {
         let floorArea = RoomDataProcessor.estimateFloorArea(room)
         let ceilingHeight = RoomDataProcessor.estimateCeilingHeight(room.walls)
@@ -132,25 +149,25 @@ enum QuantityTakeoffExporter {
 
         let xlsxURL = directory.appendingPathComponent("工程量清单.xlsx")
         let workbook = try XLSXWriter.makeWorkbook(
-            sheets: makeSheets(
+            sheets: [makeSingleSheet(
                 room: room,
                 roomName: roomName,
                 roomType: roomType,
                 unitPrices: unitPrices,
                 photos: photos
-            )
+            )]
         )
         try workbook.write(to: xlsxURL)
         return [xlsxURL]
     }
 
-    static func makeSheets(
+    static func makeSingleSheet(
         room: CapturedRoom,
         roomName: String,
         roomType: String,
         unitPrices: [String: Double],
         photos: [XLSXWriter.ImageAttachment]
-    ) -> [XLSXWriter.Sheet] {
+    ) -> XLSXWriter.Sheet {
         let floorArea = RoomDataProcessor.estimateFloorArea(room)
         let ceilingHeight = RoomDataProcessor.estimateCeilingHeight(room.walls)
         let volume = floorArea * ceilingHeight
@@ -184,22 +201,22 @@ enum QuantityTakeoffExporter {
         formatter.locale = Locale(identifier: "zh_CN")
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
 
-        var summaryRows: [[XLSXWriter.Cell]] = [
+        var rows: [[XLSXWriter.Cell]] = [
             [XLSXWriter.Cell("房间工程量清单", bold: true)],
             [XLSXWriter.Cell("")]
         ]
-        summaryRows += summaryRow("房间名称", roomName)
-        summaryRows += summaryRow("房间类型", roomType)
-        summaryRows += summaryRow("建筑面积", String(format: "%.2f m²", floorArea))
-        summaryRows += summaryRow("层高", String(format: "%.2f m", ceilingHeight))
-        summaryRows += summaryRow("房间体积", String(format: "%.2f m³", volume))
-        summaryRows += summaryRow("房间周长", String(format: "%.2f m", perimeter))
-        summaryRows += summaryRow("房间形状", shapeName(room))
-        summaryRows += summaryRow("楼层", "\(room.story)")
-        summaryRows += summaryRow("识别房间类型", sectionNames(room))
-        summaryRows += summaryRow("生成时间", formatter.string(from: Date()))
-        summaryRows.append([XLSXWriter.Cell("")])
-        summaryRows += [
+        rows.append([XLSXWriter.Cell("一、房间概要", section: true)])
+        rows += summaryRow("房间名称", roomName)
+        rows += summaryRow("房间类型", roomType)
+        rows += summaryRow("建筑面积", String(format: "%.2f m²", floorArea))
+        rows += summaryRow("层高", String(format: "%.2f m", ceilingHeight))
+        rows += summaryRow("房间体积", String(format: "%.2f m³", volume))
+        rows += summaryRow("房间周长", String(format: "%.2f m", perimeter))
+        rows += summaryRow("房间形状", shapeName(room))
+        rows += summaryRow("楼层", "\(room.story)")
+        rows += summaryRow("识别房间类型", sectionNames(room))
+        rows += summaryRow("生成时间", formatter.string(from: Date()))
+        rows += [
             [XLSXWriter.Cell("墙数量"), XLSXWriter.Cell("\(room.walls.count) 面")],
             [XLSXWriter.Cell("墙面面积"), XLSXWriter.Cell(String(format: "%.2f m²", wallArea))],
             [XLSXWriter.Cell("门数量"), XLSXWriter.Cell("\(room.doors.count) 樘")],
@@ -212,109 +229,149 @@ enum QuantityTakeoffExporter {
             [XLSXWriter.Cell("洁具数量"), XLSXWriter.Cell("\(sanitaryCount) 个")],
             [XLSXWriter.Cell("家具数量"), XLSXWriter.Cell("\(furnitureCount) 个")]
         ]
+        rows.append([XLSXWriter.Cell("")])
 
-        var sheets: [XLSXWriter.Sheet] = [
-            XLSXWriter.Sheet(name: "汇总表", rows: summaryRows)
+        let groups: [(title: String, items: [QuantityTakeoffItem])] = [
+            (
+                "二、土建装饰",
+                civilItems(
+                    room: room,
+                    floorArea: floorArea,
+                    ceilingHeight: ceilingHeight,
+                    volume: volume,
+                    perimeter: perimeter,
+                    plasterArea: max(0, wallArea - doorArea - windowArea - openingArea),
+                    wallArea: wallArea,
+                    wallVolume: wallVolume(room),
+                    waterproofArea: waterproofArea(room, roomType: roomType, floorArea: floorArea, perimeter: perimeter)
+                )
+            ),
+            (
+                "三、门窗",
+                doorWindowItems(
+                    room: room,
+                    doorArea: doorArea,
+                    windowArea: windowArea,
+                    openingArea: openingArea,
+                    doorPerimeter: doorPerimeter,
+                    windowPerimeter: windowPerimeter,
+                    openingPerimeter: openingPerimeter
+                )
+            ),
+            (
+                "四、洁具给排水",
+                sanitaryItems(
+                    room: room,
+                    sanitaryObjects: room.objects.filter {
+                        sanitaryNames.contains(objectCategoryName($0.category))
+                    }
+                )
+            ),
+            (
+                "五、家具家电",
+                furnitureItems(room: room, sanitaryNames: sanitaryNames)
+            ),
+            (
+                "六、待点云结构",
+                structureItems()
+            )
         ]
-        sheets.append(itemSheet(
-            title: "土建装饰",
-            items: civilItems(
-                room: room,
-                floorArea: floorArea,
-                ceilingHeight: ceilingHeight,
-                volume: volume,
-                perimeter: perimeter,
-                plasterArea: max(0, wallArea - doorArea - windowArea - openingArea),
-                wallArea: wallArea,
-                wallVolume: wallVolume(room),
-                waterproofArea: waterproofArea(room, roomType: roomType, floorArea: floorArea, perimeter: perimeter)
-            ),
-            unitPrices: unitPrices
-        ))
-        sheets.append(itemSheet(
-            title: "门窗",
-            items: doorWindowItems(
-                room: room,
-                doorArea: doorArea,
-                windowArea: windowArea,
-                openingArea: openingArea,
-                doorPerimeter: doorPerimeter,
-                windowPerimeter: windowPerimeter,
-                openingPerimeter: openingPerimeter
-            ),
-            unitPrices: unitPrices
-        ))
 
-        let sanitaryObjects = room.objects.filter {
-            sanitaryNames.contains(objectCategoryName($0.category))
-        }
-        sheets.append(itemSheet(
-            title: "洁具给排水",
-            items: sanitaryItems(room: room, sanitaryObjects: sanitaryObjects),
-            unitPrices: unitPrices
-        ))
-        sheets.append(itemSheet(
-            title: "家具家电",
-            items: furnitureItems(room: room, sanitaryNames: sanitaryNames),
-            unitPrices: unitPrices
-        ))
-        sheets.append(itemSheet(
-            title: "待点云结构",
-            items: structureItems(),
-            unitPrices: unitPrices
-        ))
-
-        if !photos.isEmpty {
-            var photoRows: [[XLSXWriter.Cell]] = [
-                [XLSXWriter.Cell("项目", bold: true), XLSXWriter.Cell("照片", bold: true)]
-            ]
-            for photo in photos {
-                photoRows.append([XLSXWriter.Cell(photo.label), XLSXWriter.Cell("")])
+        var totalPrice = 0.0
+        for group in groups {
+            rows.append([XLSXWriter.Cell(group.title, section: true)])
+            rows.append(itemHeaderRow())
+            for (index, item) in group.items.enumerated() {
+                let price = unitPrices[item.code] ?? unitPrices[item.name] ?? 0
+                totalPrice += item.quantity * price
+                rows.append(itemRow(index: index, item: item, unitPrices: unitPrices))
             }
-            sheets.append(XLSXWriter.Sheet(name: "照片附件", rows: photoRows, images: photos))
+            rows.append([XLSXWriter.Cell("")])
+        }
+        rows.append([
+            XLSXWriter.Cell("清单合计（元）", bold: true),
+            XLSXWriter.Cell(String(format: "%.2f", totalPrice), bold: true)
+        ])
+
+        var images: [XLSXWriter.ImageAttachment] = []
+        var rowHeights: [Int: Double] = [:]
+        let labelMap = componentLabels(room: room)
+        if !photos.isEmpty {
+            rows.append([XLSXWriter.Cell("")])
+            rows.append([XLSXWriter.Cell("七、构件实拍照片", section: true)])
+            rows.append([XLSXWriter.Cell("项目", bold: true), XLSXWriter.Cell("实拍照片", bold: true)])
+            for photo in photos {
+                let label: String
+                if let idString = photo.componentID,
+                   let id = UUID(uuidString: idString),
+                   let mapped = labelMap[id] {
+                    label = mapped
+                } else {
+                    label = photo.label
+                }
+                let labelRow = rows.count + 1
+                rows.append([XLSXWriter.Cell(label)])
+                for _ in 0..<5 {
+                    rows.append([XLSXWriter.Cell("")])
+                }
+                rowHeights[labelRow] = 22
+                for offset in 1...5 {
+                    rowHeights[labelRow + offset] = 26
+                }
+                images.append(XLSXWriter.ImageAttachment(
+                    label: label,
+                    data: photo.data,
+                    fileExtension: photo.fileExtension,
+                    componentID: photo.componentID,
+                    anchorRow: labelRow + 1
+                ))
+            }
         }
 
-        return sheets
+        let columnWidths: [Double] = [6, 12, 18, 32, 6, 10, 24, 18, 12, 12, 10]
+        return XLSXWriter.Sheet(
+            name: "工程量清单",
+            rows: rows,
+            images: images,
+            columnWidths: columnWidths,
+            rowHeights: rowHeights
+        )
     }
 
-    // MARK: - Sheet builders
+    // MARK: - Row builders
 
-    private static func itemSheet(title: String, items: [QuantityTakeoffItem], unitPrices: [String: Double]) -> XLSXWriter.Sheet {
-        var rows: [[XLSXWriter.Cell]] = [
-            [
-                XLSXWriter.Cell("序号", bold: true),
-                XLSXWriter.Cell("清单编码（参考）", bold: true),
-                XLSXWriter.Cell("项目名称", bold: true),
-                XLSXWriter.Cell("项目特征", bold: true),
-                XLSXWriter.Cell("单位", bold: true),
-                XLSXWriter.Cell("工程量", bold: true),
-                XLSXWriter.Cell("计算式", bold: true),
-                XLSXWriter.Cell("备注", bold: true),
-                XLSXWriter.Cell("综合单价（元）", bold: true),
-                XLSXWriter.Cell("合价（元）", bold: true),
-                XLSXWriter.Cell("照片", bold: true)
-            ]
+    private static func itemHeaderRow() -> [XLSXWriter.Cell] {
+        [
+            XLSXWriter.Cell("序号", bold: true),
+            XLSXWriter.Cell("清单编码（参考）", bold: true),
+            XLSXWriter.Cell("项目名称", bold: true),
+            XLSXWriter.Cell("项目特征", bold: true),
+            XLSXWriter.Cell("单位", bold: true),
+            XLSXWriter.Cell("工程量", bold: true),
+            XLSXWriter.Cell("计算式", bold: true),
+            XLSXWriter.Cell("备注", bold: true),
+            XLSXWriter.Cell("综合单价（元）", bold: true),
+            XLSXWriter.Cell("合价（元）", bold: true),
+            XLSXWriter.Cell("照片", bold: true)
         ]
+    }
 
-        for (index, item) in items.enumerated() {
-            let price = unitPrices[item.code] ?? unitPrices[item.name] ?? 0
-            let total = item.quantity * price
-            let photoLabel = photoLabel(for: item)
-            rows.append([
-                XLSXWriter.Cell("\(index + 1)"),
-                XLSXWriter.Cell(item.code),
-                XLSXWriter.Cell(item.name),
-                XLSXWriter.Cell(item.spec),
-                XLSXWriter.Cell(item.unit),
-                XLSXWriter.Cell(formatQuantity(item.quantity)),
-                XLSXWriter.Cell(item.formula),
-                XLSXWriter.Cell(item.note),
-                XLSXWriter.Cell(price > 0 ? String(format: "%.2f", price) : ""),
-                XLSXWriter.Cell(total > 0 ? String(format: "%.2f", total) : ""),
-                XLSXWriter.Cell(photoLabel)
-            ])
-        }
-        return XLSXWriter.Sheet(name: title, rows: rows)
+    private static func itemRow(index: Int, item: QuantityTakeoffItem, unitPrices: [String: Double]) -> [XLSXWriter.Cell] {
+        let price = unitPrices[item.code] ?? unitPrices[item.name] ?? 0
+        let total = item.quantity * price
+        return [
+            XLSXWriter.Cell("\(index + 1)"),
+            XLSXWriter.Cell(item.code),
+            XLSXWriter.Cell(item.name),
+            XLSXWriter.Cell(item.spec),
+            XLSXWriter.Cell(item.unit),
+            XLSXWriter.Cell(formatQuantity(item.quantity)),
+            XLSXWriter.Cell(item.formula),
+            XLSXWriter.Cell(item.note),
+            XLSXWriter.Cell(price > 0 ? String(format: "%.2f", price) : ""),
+            XLSXWriter.Cell(total > 0 ? String(format: "%.2f", total) : ""),
+            XLSXWriter.Cell(photoLabel(for: item))
+        ]
     }
 
     private static func summaryRow(_ label: String, _ value: String) -> [[XLSXWriter.Cell]] {
@@ -576,7 +633,7 @@ enum QuantityTakeoffExporter {
         (value * 100).rounded() / 100
     }
 
-    private static func objectCategoryName(_ category: CapturedRoom.Object.Category) -> String {
+    static func objectCategoryName(_ category: CapturedRoom.Object.Category) -> String {
         switch category {
         case .storage: return "储物柜"
         case .refrigerator: return "冰箱"

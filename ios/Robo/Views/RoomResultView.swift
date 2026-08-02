@@ -15,8 +15,6 @@ struct RoomResultView: View {
     @State private var shareURLs: [URL] = []
     @State private var isExporting = false
     @State private var exportError: String?
-    @State private var pendingPhotoLabel: String?
-    @State private var showCamera = false
 
     private var floorArea: Double {
         RoomDataProcessor.estimateFloorArea(room)
@@ -86,7 +84,7 @@ struct RoomResultView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal, 24)
 
-                photoSection
+                photoSummarySection
                     .padding(.horizontal, 24)
 
                 VStack(spacing: 12) {
@@ -144,57 +142,46 @@ struct RoomResultView: View {
         )) {
             ActivityView(activityItems: shareURLs)
         }
-        .sheet(isPresented: $showCamera) {
-            if let label = pendingPhotoLabel {
-                CameraPicker { image in
-                    upsertPhoto(label: label, image: image)
-                    showCamera = false
-                }
-                .ignoresSafeArea()
-            }
-        }
     }
 
     @ViewBuilder
-    private var photoSection: some View {
-        let labels = QuantityTakeoffExporter.countItemLabels(room: room)
+    private var photoSummarySection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("按个数项目实拍照片")
-                .font(.headline)
+            HStack {
+                Text("扫描过程实拍照片")
+                    .font(.headline)
+                Spacer()
+                Text("\(photos.count) 张")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
-            if labels.isEmpty {
-                Text("本次扫描没有按个数统计的项目。")
+            if photos.isEmpty {
+                Text("本次扫描未拍摄构件照片")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(Array(0..<labels.count), id: \.self) { index in
-                    let label = labels[index]
-                    PhotoRow(
-                        label: label,
-                        photo: photos.first(where: { $0.label == label })?.image,
-                        hasPhoto: photos.contains(where: { $0.label == label })
-                    ) {
-                        pendingPhotoLabel = label
-                        showCamera = true
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(photos) { photo in
+                            VStack(spacing: 4) {
+                                Image(uiImage: photo.image)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 84, height: 84)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                Text(photo.label)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
                 }
             }
-
-            Text("为门、窗、洁具、家具等按个数统计的项目拍摄照片，照片会嵌入 Excel 末尾的“照片附件”表。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
         .padding()
         .background(.secondary.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: 12))
-    }
-
-    private func upsertPhoto(label: String, image: UIImage) {
-        if let index = photos.firstIndex(where: { $0.label == label }) {
-            photos[index] = PhotoAttachment(label: label, image: image)
-        } else {
-            photos.append(PhotoAttachment(label: label, image: image))
-        }
     }
 
     private func statCard(value: String, label: String, icon: String) -> some View {
@@ -229,7 +216,12 @@ struct RoomResultView: View {
         do {
             let imageAttachments = photos.compactMap { photo -> XLSXWriter.ImageAttachment? in
                 guard let data = photo.image.jpegData(compressionQuality: 0.8) else { return nil }
-                return XLSXWriter.ImageAttachment(label: photo.label, data: data, fileExtension: "jpg")
+                return XLSXWriter.ImageAttachment(
+                    label: photo.label,
+                    data: data,
+                    fileExtension: "jpg",
+                    componentID: photo.componentID?.uuidString
+                )
             }
             shareURLs = try QuantityTakeoffExporter.makeExportFiles(
                 room: room,
@@ -242,38 +234,5 @@ struct RoomResultView: View {
             exportError = error.localizedDescription
         }
         isExporting = false
-    }
-}
-
-private struct PhotoRow: View {
-    let label: String
-    let photo: UIImage?
-    let hasPhoto: Bool
-    let onCapture: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Text(label)
-                .font(.subheadline)
-
-            Spacer()
-
-            if let photo {
-                Image(uiImage: photo)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 44, height: 44)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
-
-            Button(action: onCapture) {
-                Image(systemName: hasPhoto ? "camera.fill" : "camera")
-                    .foregroundStyle(Color.accentColor)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.secondary.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }

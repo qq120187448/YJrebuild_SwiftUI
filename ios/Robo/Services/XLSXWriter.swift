@@ -4,10 +4,12 @@ enum XLSXWriter {
     struct Cell {
         let text: String
         let bold: Bool
+        let section: Bool
 
-        init(_ text: String, bold: Bool = false) {
+        init(_ text: String, bold: Bool = false, section: Bool = false) {
             self.text = text
             self.bold = bold
+            self.section = section
         }
     }
 
@@ -15,17 +17,43 @@ enum XLSXWriter {
         let label: String
         let data: Data
         let fileExtension: String
+        let componentID: String?
+        let anchorRow: Int?
+
+        init(
+            label: String,
+            data: Data,
+            fileExtension: String,
+            componentID: String? = nil,
+            anchorRow: Int? = nil
+        ) {
+            self.label = label
+            self.data = data
+            self.fileExtension = fileExtension
+            self.componentID = componentID
+            self.anchorRow = anchorRow
+        }
     }
 
     struct Sheet {
         let name: String
         let rows: [[Cell]]
         let images: [ImageAttachment]
+        let columnWidths: [Double]?
+        let rowHeights: [Int: Double]?
 
-        init(name: String, rows: [[Cell]], images: [ImageAttachment] = []) {
+        init(
+            name: String,
+            rows: [[Cell]],
+            images: [ImageAttachment] = [],
+            columnWidths: [Double]? = nil,
+            rowHeights: [Int: Double]? = nil
+        ) {
             self.name = name
             self.rows = rows
             self.images = images
+            self.columnWidths = columnWidths
+            self.rowHeights = rowHeights
         }
     }
 
@@ -100,15 +128,17 @@ enum XLSXWriter {
             <font><sz val="11"/><name val="Calibri"/></font>
             <font><b/><sz val="11"/><name val="Calibri"/></font>
           </fonts>
-          <fills count="2">
+          <fills count="3">
             <fill><patternFill patternType="none"/></fill>
             <fill><patternFill patternType="gray125"/></fill>
+            <fill><patternFill patternType="solid"><fgColor rgb="FFD9E2F3"/><bgColor indexed="64"/></patternFill></fill>
           </fills>
           <borders count="1"><border/></borders>
           <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-          <cellXfs count="2">
+          <cellXfs count="3">
             <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
             <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+            <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
           </cellXfs>
         </styleSheet>
         """
@@ -126,15 +156,37 @@ enum XLSXWriter {
             let sheetNumber = sheetIndex + 1
             var sheetXML = """
             <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData>
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
             """
 
+            if let columnWidths = sheet.columnWidths, !columnWidths.isEmpty {
+                sheetXML += "<cols>"
+                for (index, width) in columnWidths.enumerated() {
+                    sheetXML += """
+                    <col min="\(index + 1)" max="\(index + 1)" width="\(formatWidth(width))" customWidth="1"/>
+                    """
+                }
+                sheetXML += "</cols>"
+            }
+
+            sheetXML += "<sheetData>"
             for (rowIndex, row) in sheet.rows.enumerated() {
                 let rowNumber = rowIndex + 1
-                sheetXML += "<row r=\"\(rowNumber)\">"
+                var heightAttribute = ""
+                if let height = sheet.rowHeights?[rowNumber] {
+                    heightAttribute = " ht=\"\(height)\" customHeight=\"1\""
+                }
+                sheetXML += "<row r=\"\(rowNumber)\"\(heightAttribute)>"
                 for (colIndex, cell) in row.enumerated() {
                     let ref = columnName(colIndex) + "\(rowNumber)"
-                    let style = cell.bold ? " s=\"1\"" : ""
+                    let style: String
+                    if cell.section {
+                        style = " s=\"2\""
+                    } else if cell.bold {
+                        style = " s=\"1\""
+                    } else {
+                        style = ""
+                    }
                     let value = xmlEscaped(cell.text)
                     sheetXML += "<c r=\"\(ref)\" t=\"inlineStr\"\(style)><is><t xml:space=\"preserve\">\(value)</t></is></c>"
                 }
@@ -163,12 +215,12 @@ enum XLSXWriter {
                 </Relationships>
                 """
 
-                let baseRow = sheet.rows.count + 1
                 for (imageIndex, image) in sheet.images.enumerated() {
                     let imageNumber = mediaIndex
                     let fileName = "image\(imageNumber).\(image.fileExtension)"
-                    let startRow = baseRow + imageIndex * 13
-                    let endRow = startRow + 12
+                    let baseRow = sheet.rows.count + 1
+                    let startRow = image.anchorRow ?? (baseRow + imageIndex * 13)
+                    let endRow = startRow + 9
                     let imageId = imageIndex + 1
 
                     drawingXML += """
@@ -232,6 +284,13 @@ enum XLSXWriter {
             value = value / 26 - 1
         } while value >= 0
         return result
+    }
+
+    private static func formatWidth(_ width: Double) -> String {
+        if width == width.rounded() {
+            return String(format: "%.0f", width)
+        }
+        return String(format: "%.1f", width)
     }
 
     private static func xmlEscaped(_ text: String) -> String {

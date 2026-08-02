@@ -70,8 +70,13 @@ struct RoomDetailView: View {
     private func exportQuantity() {
         do {
             let capturedRoom = try RoomDataProcessor.decodeFullRoom(room.fullRoomDataJSON)
-            let photos = zip(room.photoLabels, room.photoFileNames).compactMap {
-                PhotoStorage.load(label: $0, fileName: $1)
+            let photos = zip(room.photoLabels, room.photoFileNames).enumerated().compactMap { index, pair in
+                let id = index < room.photoComponentIDs.count ? room.photoComponentIDs[index] : ""
+                return PhotoStorage.load(
+                    label: pair.0,
+                    fileName: pair.1,
+                    componentID: id.isEmpty ? nil : id
+                )
             }
             shareURLs = try QuantityTakeoffExporter.makeExportFiles(
                 room: capturedRoom,

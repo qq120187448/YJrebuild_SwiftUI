@@ -5,6 +5,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
     @Binding var stopRequested: Bool
     let onCaptureComplete: (CapturedRoom) -> Void
     let onCaptureError: (Error) -> Void
+    var onRoomUpdate: (CapturedRoom) -> Void = { _ in }
 
     func makeUIView(context: Context) -> RoomCaptureView {
         let captureView = RoomCaptureView(frame: .zero)
@@ -28,20 +29,27 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onCaptureComplete: onCaptureComplete, onCaptureError: onCaptureError)
+        Coordinator(
+            onCaptureComplete: onCaptureComplete,
+            onCaptureError: onCaptureError,
+            onRoomUpdate: onRoomUpdate
+        )
     }
 
     @objc(RoboScanRoomCaptureCoordinator)
     final class Coordinator: NSObject, RoomCaptureSessionDelegate, RoomCaptureViewDelegate, NSCoding {
         let onCaptureComplete: (CapturedRoom) -> Void
         let onCaptureError: (Error) -> Void
+        let onRoomUpdate: (CapturedRoom) -> Void
 
         init(
             onCaptureComplete: @escaping (CapturedRoom) -> Void,
-            onCaptureError: @escaping (Error) -> Void
+            onCaptureError: @escaping (Error) -> Void,
+            onRoomUpdate: @escaping (CapturedRoom) -> Void
         ) {
             self.onCaptureComplete = onCaptureComplete
             self.onCaptureError = onCaptureError
+            self.onRoomUpdate = onRoomUpdate
             super.init()
         }
 
@@ -52,6 +60,12 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
         func encode(with coder: NSCoder) {}
 
         func captureSession(_ session: RoomCaptureSession, didEndWith data: CapturedRoomData, error: (any Error)?) {}
+
+        func captureSession(_ session: RoomCaptureSession, didUpdate room: CapturedRoom) {
+            DispatchQueue.main.async {
+                self.onRoomUpdate(room)
+            }
+        }
 
         func captureView(shouldPresent roomDataForProcessing: CapturedRoomData, error: (any Error)?) -> Bool {
             true
