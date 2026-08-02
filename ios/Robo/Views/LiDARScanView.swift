@@ -14,10 +14,6 @@ struct LiDARScanView: View {
     @State private var roomName = ""
     @State private var roomType = "其他"
     @State private var photos: [PhotoAttachment] = []
-    @State private var seenComponentIDs: Set<String> = []
-    @State private var pendingComponents: [String: String] = [:]
-    @State private var pendingPhotoComponentID: String?
-    @State private var showCamera = false
 
     private enum ScanPhase {
         case instructions
@@ -111,7 +107,7 @@ struct LiDARScanView: View {
             Spacer()
 
             Button {
-                resetScanPhotos()
+                photos = []
                 phase = .scanning
             } label: {
                 Text(AppStrings.Scan.start)
@@ -139,126 +135,29 @@ struct LiDARScanView: View {
     }
 
     private var scanningView: some View {
-        ZStack(alignment: .bottom) {
-            RoomCaptureViewWrapper(
-                stopRequested: $stopRequested,
-                onCaptureComplete: { room in
-                    capturedRoom = room
-                    phase = .results
-                },
-                onCaptureError: { err in
-                    error = err.localizedDescription
-                },
-                onRoomUpdate: { room in
-                    handleRoomUpdate(room)
-                }
-            )
-            .ignoresSafeArea()
-
-            photoPromptOverlay
-        }
-        .sheet(isPresented: $showCamera) {
-            CameraPicker { image in
-                capturePhoto(image: image)
+        RoomCaptureViewWrapper(
+            stopRequested: $stopRequested,
+            onCaptureComplete: { room in
+                capturedRoom = room
+                phase = .results
+            },
+            onCaptureError: { err in
+                error = err.localizedDescription
+            },
+            onComponentCaptured: { image, label, componentID in
+                appendComponentPhoto(image: image, label: label, componentID: componentID)
             }
-            .ignoresSafeArea()
-        }
+        )
+        .ignoresSafeArea()
     }
 
-    @ViewBuilder
-    private var photoPromptOverlay: some View {
-        if !pendingComponents.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("构件拍照")
-                        .font(.subheadline.bold())
-                    Spacer()
-                    Text("\(pendingComponents.count) 项待拍")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(Array(pendingComponents.keys.sorted()), id: \.self) { id in
-                            Button {
-                                pendingPhotoComponentID = id
-                                showCamera = true
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Text(pendingComponents[id] ?? "")
-                                        .font(.caption.bold())
-                                    Image(systemName: "camera.fill")
-                                        .font(.caption)
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(Color.accentColor.opacity(0.16))
-                                .foregroundStyle(Color.accentColor)
-                                .clipShape(Capsule())
-                            }
-                        }
-                    }
-                }
-            }
-            .padding(12)
-            .background(.regularMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .padding(16)
-        }
-    }
-
-    private func handleRoomUpdate(_ room: CapturedRoom) {
-        var found: [String: String] = [:]
-        for (index, door) in room.doors.enumerated() {
-            found[door.identifier.uuidString] = "门\(index + 1)"
-        }
-        for (index, window) in room.windows.enumerated() {
-            found[window.identifier.uuidString] = "窗\(index + 1)"
-        }
-        for (index, opening) in room.openings.enumerated() {
-            found[opening.identifier.uuidString] = "洞口\(index + 1)"
-        }
-        for (index, object) in room.objects.enumerated() {
-            found[object.identifier.uuidString] =
-                "\(QuantityTakeoffExporter.objectCategoryName(object.category))\(index + 1)"
-        }
-
-        var added: [String: String] = [:]
-        for (id, label) in found where !seenComponentIDs.contains(id) {
-            added[id] = label
-        }
-        guard !added.isEmpty else { return }
-        seenComponentIDs.formUnion(added.keys)
-        for (id, label) in added {
-            if !photos.contains(where: { $0.componentID?.uuidString == id }) {
-                pendingComponents[id] = label
-            }
-        }
-    }
-
-    private func capturePhoto(image: UIImage) {
-        guard let id = pendingPhotoComponentID, let componentID = UUID(uuidString: id) else {
-            showCamera = false
-            return
-        }
-        let label = pendingComponents[id] ?? "构件"
-        if let index = photos.firstIndex(where: { $0.componentID == componentID }) {
-            photos[index] = PhotoAttachment(label: label, image: image, componentID: componentID)
+    private func appendComponentPhoto(image: UIImage, label: String, componentID: String) {
+        guard let id = UUID(uuidString: componentID) else { return }
+        if let index = photos.firstIndex(where: { $0.componentID == id }) {
+            photos[index] = PhotoAttachment(label: label, image: image, componentID: id)
         } else {
-            photos.append(PhotoAttachment(label: label, image: image, componentID: componentID))
+            photos.append(PhotoAttachment(label: label, image: image, componentID: id))
         }
-        pendingComponents.removeValue(forKey: id)
-        pendingPhotoComponentID = nil
-        showCamera = false
-    }
-
-    private func resetScanPhotos() {
-        seenComponentIDs = []
-        pendingComponents = [:]
-        pendingPhotoComponentID = nil
-        photos = []
-        showCamera = false
     }
 
     private func saveRoom() {
