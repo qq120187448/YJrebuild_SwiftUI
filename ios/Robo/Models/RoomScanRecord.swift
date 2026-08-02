@@ -14,10 +14,13 @@ final class RoomScanRecord {
     var ceilingHeightM: Double
     var totalWallAreaSqM: Double
     var volumeM3: Double
+    var roomType: String = "其他"
     var summaryJSON: Data
     var fullRoomDataJSON: Data
     var quantityJSON: Data
     var usdzData: Data?
+    var photoLabels: [String] = []
+    var photoFileNames: [String] = []
 
     init(
         roomName: String,
@@ -30,10 +33,13 @@ final class RoomScanRecord {
         ceilingHeightM: Double,
         totalWallAreaSqM: Double,
         volumeM3: Double,
+        roomType: String,
         summaryJSON: Data,
         fullRoomDataJSON: Data,
         quantityJSON: Data,
-        usdzData: Data? = nil
+        usdzData: Data? = nil,
+        photoLabels: [String] = [],
+        photoFileNames: [String] = []
     ) {
         self.roomName = roomName
         self.capturedAt = Date()
@@ -46,9 +52,12 @@ final class RoomScanRecord {
         self.ceilingHeightM = ceilingHeightM
         self.totalWallAreaSqM = totalWallAreaSqM
         self.volumeM3 = volumeM3
+        self.roomType = roomType
         self.summaryJSON = summaryJSON
         self.fullRoomDataJSON = fullRoomDataJSON
         self.quantityJSON = quantityJSON
         self.usdzData = usdzData
+        self.photoLabels = photoLabels
+        self.photoFileNames = photoFileNames
     }
 }

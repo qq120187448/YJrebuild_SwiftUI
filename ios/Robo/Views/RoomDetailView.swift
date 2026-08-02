@@ -26,10 +26,12 @@ struct RoomDetailView: View {
                 LabeledContent("门", value: "\(room.doorCount) 樘")
                 LabeledContent("窗", value: "\(room.windowCount) 扇")
                 LabeledContent("物体", value: "\(room.objectCount) 个")
+                LabeledContent("房间类型", value: room.roomType)
                 LabeledContent("地面面积", value: String(format: "%.2f m²", room.floorAreaSqM))
                 LabeledContent("层高", value: String(format: "%.2f m", room.ceilingHeightM))
                 LabeledContent("墙面面积", value: String(format: "%.2f m²", room.totalWallAreaSqM))
                 LabeledContent("房间体积", value: String(format: "%.2f m³", room.volumeM3))
+                LabeledContent("实拍照片", value: "\(room.photoLabels.count) 张")
             }
 
             if room.usdzData != nil {
@@ -68,7 +70,16 @@ struct RoomDetailView: View {
     private func exportQuantity() {
         do {
             let capturedRoom = try RoomDataProcessor.decodeFullRoom(room.fullRoomDataJSON)
-            shareURLs = try QuantityTakeoffExporter.makeExportFiles(room: capturedRoom, roomName: room.roomName)
+            let photos = zip(room.photoLabels, room.photoFileNames).compactMap {
+                PhotoStorage.load(label: $0, fileName: $1)
+            }
+            shareURLs = try QuantityTakeoffExporter.makeExportFiles(
+                room: capturedRoom,
+                roomName: room.roomName,
+                roomType: room.roomType,
+                unitPrices: UnitPriceStore.load(),
+                photos: photos
+            )
         } catch {
             // 导出失败时保持静默，避免打断详情页
         }

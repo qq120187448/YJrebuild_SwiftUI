@@ -1,15 +1,22 @@
 import SwiftUI
+import UIKit
 import RoomPlan
 
 struct RoomResultView: View {
     let room: CapturedRoom
     @Binding var roomName: String
+    @Binding var roomType: String
+    @Binding var photos: [PhotoAttachment]
     let onSave: () -> Void
     let onDiscard: () -> Void
+
+    private let roomTypes = ["客厅", "卧室", "餐厅", "厨房", "卫生间", "其他"]
 
     @State private var shareURLs: [URL] = []
     @State private var isExporting = false
     @State private var exportError: String?
+    @State private var pendingPhotoLabel: String?
+    @State private var showCamera = false
 
     private var floorArea: Double {
         RoomDataProcessor.estimateFloorArea(room)
@@ -47,6 +54,19 @@ struct RoomResultView: View {
                     .textFieldStyle(.roundedBorder)
                     .padding(.horizontal, 24)
 
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("房间类型")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Picker("房间类型", selection: $roomType) {
+                        ForEach(roomTypes, id: \.self) { type in
+                            Text(type).tag(type)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                .padding(.horizontal, 24)
+
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
                     statCard(value: "\(room.walls.count)", label: "墙", icon: "square.split.2x1")
                     statCard(value: "\(room.doors.count)", label: "门", icon: "door.left.hand.open")
@@ -65,6 +85,9 @@ struct RoomResultView: View {
                 .background(.secondary.opacity(0.1))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal, 24)
+
+                photoSection
+                    .padding(.horizontal, 24)
 
                 VStack(spacing: 12) {
                     Button(action: onSave) {
@@ -121,6 +144,76 @@ struct RoomResultView: View {
         )) {
             ActivityView(activityItems: shareURLs)
         }
+        .sheet(isPresented: $showCamera) {
+            if let label = pendingPhotoLabel {
+                CameraPicker { image in
+                    upsertPhoto(label: label, image: image)
+                    showCamera = false
+                }
+                .ignoresSafeArea()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var photoSection: some View {
+        let labels = QuantityTakeoffExporter.countItemLabels(room: room)
+        VStack(alignment: .leading, spacing: 10) {
+            Text("按个数项目实拍照片")
+                .font(.headline)
+
+            if labels.isEmpty {
+                Text("本次扫描没有按个数统计的项目。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(labels, id: \.self) { label in
+                    HStack(spacing: 12) {
+                        Text(label)
+                            .font(.subheadline)
+
+                        Spacer()
+
+                        if let photo = photos.first(where: { $0.label == label }) {
+                            Image(uiImage: photo.image)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 44, height: 44)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
+
+                        Button {
+                            pendingPhotoLabel = label
+                            showCamera = true
+                        } label: {
+                            Image(systemName: photos.contains(where: { $0.label == label })
+                                  ? "camera.fill"
+                                  : "camera")
+                                .foregroundStyle(.accentColor)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.secondary.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+            }
+
+            Text("为门、窗、洁具、家具等按个数统计的项目拍摄照片，照片会嵌入 Excel 末尾的“照片附件”表。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding()
+        .background(.secondary.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func upsertPhoto(label: String, image: UIImage) {
+        if let index = photos.firstIndex(where: { $0.label == label }) {
+            photos[index] = PhotoAttachment(label: label, image: image)
+        } else {
+            photos.append(PhotoAttachment(label: label, image: image))
+        }
     }
 
     private func statCard(value: String, label: String, icon: String) -> some View {
@@ -153,7 +246,17 @@ struct RoomResultView: View {
     private func exportQuantity() {
         isExporting = true
         do {
-            shareURLs = try QuantityTakeoffExporter.makeExportFiles(room: room, roomName: displayName)
+            let imageAttachments = photos.compactMap { photo -> XLSXWriter.ImageAttachment? in
+                guard let data = photo.image.jpegData(compressionQuality: 0.8) else { return nil }
+                return XLSXWriter.ImageAttachment(label: photo.label, data: data, fileExtension: "jpg")
+            }
+            shareURLs = try QuantityTakeoffExporter.makeExportFiles(
+                room: room,
+                roomName: displayName,
+                roomType: roomType,
+                unitPrices: UnitPriceStore.load(),
+                photos: imageAttachments
+            )
         } catch {
             exportError = error.localizedDescription
         }

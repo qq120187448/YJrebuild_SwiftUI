@@ -39,6 +39,9 @@ struct ScanHistoryView: View {
                             }
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
+                                    for fileName in room.photoFileNames {
+                                        PhotoStorage.delete(fileName: fileName)
+                                    }
                                     modelContext.delete(room)
                                     try? modelContext.save()
                                 } label: {

@@ -11,14 +11,47 @@ enum XLSXWriter {
         }
     }
 
-    static func makeWorkbook(sheetName: String, rows: [[Cell]]) throws -> Data {
-        let contentTypes = """
+    struct ImageAttachment {
+        let label: String
+        let data: Data
+        let fileExtension: String
+    }
+
+    struct Sheet {
+        let name: String
+        let rows: [[Cell]]
+        let images: [ImageAttachment]
+
+        init(name: String, rows: [[Cell]], images: [ImageAttachment] = []) {
+            self.name = name
+            self.rows = rows
+            self.images = images
+        }
+    }
+
+    static func makeWorkbook(sheets: [Sheet]) throws -> Data {
+        var contentTypes = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
           <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
           <Default Extension="xml" ContentType="application/xml"/>
+          <Default Extension="jpg" ContentType="image/jpeg"/>
+          <Default Extension="png" ContentType="image/png"/>
+        """
+
+        for (index, _) in sheets.enumerated() {
+            let sheetNumber = index + 1
+            contentTypes += """
+            <Override PartName="/xl/worksheets/sheet\(sheetNumber).xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+            """
+            if !sheets[index].images.isEmpty {
+                contentTypes += """
+                <Override PartName="/xl/drawings/drawing\(sheetNumber).xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>
+                """
+            }
+        }
+        contentTypes += """
           <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-          <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
           <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
         </Types>
         """
@@ -30,20 +63,33 @@ enum XLSXWriter {
         </Relationships>
         """
 
+        var workbookSheets = ""
+        for (index, sheet) in sheets.enumerated() {
+            let sheetNumber = index + 1
+            workbookSheets += """
+            <sheet name="\(xmlEscaped(sheet.name))" sheetId="\(sheetNumber)" r:id="rId\(sheetNumber)"/>
+            """
+        }
+
         let workbook = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-          <sheets>
-            <sheet name="\(xmlEscaped(sheetName))" sheetId="1" r:id="rId1"/>
-          </sheets>
+          <sheets>\(workbookSheets)</sheets>
         </workbook>
         """
 
-        let workbookRels = """
+        var workbookRels = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-          <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-          <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+        """
+        for (index, _) in sheets.enumerated() {
+            let sheetNumber = index + 1
+            workbookRels += """
+            <Relationship Id="rId\(sheetNumber)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet\(sheetNumber).xml"/>
+            """
+        }
+        workbookRels += """
+          <Relationship Id="rId\(sheets.count + 1)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
         </Relationships>
         """
 
@@ -67,33 +113,112 @@ enum XLSXWriter {
         </styleSheet>
         """
 
-        var sheetXML = """
-        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
-        """
-
-        for (rowIndex, row) in rows.enumerated() {
-            let rowNumber = rowIndex + 1
-            sheetXML += "<row r=\"\(rowNumber)\">"
-            for (colIndex, cell) in row.enumerated() {
-                let ref = columnName(colIndex) + "\(rowNumber)"
-                let style = cell.bold ? " s=\"1\"" : ""
-                let value = xmlEscaped(cell.text)
-                sheetXML += "<c r=\"\(ref)\" t=\"inlineStr\"\(style)><is><t xml:space=\"preserve\">\(value)</t></is></c>"
-            }
-            sheetXML += "</row>"
-        }
-
-        sheetXML += "</sheetData></worksheet>"
-
-        let entries = [
+        var entries: [MiniZIPWriter.Entry] = [
             MiniZIPWriter.Entry(name: "[Content_Types].xml", data: Data(contentTypes.utf8)),
             MiniZIPWriter.Entry(name: "_rels/.rels", data: Data(rootRels.utf8)),
             MiniZIPWriter.Entry(name: "xl/workbook.xml", data: Data(workbook.utf8)),
             MiniZIPWriter.Entry(name: "xl/_rels/workbook.xml.rels", data: Data(workbookRels.utf8)),
-            MiniZIPWriter.Entry(name: "xl/worksheets/sheet1.xml", data: Data(sheetXML.utf8)),
             MiniZIPWriter.Entry(name: "xl/styles.xml", data: Data(styles.utf8))
         ]
+
+        var mediaIndex = 1
+        for (sheetIndex, sheet) in sheets.enumerated() {
+            let sheetNumber = sheetIndex + 1
+            var sheetXML = """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData>
+            """
+
+            for (rowIndex, row) in sheet.rows.enumerated() {
+                let rowNumber = rowIndex + 1
+                sheetXML += "<row r=\"\(rowNumber)\">"
+                for (colIndex, cell) in row.enumerated() {
+                    let ref = columnName(colIndex) + "\(rowNumber)"
+                    let style = cell.bold ? " s=\"1\"" : ""
+                    let value = xmlEscaped(cell.text)
+                    sheetXML += "<c r=\"\(ref)\" t=\"inlineStr\"\(style)><is><t xml:space=\"preserve\">\(value)</t></is></c>"
+                }
+                sheetXML += "</row>"
+            }
+
+            if sheet.images.isEmpty {
+                sheetXML += "</sheetData></worksheet>"
+            } else {
+                sheetXML += "</sheetData>"
+
+                var drawingXML = """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                """
+
+                var drawingRels = """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                """
+
+                var sheetRels = """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing\(sheetNumber).xml"/>
+                </Relationships>
+                """
+
+                let baseRow = sheet.rows.count + 1
+                for (imageIndex, image) in sheet.images.enumerated() {
+                    let imageNumber = mediaIndex
+                    let fileName = "image\(imageNumber).\(image.fileExtension)"
+                    let startRow = baseRow + imageIndex * 13
+                    let endRow = startRow + 12
+                    let imageId = imageIndex + 1
+
+                    drawingXML += """
+                    <xdr:twoCellAnchor editAs="oneCell">
+                      <xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>\(startRow)</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+                      <xdr:to><xdr:col>7</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>\(endRow)</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+                      <xdr:pic>
+                        <xdr:nvPicPr>
+                          <xdr:cNvPr id="\(imageId)" name="\(xmlEscaped(image.label))"/>
+                          <xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr>
+                        </xdr:nvPicPr>
+                        <xdr:blipFill><a:blip r:embed="rId\(imageId)" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>
+                        <xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1524000" cy="1143000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>
+                      </xdr:pic>
+                      <xdr:clientData/>
+                    </xdr:twoCellAnchor>
+                    """
+
+                    drawingRels += """
+                    <Relationship Id="rId\(imageId)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/\(fileName)"/>
+                    """
+
+                    entries.append(MiniZIPWriter.Entry(name: "xl/media/\(fileName)", data: image.data))
+                    mediaIndex += 1
+                }
+
+                drawingXML += "</xdr:wsDr>"
+                drawingRels += "</Relationships>"
+
+                entries.append(MiniZIPWriter.Entry(
+                    name: "xl/drawings/drawing\(sheetNumber).xml",
+                    data: Data(drawingXML.utf8)
+                ))
+                entries.append(MiniZIPWriter.Entry(
+                    name: "xl/drawings/_rels/drawing\(sheetNumber).xml.rels",
+                    data: Data(drawingRels.utf8)
+                ))
+                entries.append(MiniZIPWriter.Entry(
+                    name: "xl/worksheets/_rels/sheet\(sheetNumber).xml.rels",
+                    data: Data(sheetRels.utf8)
+                ))
+
+                sheetXML += "<drawing r:id=\"rId1\"/></worksheet>"
+            }
+
+            entries.append(MiniZIPWriter.Entry(
+                name: "xl/worksheets/sheet\(sheetNumber).xml",
+                data: Data(sheetXML.utf8)
+            ))
+        }
 
         return MiniZIPWriter.archive(entries: entries)
     }

@@ -11,6 +11,8 @@ struct LiDARScanView: View {
     @State private var error: String?
     @State private var stopRequested = false
     @State private var roomName = ""
+    @State private var roomType = "其他"
+    @State private var photos: [PhotoAttachment] = []
 
     private enum ScanPhase {
         case instructions
@@ -38,6 +40,8 @@ struct LiDARScanView: View {
                             RoomResultView(
                                 room: capturedRoom,
                                 roomName: $roomName,
+                                roomType: $roomType,
+                                photos: $photos,
                                 onSave: saveRoom,
                                 onDiscard: { dismiss() }
                             )
@@ -161,7 +165,15 @@ struct LiDARScanView: View {
                 name = trimmedName
             }
 
-            let quantityData = try QuantityTakeoffExporter.makeJSON(room: room, roomName: name)
+            let quantityData = try QuantityTakeoffExporter.makeJSON(room: room, roomName: name, roomType: roomType)
+
+            var photoLabels: [String] = []
+            var photoFileNames: [String] = []
+            for photo in photos {
+                let saved = try PhotoStorage.save(image: photo.image, label: photo.label)
+                photoLabels.append(saved.label)
+                photoFileNames.append(saved.fileName)
+            }
 
             var usdzData: Data?
             do {
@@ -188,10 +200,13 @@ struct LiDARScanView: View {
                 ceilingHeightM: ceilingHeight,
                 totalWallAreaSqM: RoomDataProcessor.computeTotalWallArea(room.walls),
                 volumeM3: floorArea * ceilingHeight,
+                roomType: roomType,
                 summaryJSON: summaryData,
                 fullRoomDataJSON: fullData,
                 quantityJSON: quantityData,
-                usdzData: usdzData
+                usdzData: usdzData,
+                photoLabels: photoLabels,
+                photoFileNames: photoFileNames
             )
 
             modelContext.insert(record)
