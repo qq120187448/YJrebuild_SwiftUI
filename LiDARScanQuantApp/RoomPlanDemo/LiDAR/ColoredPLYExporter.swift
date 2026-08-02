@@ -6,6 +6,7 @@
 //
 
 import ARKit
+import CoreVideo
 import Foundation
 import simd
 

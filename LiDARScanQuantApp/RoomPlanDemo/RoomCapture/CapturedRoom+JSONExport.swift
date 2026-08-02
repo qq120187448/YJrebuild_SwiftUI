@@ -42,10 +42,10 @@ struct RoomExportRoomSize: Encodable {
     let length: Double
     let height: Double
 
-    init(size: CapturedRoom.Size) {
-        width = size.x
-        length = size.y
-        height = size.z
+    init(size: simd_float3) {
+        width = Double(size.x)
+        length = Double(size.y)
+        height = Double(size.z)
     }
 }
 
@@ -54,10 +54,10 @@ struct RoomExportElementSize: Encodable {
     let height: Double
     let depth: Double
 
-    init(size: CapturedRoom.Size) {
-        width = size.x
-        height = size.y
-        depth = size.z
+    init(size: simd_float3) {
+        width = Double(size.x)
+        height = Double(size.y)
+        depth = Double(size.z)
     }
 }
 
@@ -72,7 +72,7 @@ struct RoomExportSurface: Encodable {
         id = surface.identifier.uuidString
         category = Self.categoryName(surface.category)
         dimensions = RoomExportElementSize(size: surface.dimensions)
-        area = surface.dimensions.x * surface.dimensions.y
+        area = Double(surface.dimensions.x * surface.dimensions.y)
         transform = RoomExportTransform(transform: surface.transform)
     }
 
@@ -98,7 +98,7 @@ struct RoomExportObject: Encodable {
         id = object.identifier.uuidString
         category = Self.categoryName(object.category)
         dimensions = RoomExportElementSize(size: object.dimensions)
-        volume = object.dimensions.x * object.dimensions.y * object.dimensions.z
+        volume = Double(object.dimensions.x * object.dimensions.y * object.dimensions.z)
         transform = RoomExportTransform(transform: object.transform)
     }
 
@@ -162,9 +162,9 @@ struct RoomExportSummary: Encodable {
         doorCount = doors.count
         windowCount = windows.count
         openingCount = openings.count
-        wallArea = walls.reduce(0) { $0 + $1.dimensions.x * $1.dimensions.y }
-        doorArea = doors.reduce(0) { $0 + $1.dimensions.x * $1.dimensions.y }
-        windowArea = windows.reduce(0) { $0 + $1.dimensions.x * $1.dimensions.y }
+        wallArea = Double(walls.reduce(0) { $0 + $1.dimensions.x * $1.dimensions.y })
+        doorArea = Double(doors.reduce(0) { $0 + $1.dimensions.x * $1.dimensions.y })
+        windowArea = Double(windows.reduce(0) { $0 + $1.dimensions.x * $1.dimensions.y })
         objectCount = objects.count
         objectCounts = Dictionary(grouping: objects, by: { RoomExportObject.categoryName($0.category) })
             .mapValues { $0.count }

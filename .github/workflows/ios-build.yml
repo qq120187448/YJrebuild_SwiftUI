@@ -22,15 +22,21 @@ jobs:
         run: |
           xcodebuild \
             -project LiDARScanQuantApp/RoomPlanDemo.xcodeproj \
-            -target RoomPlanDemo \
+            -scheme RoomPlanDemo \
             -configuration Debug \
             -sdk iphoneos \
-            -derivedDataPath Build \
             CODE_SIGNING_ALLOWED=NO \
             build
+
+      - name: Locate app bundle
+        id: app
+        run: |
+          APP_PATH=$(find "$HOME/Library/Developer/Xcode/DerivedData" -type d -name "RoomPlanDemo.app" -path "*Debug-iphoneos*" | head -n 1)
+          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+          echo "Found app at: $APP_PATH"
 
       - name: Upload app bundle
         uses: actions/upload-artifact@v4
         with:
           name: RoomPlanDemo-Debug
-          path: Build/Build/Products/Debug-iphoneos/RoomPlanDemo.app
+          path: ${{ steps.app.outputs.app_path }}
