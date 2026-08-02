@@ -35,8 +35,20 @@ jobs:
           echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
           echo "Found app at: $APP_PATH"
 
-      - name: Upload app bundle
+      - name: Package IPA
+        id: ipa
+        run: |
+          APP_PATH="${{ steps.app.outputs.app_path }}"
+          STAGING="$RUNNER_TEMP/ipa-staging"
+          rm -rf "$STAGING"
+          mkdir -p "$STAGING/Payload"
+          cp -R "$APP_PATH" "$STAGING/Payload/"
+          cd "$STAGING"
+          zip -qry "$RUNNER_TEMP/RoomPlanDemo-Debug.ipa" Payload
+          echo "ipa_path=$RUNNER_TEMP/RoomPlanDemo-Debug.ipa" >> "$GITHUB_OUTPUT"
+
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: RoomPlanDemo-Debug
-          path: ${{ steps.app.outputs.app_path }}
+          name: RoomPlanDemo-Debug-IPA
+          path: ${{ steps.ipa.outputs.ipa_path }}
