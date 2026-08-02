@@ -268,7 +268,7 @@ private struct PhotoRow: View {
 
             Button(action: onCapture) {
                 Image(systemName: hasPhoto ? "camera.fill" : "camera")
-                    .foregroundStyle(.accentColor)
+                    .foregroundStyle(Color.accentColor)
             }
         }
         .padding(.horizontal, 12)
