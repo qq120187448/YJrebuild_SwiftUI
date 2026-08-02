@@ -1,0 +1,64 @@
+name: RoboScan
+options:
+  bundleIdPrefix: com.silv
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: zh-Hans
+  xcodeVersion: "26.0"
+
+settings:
+  base:
+    DEVELOPMENT_TEAM: R3Z5CY34Q5
+    CODE_SIGN_STYLE: Automatic
+    PRODUCT_NAME: RoboScan
+    MARKETING_VERSION: 1.0
+    CURRENT_PROJECT_VERSION: 1
+    SWIFT_VERSION: 5.9
+    IPHONEOS_DEPLOYMENT_TARGET: 17.0
+    TARGETED_DEVICE_FAMILY: 1
+
+targets:
+  RoboScan:
+    type: application
+    platform: iOS
+    sources:
+      - path: Robo/Resources
+      - path: Robo/RoboApp.swift
+      - path: Robo/Models/AppStrings.swift
+      - path: Robo/Models/RoomScanRecord.swift
+      - path: Robo/Services/RoomDataProcessor.swift
+      - path: Robo/Services/QuantityTakeoffExporter.swift
+      - path: Robo/Views/ActivityView.swift
+      - path: Robo/Views/ContentView.swift
+      - path: Robo/Views/CaptureHomeView.swift
+      - path: Robo/Views/LiDARScanView.swift
+      - path: Robo/Views/RoomCaptureViewWrapper.swift
+      - path: Robo/Views/RoomResultView.swift
+      - path: Robo/Views/ScanHistoryView.swift
+      - path: Robo/Views/RoomDetailView.swift
+      - path: Robo/Views/Room3DView.swift
+      - path: Robo/Views/SettingsView.swift
+    settings:
+      base:
+        INFOPLIST_FILE: Robo/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.silv.RoboScan
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: Robo/Info.plist
+      properties:
+        CFBundleDisplayName: 工程量扫描
+        CFBundleDevelopmentRegion: zh-Hans
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleInfoDictionaryVersion: "6.0"
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundlePackageType: APPL
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSRequiresIPhoneOS: true
+        NSCameraUsageDescription: 需要相机和 LiDAR 权限来进行房间扫描。
+        UILaunchScreen: {}
+        UIRequiresFullScreen: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        ITSAppUsesNonExemptEncryption: false

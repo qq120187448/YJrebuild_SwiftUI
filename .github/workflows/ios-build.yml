@@ -5,10 +5,11 @@ on:
     branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
+  workflow_dispatch:
 
 jobs:
   build:
-    name: Build iOS app without signing
+    name: Build unsigned IPA
     runs-on: macos-latest
 
     steps:
@@ -18,11 +19,19 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
       - name: Build
+        working-directory: ios
         run: |
           xcodebuild \
-            -project LiDARScanQuantApp/RoomPlanDemo.xcodeproj \
-            -scheme RoomPlanDemo \
+            -project RoboScan.xcodeproj \
+            -scheme RoboScan \
             -configuration Debug \
             -sdk iphoneos \
             CODE_SIGNING_ALLOWED=NO \
@@ -31,7 +40,7 @@ jobs:
       - name: Locate app bundle
         id: app
         run: |
-          APP_PATH=$(find "$HOME/Library/Developer/Xcode/DerivedData" -type d -name "RoomPlanDemo.app" -path "*Debug-iphoneos*" | head -n 1)
+          APP_PATH=$(find "$HOME/Library/Developer/Xcode/DerivedData" -type d -name "RoboScan.app" -path "*Debug-iphoneos*" | head -n 1)
           echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
           echo "Found app at: $APP_PATH"
 
@@ -44,11 +53,11 @@ jobs:
           mkdir -p "$STAGING/Payload"
           cp -R "$APP_PATH" "$STAGING/Payload/"
           cd "$STAGING"
-          zip -qry "$RUNNER_TEMP/RoomPlanDemo-Debug.ipa" Payload
-          echo "ipa_path=$RUNNER_TEMP/RoomPlanDemo-Debug.ipa" >> "$GITHUB_OUTPUT"
+          zip -qry "$RUNNER_TEMP/RoboScan-Debug.ipa" Payload
+          echo "ipa_path=$RUNNER_TEMP/RoboScan-Debug.ipa" >> "$GITHUB_OUTPUT"
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: RoomPlanDemo-Debug-IPA
+          name: RoboScan-Debug-IPA
           path: ${{ steps.ipa.outputs.ipa_path }}
