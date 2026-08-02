@@ -167,7 +167,8 @@ struct RoomResultView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(Array(labels.enumerated()), id: \.offset) { _, label in
+                ForEach(0..<labels.count, id: \.self) { index in
+                    let label = labels[index]
                     HStack(spacing: 12) {
                         Text(label)
                             .font(.subheadline)
