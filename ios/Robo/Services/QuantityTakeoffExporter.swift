@@ -51,16 +51,6 @@ enum QuantityTakeoffExporter {
         }
         let plasterArea = max(0, wallArea - doorArea - windowArea - openingArea)
 
-        let doorPerimeter = room.doors.reduce(0.0) {
-            $0 + 2 * (Double($1.dimensions.x) + Double($1.dimensions.y))
-        }
-        let windowPerimeter = room.windows.reduce(0.0) {
-            $0 + 2 * (Double($1.dimensions.x) + Double($1.dimensions.y))
-        }
-        let openingPerimeter = room.openings.reduce(0.0) {
-            $0 + 2 * (Double($1.dimensions.x) + Double($1.dimensions.y))
-        }
-
         let wallVolume = room.walls.reduce(0.0) { total, wall in
             let width = Double(wall.dimensions.x)
             let height = Double(wall.dimensions.y)
@@ -174,6 +164,15 @@ enum QuantityTakeoffExporter {
         }
         let openingArea = room.openings.reduce(0.0) {
             $0 + Double($1.dimensions.x * $1.dimensions.y)
+        }
+        let doorPerimeter = room.doors.reduce(0.0) {
+            $0 + 2 * (Double($1.dimensions.x) + Double($1.dimensions.y))
+        }
+        let windowPerimeter = room.windows.reduce(0.0) {
+            $0 + 2 * (Double($1.dimensions.x) + Double($1.dimensions.y))
+        }
+        let openingPerimeter = room.openings.reduce(0.0) {
+            $0 + 2 * (Double($1.dimensions.x) + Double($1.dimensions.y))
         }
         let sanitaryNames = ["洗手盆", "坐便器", "浴缸", "洗碗机", "洗衣机"]
         let sanitaryCount = room.objects.filter {
