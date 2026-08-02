@@ -5,11 +5,13 @@ enum XLSXWriter {
         let text: String
         let bold: Bool
         let section: Bool
+        let hyperlink: String?
 
-        init(_ text: String, bold: Bool = false, section: Bool = false) {
+        init(_ text: String, bold: Bool = false, section: Bool = false, hyperlink: String? = nil) {
             self.text = text
             self.bold = bold
             self.section = section
+            self.hyperlink = hyperlink
         }
     }
 
@@ -124,9 +126,10 @@ enum XLSXWriter {
         let styles = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-          <fonts count="2">
+          <fonts count="3">
             <font><sz val="11"/><name val="Calibri"/></font>
             <font><b/><sz val="11"/><name val="Calibri"/></font>
+            <font><u/><color rgb="FF0563C1"/><sz val="11"/><name val="Calibri"/></font>
           </fonts>
           <fills count="3">
             <fill><patternFill patternType="none"/></fill>
@@ -135,10 +138,11 @@ enum XLSXWriter {
           </fills>
           <borders count="1"><border/></borders>
           <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-          <cellXfs count="3">
+          <cellXfs count="4">
             <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
             <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
             <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
+            <xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>
           </cellXfs>
         </styleSheet>
         """
@@ -169,6 +173,7 @@ enum XLSXWriter {
                 sheetXML += "</cols>"
             }
 
+            var hyperlinkXML = ""
             sheetXML += "<sheetData>"
             for (rowIndex, row) in sheet.rows.enumerated() {
                 let rowNumber = rowIndex + 1
@@ -180,7 +185,9 @@ enum XLSXWriter {
                 for (colIndex, cell) in row.enumerated() {
                     let ref = columnName(colIndex) + "\(rowNumber)"
                     let style: String
-                    if cell.section {
+                    if cell.hyperlink != nil {
+                        style = " s=\"3\""
+                    } else if cell.section {
                         style = " s=\"2\""
                     } else if cell.bold {
                         style = " s=\"1\""
@@ -189,15 +196,20 @@ enum XLSXWriter {
                     }
                     let value = xmlEscaped(cell.text)
                     sheetXML += "<c r=\"\(ref)\" t=\"inlineStr\"\(style)><is><t xml:space=\"preserve\">\(value)</t></is></c>"
+                    if let location = cell.hyperlink {
+                        hyperlinkXML += "<hyperlink ref=\"\(ref)\" location=\"\(xmlEscaped(location))\"/>"
+                    }
                 }
                 sheetXML += "</row>"
             }
+            sheetXML += "</sheetData>"
+            if !hyperlinkXML.isEmpty {
+                sheetXML += "<hyperlinks>\(hyperlinkXML)</hyperlinks>"
+            }
 
             if sheet.images.isEmpty {
-                sheetXML += "</sheetData></worksheet>"
+                sheetXML += "</worksheet>"
             } else {
-                sheetXML += "</sheetData>"
-
                 var drawingXML = """
                 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
                 <xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
