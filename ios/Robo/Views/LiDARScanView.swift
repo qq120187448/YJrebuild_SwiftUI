@@ -149,7 +149,6 @@ struct LiDARScanView: View {
             let summary = RoomDataProcessor.summarizeRoom(room)
             let summaryData = try RoomDataProcessor.encodeSummary(summary)
             let fullData = try RoomDataProcessor.encodeFullRoom(room)
-            let quantityData = try QuantityTakeoffExporter.makeJSON(room: room)
 
             let trimmedName = roomName.trimmingCharacters(in: .whitespacesAndNewlines)
             let name: String
@@ -161,6 +160,8 @@ struct LiDARScanView: View {
             } else {
                 name = trimmedName
             }
+
+            let quantityData = try QuantityTakeoffExporter.makeJSON(room: room, roomName: name)
 
             var usdzData: Data?
             do {

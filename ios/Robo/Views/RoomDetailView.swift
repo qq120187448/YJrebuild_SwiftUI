@@ -68,7 +68,7 @@ struct RoomDetailView: View {
     private func exportQuantity() {
         do {
             let capturedRoom = try RoomDataProcessor.decodeFullRoom(room.fullRoomDataJSON)
-            shareURLs = try QuantityTakeoffExporter.makeExportFiles(room: capturedRoom)
+            shareURLs = try QuantityTakeoffExporter.makeExportFiles(room: capturedRoom, roomName: room.roomName)
         } catch {
             // 导出失败时保持静默，避免打断详情页
         }

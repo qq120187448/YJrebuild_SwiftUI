@@ -27,6 +27,11 @@ struct RoomResultView: View {
         floorArea * ceilingHeight
     }
 
+    private var displayName: String {
+        let trimmed = roomName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "未命名房间" : trimmed
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
@@ -148,7 +153,7 @@ struct RoomResultView: View {
     private func exportQuantity() {
         isExporting = true
         do {
-            shareURLs = try QuantityTakeoffExporter.makeExportFiles(room: room)
+            shareURLs = try QuantityTakeoffExporter.makeExportFiles(room: room, roomName: displayName)
         } catch {
             exportError = error.localizedDescription
         }

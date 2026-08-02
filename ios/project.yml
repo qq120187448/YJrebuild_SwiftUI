@@ -11,7 +11,7 @@ settings:
     DEVELOPMENT_TEAM: R3Z5CY34Q5
     CODE_SIGN_STYLE: Automatic
     PRODUCT_NAME: RoboScan
-    MARKETING_VERSION: 1.0
+    MARKETING_VERSION: 0.1
     CURRENT_PROJECT_VERSION: 1
     SWIFT_VERSION: 5.9
     IPHONEOS_DEPLOYMENT_TARGET: 17.0
@@ -28,6 +28,7 @@ targets:
       - path: Robo/Models/RoomScanRecord.swift
       - path: Robo/Services/RoomDataProcessor.swift
       - path: Robo/Services/QuantityTakeoffExporter.swift
+      - path: Robo/Services/XLSXWriter.swift
       - path: Robo/Views/ActivityView.swift
       - path: Robo/Views/ContentView.swift
       - path: Robo/Views/CaptureHomeView.swift
