@@ -167,36 +167,16 @@ struct RoomResultView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(0..<labels.count, id: \.self) { index in
+                ForEach(Array(0..<labels.count), id: \.self) { index in
                     let label = labels[index]
-                    HStack(spacing: 12) {
-                        Text(label)
-                            .font(.subheadline)
-
-                        Spacer()
-
-                        if let photo = photos.first(where: { $0.label == label }) {
-                            Image(uiImage: photo.image)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: 44, height: 44)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                        }
-
-                        Button {
-                            pendingPhotoLabel = label
-                            showCamera = true
-                        } label: {
-                            Image(systemName: photos.contains(where: { $0.label == label })
-                                  ? "camera.fill"
-                                  : "camera")
-                                .foregroundStyle(.accentColor)
-                        }
+                    PhotoRow(
+                        label: label,
+                        photo: photos.first(where: { $0.label == label })?.image,
+                        hasPhoto: photos.contains(where: { $0.label == label })
+                    ) {
+                        pendingPhotoLabel = label
+                        showCamera = true
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.secondary.opacity(0.08))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
             }
 
@@ -262,5 +242,38 @@ struct RoomResultView: View {
             exportError = error.localizedDescription
         }
         isExporting = false
+    }
+}
+
+private struct PhotoRow: View {
+    let label: String
+    let photo: UIImage?
+    let hasPhoto: Bool
+    let onCapture: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(label)
+                .font(.subheadline)
+
+            Spacer()
+
+            if let photo {
+                Image(uiImage: photo)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
+            Button(action: onCapture) {
+                Image(systemName: hasPhoto ? "camera.fill" : "camera")
+                    .foregroundStyle(.accentColor)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.secondary.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }
