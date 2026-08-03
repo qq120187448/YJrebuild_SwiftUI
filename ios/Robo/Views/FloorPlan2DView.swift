@@ -32,7 +32,8 @@ struct FloorPlan2DView: View {
               let targetWidth = dimensions.width else {
             return points
         }
-        guard let bounds = polygonBounds(points), bounds.width > 0.01, bounds.height > 0.01 else {
+        let bounds = polygonBounds(points)
+        guard bounds.width > 0.01, bounds.height > 0.01 else {
             return points
         }
         let scaleX = targetLength / bounds.width
@@ -242,8 +243,10 @@ struct FloorPlan2DView: View {
             let transform = wall.transform
             let xAxis = SIMD3<Float>(transform.columns.0.x, 0, transform.columns.0.z)
             let zAxis = SIMD3<Float>(transform.columns.2.x, 0, transform.columns.2.z)
-            let normalizedX = simd_normalize(xAxis)
-            let normalizedZ = simd_normalize(zAxis)
+            let xLength = max(simd_length(xAxis), 0.0001)
+            let zLength = max(simd_length(zAxis), 0.0001)
+            let normalizedX = xAxis / xLength
+            let normalizedZ = zAxis / zLength
             let center = SIMD3<Float>(
                 transform.columns.3.x,
                 0,
