@@ -1,71 +1,182 @@
 import SwiftUI
+import SwiftData
 
 struct FloorPlan2DView: View {
+    @Environment(\.modelContext) private var modelContext
     let room: RoomScanRecord
+
+    @State private var lengthText = ""
+    @State private var widthText = ""
 
     private struct PlanPoint {
         let x: Double
         let y: Double
     }
 
+    private var adjustments: RoomAdjustments {
+        AdjustmentStorage.decode(room.adjustmentsJSON)
+    }
+
+    private var displayedPoints: [PlanPoint] {
+        let points = planPoints() ?? []
+        guard let dimensions = adjustments.roomDimensions,
+              let targetLength = dimensions.length,
+              let targetWidth = dimensions.width else {
+            return points
+        }
+        guard let bounds = polygonBounds(points), bounds.width > 0.01, bounds.height > 0.01 else {
+            return points
+        }
+        let scaleX = targetLength / bounds.width
+        let scaleY = targetWidth / bounds.height
+        let centerX = bounds.minX + bounds.width / 2
+        let centerY = bounds.minY + bounds.height / 2
+        return points.map { point in
+            PlanPoint(
+                x: centerX + (point.x - centerX) * scaleX,
+                y: centerY + (point.y - centerY) * scaleY
+            )
+        }
+    }
+
+    private var measuredLength: Double {
+        let points = planPoints() ?? []
+        return polygonBounds(points).width
+    }
+
+    private var measuredWidth: Double {
+        let points = planPoints() ?? []
+        return polygonBounds(points).height
+    }
+
+    private var displayLength: Double {
+        adjustments.roomDimensions?.length ?? measuredLength
+    }
+
+    private var displayWidth: Double {
+        adjustments.roomDimensions?.width ?? measuredWidth
+    }
+
     var body: some View {
-        Canvas { context, size in
-            guard let points = planPoints(), points.count >= 3 else {
+        VStack(spacing: 10) {
+            Canvas { context, size in
+                let points = displayedPoints
+                guard points.count >= 3 else {
+                    let center = CGPoint(x: size.width / 2, y: size.height / 2)
+                    context.draw(
+                        Text("暂无 2D 平面数据").font(.subheadline),
+                        at: center
+                    )
+                    return
+                }
+
+                let bounds = polygonBounds(points)
+                let scale = min(
+                    (size.width - 40) / max(bounds.width, 0.01),
+                    (size.height - 40) / max(bounds.height, 0.01)
+                )
+
+                func project(_ point: PlanPoint) -> CGPoint {
+                    CGPoint(
+                        x: 20 + (point.x - bounds.minX) * scale,
+                        y: 20 + (bounds.minY + bounds.height - point.y) * scale
+                    )
+                }
+
+                let projected = points.map(project)
+                var path = Path()
+                path.move(to: projected[0])
+                for point in projected.dropFirst() {
+                    path.addLine(to: point)
+                }
+                path.closeSubpath()
+
+                context.fill(path, with: .color(Color(red: 0.93, green: 0.96, blue: 1.0)))
+                context.stroke(path, with: .color(.accentColor), lineWidth: 2.5)
+
                 let center = CGPoint(x: size.width / 2, y: size.height / 2)
                 context.draw(
-                    Text("暂无 2D 平面数据")
-                        .font(.subheadline),
-                    at: center
+                    Text(room.roomName).font(.headline),
+                    at: CGPoint(x: center.x, y: center.y - 14)
                 )
-                return
-            }
-
-            let bounds = normalizedBounds(points)
-            let scale = min(
-                (size.width - 40) / max(bounds.width, 0.01),
-                (size.height - 40) / max(bounds.height, 0.01)
-            )
-
-            func project(_ point: PlanPoint) -> CGPoint {
-                CGPoint(
-                    x: 20 + (point.x - bounds.minX) * scale,
-                    y: 20 + (bounds.minY + bounds.height - point.y) * scale
+                context.draw(
+                    Text(String(format: "长 %.2f m · 宽 %.2f m", displayLength, displayWidth))
+                        .font(.caption),
+                    at: CGPoint(x: center.x, y: center.y + 8)
                 )
+
+                for point in projected {
+                    let dot = Path(ellipseIn: CGRect(x: point.x - 3, y: point.y - 3, width: 6, height: 6))
+                    context.fill(dot, with: .color(.accentColor))
+                }
             }
+            .frame(maxWidth: .infinity, minHeight: 220)
+            .background(Color(uiColor: .secondarySystemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
 
-            let projected = points.map(project)
-            var path = Path()
-            path.move(to: projected[0])
-            for point in projected.dropFirst() {
-                path.addLine(to: point)
-            }
-            path.closeSubpath()
-
-            context.fill(path, with: .color(Color(red: 0.93, green: 0.96, blue: 1.0)))
-            context.stroke(path, with: .color(.accentColor), lineWidth: 2.5)
-
-            let center = CGPoint(x: size.width / 2, y: size.height / 2)
-            let areaText = "\(String(format: "%.2f", room.floorAreaSqM)) m²"
-            context.draw(
-                Text(room.roomName)
-                    .font(.headline),
-                at: CGPoint(x: center.x, y: center.y - 10)
-            )
-            context.draw(
-                Text(areaText)
-                    .font(.subheadline),
-                at: CGPoint(x: center.x, y: center.y + 12)
-            )
-
-            for point in projected {
-                let dot = Path(ellipseIn: CGRect(x: point.x - 3, y: point.y - 3, width: 6, height: 6))
-                context.fill(dot, with: .color(.accentColor))
+            HStack(spacing: 12) {
+                dimensionEditor(
+                    title: "长 (m)",
+                    text: $lengthText,
+                    measured: measuredLength
+                ) { value in
+                    updateRoomDimension(length: value, width: nil)
+                }
+                dimensionEditor(
+                    title: "宽 (m)",
+                    text: $widthText,
+                    measured: measuredWidth
+                ) { value in
+                    updateRoomDimension(length: nil, width: value)
+                }
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 260)
-        .background(Color(uiColor: .secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, 4)
+        .onAppear {
+            lengthText = String(format: "%.2f", displayLength)
+            widthText = String(format: "%.2f", displayWidth)
+        }
+        .onChange(of: room.adjustmentsJSON) { _, _ in
+            lengthText = String(format: "%.2f", displayLength)
+            widthText = String(format: "%.2f", displayWidth)
+        }
+    }
+
+    private func dimensionEditor(
+        title: String,
+        text: Binding<String>,
+        measured: Double,
+        commit: @escaping (Double) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField(title, text: text)
+                .keyboardType(.decimalPad)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit {
+                    if let value = Double(text.wrappedValue), value > 0.01 {
+                        commit(value)
+                    } else {
+                        text.wrappedValue = String(format: "%.2f", measured)
+                    }
+                }
+        }
+    }
+
+    private func updateRoomDimension(length: Double?, width: Double?) {
+        var adjustments = self.adjustments
+        if adjustments.roomDimensions == nil {
+            adjustments.roomDimensions = RoomDimensionOverride()
+        }
+        if let length {
+            adjustments.roomDimensions?.length = length
+        }
+        if let width {
+            adjustments.roomDimensions?.width = width
+        }
+        room.adjustmentsJSON = AdjustmentStorage.encode(adjustments)
+        try? modelContext.save()
     }
 
     private func planPoints() -> [PlanPoint]? {
@@ -80,7 +191,7 @@ struct FloorPlan2DView: View {
         return points.count >= 3 ? points : nil
     }
 
-    private func normalizedBounds(_ points: [PlanPoint]) -> (minX: Double, minY: Double, width: Double, height: Double) {
+    private func polygonBounds(_ points: [PlanPoint]) -> (minX: Double, minY: Double, width: Double, height: Double) {
         let xs = points.map(\.x)
         let ys = points.map(\.y)
         let minX = xs.min() ?? 0

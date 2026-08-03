@@ -13,6 +13,15 @@ struct QuantityTakeoffItem: Codable {
 }
 
 enum QuantityTakeoffExporter {
+    struct RoomExportInput {
+        let room: CapturedRoom
+        let roomName: String
+        let roomType: String
+        let capturedAt: Date
+        let photos: [XLSXWriter.ImageAttachment]
+        let adjustments: RoomAdjustments
+    }
+
     static func countItemLabels(room: CapturedRoom) -> [String] {
         var labels = room.doors.enumerated().map { "门\($0.offset + 1)" }
         labels += room.windows.enumerated().map { "窗\($0.offset + 1)" }
@@ -218,6 +227,73 @@ enum QuantityTakeoffExporter {
         return [xlsxURL]
     }
 
+    /// Creates a single workbook with one quantity sheet (and photo sheet) per room.
+    static func makeMultiRoomExportFiles(
+        inputs: [RoomExportInput]
+    ) throws -> [URL] {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("QuantityTakeoff-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let xlsxURL = directory.appendingPathComponent("整套房工程量清单.xlsx")
+
+        var sheets: [XLSXWriter.Sheet] = []
+        for (index, input) in inputs.enumerated() {
+            let adjustedRoom = RoomDataProcessor.applyingAdjustments(
+                to: input.room,
+                adjustments: input.adjustments
+            )
+            let labelMap = componentLabels(room: adjustedRoom)
+            let mappedPhotos = input.photos.compactMap { photo -> XLSXWriter.ImageAttachment? in
+                var label = photo.label
+                if let idString = photo.componentID,
+                   let id = UUID(uuidString: idString),
+                   let mapped = labelMap[id] {
+                    label = mapped
+                }
+                guard let image = UIImage(data: photo.data) else { return nil }
+                let resized = ImageResizer.resized(image, maxDimension: 512)
+                guard let resizedData = resized.jpegData(compressionQuality: 0.8) else { return nil }
+                return XLSXWriter.ImageAttachment(
+                    label: label,
+                    data: resizedData,
+                    fileExtension: "jpg",
+                    componentID: photo.componentID
+                )
+            }
+            let dedupedPhotos = deduplicatePhotos(mappedPhotos)
+            let (_, mainItemRows) = makeMainSheet(
+                room: adjustedRoom,
+                roomName: input.roomName,
+                roomType: input.roomType,
+                capturedAt: input.capturedAt,
+                unitPrices: [:],
+                photoLinks: [:],
+                componentIDsByLabel: componentIDByLabel(room: adjustedRoom)
+            )
+            let (photoSheet, photoLinks) = makePhotoSheet(
+                photos: dedupedPhotos,
+                mainItemRows: mainItemRows,
+                sheetPrefix: "\(index + 1)-\(input.roomName)"
+            )
+            let (mainSheet, _) = makeMainSheet(
+                room: adjustedRoom,
+                roomName: input.roomName,
+                roomType: input.roomType,
+                capturedAt: input.capturedAt,
+                unitPrices: UnitPriceStore.load(),
+                photoLinks: photoLinks,
+                componentIDsByLabel: componentIDByLabel(room: adjustedRoom),
+                sheetPrefix: "\(index + 1)-\(input.roomName)"
+            )
+            sheets.append(mainSheet)
+            sheets.append(photoSheet)
+        }
+
+        let workbook = try XLSXWriter.makeWorkbook(sheets: sheets)
+        try workbook.write(to: xlsxURL)
+        return [xlsxURL]
+    }
+
     private static func deduplicatePhotos(
         _ photos: [XLSXWriter.ImageAttachment]
     ) -> [XLSXWriter.ImageAttachment] {
@@ -244,7 +320,8 @@ enum QuantityTakeoffExporter {
         capturedAt: Date,
         unitPrices: [String: Double],
         photoLinks: [String: String],
-        componentIDsByLabel: [String: UUID]
+        componentIDsByLabel: [String: UUID],
+        sheetPrefix: String = ""
     ) -> (XLSXWriter.Sheet, [String: Int]) {
         let floorArea = RoomDataProcessor.estimateFloorArea(room)
         let ceilingHeight = RoomDataProcessor.estimateCeilingHeight(room.walls)
@@ -368,8 +445,9 @@ enum QuantityTakeoffExporter {
         ])
 
         let columnWidths: [Double] = [6, 12, 18, 32, 6, 10, 24, 18, 12, 12, 10]
+        let sheetName = sheetPrefix.isEmpty ? "工程量清单" : "\(sheetPrefix)-工程量清单"
         let sheet = XLSXWriter.Sheet(
-            name: "工程量清单",
+            name: sheetName,
             rows: rows,
             columnWidths: columnWidths,
             rowHeights: [2: summaryRowHeight]
@@ -430,7 +508,8 @@ enum QuantityTakeoffExporter {
 
     private static func makePhotoSheet(
         photos: [XLSXWriter.ImageAttachment],
-        mainItemRows: [String: Int] = [:]
+        mainItemRows: [String: Int] = [:],
+        sheetPrefix: String = ""
     ) -> (XLSXWriter.Sheet, [String: String]) {
         var rows: [[XLSXWriter.Cell]] = [
             [XLSXWriter.Cell("项目", bold: true), XLSXWriter.Cell("实拍照片", bold: true)]
@@ -457,9 +536,12 @@ enum QuantityTakeoffExporter {
                 anchorRow: photoRow,
                 displayWidth: displayWidth,
                 displayHeight: displayHeight,
-                hyperlink: mainItemRows[photo.label].map { "#工程量清单!A\($0)" }
+                hyperlink: mainItemRows[photo.label].map {
+                    "#\(sheetPrefix.isEmpty ? "工程量清单" : "\(sheetPrefix)-工程量清单")!A\($0)"
+                }
             ))
-            let location = "'构件照片'!A\(labelRow)"
+            let photoSheetName = sheetPrefix.isEmpty ? "构件照片" : "\(sheetPrefix)-构件照片"
+            let location = "'\(photoSheetName)'!A\(labelRow)"
             photoLinks[photo.label] = location
             if let componentID = photo.componentID {
                 photoLinks[componentID] = location
@@ -467,7 +549,7 @@ enum QuantityTakeoffExporter {
         }
 
         let sheet = XLSXWriter.Sheet(
-            name: "构件照片",
+            name: sheetPrefix.isEmpty ? "构件照片" : "\(sheetPrefix)-构件照片",
             rows: rows,
             images: images,
             columnWidths: [18, 32],

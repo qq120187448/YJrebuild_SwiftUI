@@ -7,6 +7,30 @@ struct ScanHistoryView: View {
     private var rooms: [RoomScanRecord]
 
     @State private var showingLiDAR = false
+    @State private var shareURLs: [URL] = []
+
+    private struct BuildingGroup: Identifiable {
+        let id: String
+        let name: String
+        let rooms: [RoomScanRecord]
+    }
+
+    private var buildingGroups: [BuildingGroup] {
+        let grouped = Dictionary(grouping: rooms) { room -> String in
+            room.buildingID ?? "单间-\(room.id)"
+        }
+        return grouped.map { id, groupRooms in
+            let sorted = groupRooms.sorted { $0.capturedAt < $1.capturedAt }
+            let name = sorted.count > 1
+                ? "整套房（\(sorted.count) 个房间）"
+                : (sorted.first?.roomName ?? "房间")
+            return BuildingGroup(id: id, name: name, rooms: sorted)
+        }
+        .sorted {
+            ($0.rooms.first?.capturedAt ?? .distantPast) >
+                ($1.rooms.first?.capturedAt ?? .distantPast)
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -23,29 +47,44 @@ struct ScanHistoryView: View {
                     }
                 } else {
                     List {
-                        ForEach(rooms) { room in
-                            NavigationLink(value: room) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(room.roomName)
-                                        .font(.headline)
-                                    Text("墙 \(room.wallCount) · 门 \(room.doorCount) · 窗 \(room.windowCount) · 物体 \(room.objectCount)")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                    Text(String(format: "面积 %.2f m² · 体积 %.2f m³", room.floorAreaSqM, room.volumeM3))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(.vertical, 2)
-                            }
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    for fileName in room.photoFileNames {
-                                        PhotoStorage.delete(fileName: fileName)
+                        ForEach(buildingGroups) { group in
+                            Section {
+                                ForEach(group.rooms) { room in
+                                    NavigationLink(value: room) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(room.roomName)
+                                                .font(.headline)
+                                            Text("墙 \(room.wallCount) · 门 \(room.doorCount) · 窗 \(room.windowCount) · 物体 \(room.objectCount)")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                            Text(String(format: "面积 %.2f m² · 体积 %.2f m³", room.floorAreaSqM, room.volumeM3))
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        .padding(.vertical, 2)
                                     }
-                                    modelContext.delete(room)
-                                    try? modelContext.save()
-                                } label: {
-                                    Label("删除", systemImage: "trash")
+                                    .swipeActions(edge: .trailing) {
+                                        Button(role: .destructive) {
+                                            for fileName in room.photoFileNames {
+                                                PhotoStorage.delete(fileName: fileName)
+                                            }
+                                            modelContext.delete(room)
+                                            try? modelContext.save()
+                                        } label: {
+                                            Label("删除", systemImage: "trash")
+                                        }
+                                    }
+                                }
+                            } header: {
+                                HStack {
+                                    Text(group.name)
+                                    Spacer()
+                                    if group.rooms.count > 1 {
+                                        Button("导出整套") {
+                                            exportBuilding(group)
+                                        }
+                                        .font(.caption)
+                                    }
                                 }
                             }
                         }
@@ -68,6 +107,43 @@ struct ScanHistoryView: View {
         }
         .fullScreenCover(isPresented: $showingLiDAR) {
             LiDARScanView()
+        }
+        .sheet(isPresented: Binding(
+            get: { !shareURLs.isEmpty },
+            set: { if !$0 { shareURLs = [] } }
+        )) {
+            ActivityView(activityItems: shareURLs)
+        }
+    }
+
+    private func exportBuilding(_ group: BuildingGroup) {
+        do {
+            let inputs = try group.rooms.map { record -> QuantityTakeoffExporter.RoomExportInput in
+                let baseRoom = try RoomDataProcessor.decodeFullRoom(record.fullRoomDataJSON)
+                let capturedRoom = RoomDataProcessor.applyingAdjustments(
+                    to: baseRoom,
+                    adjustments: AdjustmentStorage.decode(record.adjustmentsJSON)
+                )
+                let photos = zip(record.photoLabels, record.photoFileNames).enumerated().compactMap { index, pair in
+                    let id = index < record.photoComponentIDs.count ? record.photoComponentIDs[index] : ""
+                    return PhotoStorage.load(
+                        label: pair.0,
+                        fileName: pair.1,
+                        componentID: id.isEmpty ? nil : id
+                    )
+                }
+                return QuantityTakeoffExporter.RoomExportInput(
+                    room: capturedRoom,
+                    roomName: record.roomName,
+                    roomType: record.roomType,
+                    capturedAt: record.capturedAt,
+                    photos: photos,
+                    adjustments: AdjustmentStorage.decode(record.adjustmentsJSON)
+                )
+            }
+            shareURLs = try QuantityTakeoffExporter.makeMultiRoomExportFiles(inputs: inputs)
+        } catch {
+            // 导出失败时保持静默，避免打断列表页
         }
     }
 }

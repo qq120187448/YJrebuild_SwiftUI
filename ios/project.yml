@@ -27,6 +27,7 @@ targets:
       - path: Robo/Models/AppStrings.swift
       - path: Robo/Models/PhotoAttachment.swift
       - path: Robo/Models/RoomScanRecord.swift
+      - path: Robo/Models/ComponentAdjustment.swift
       - path: Robo/Services/RoomDataProcessor.swift
       - path: Robo/Services/QuantityTakeoffExporter.swift
       - path: Robo/Services/PhotoStorage.swift
@@ -43,6 +44,7 @@ targets:
       - path: Robo/Views/LiDARScanView.swift
       - path: Robo/Views/RoomCaptureViewWrapper.swift
       - path: Robo/Views/RoomResultView.swift
+      - path: Robo/Views/ComponentAdjustmentView.swift
       - path: Robo/Views/ScanHistoryView.swift
       - path: Robo/Views/RoomDetailView.swift
       - path: Robo/Views/FloorPlan2DView.swift

@@ -14,6 +14,8 @@ struct LiDARScanView: View {
     @State private var roomName = ""
     @State private var roomType = "其他"
     @State private var photos: [PhotoAttachment] = []
+    @State private var adjustments = RoomAdjustments()
+    @State private var buildingID: String?
 
     private enum ScanPhase {
         case instructions
@@ -43,7 +45,9 @@ struct LiDARScanView: View {
                                 roomName: $roomName,
                                 roomType: $roomType,
                                 photos: $photos,
+                                adjustments: $adjustments,
                                 onSave: saveRoom,
+                                onSaveAndContinue: saveRoomAndContinue,
                                 onDiscard: { dismiss() }
                             )
                         }
@@ -107,8 +111,10 @@ struct LiDARScanView: View {
             Spacer()
 
             Button {
-                photos = []
-                phase = .scanning
+            photos = []
+            adjustments = RoomAdjustments()
+            buildingID = buildingID ?? UUID().uuidString
+            phase = .scanning
             } label: {
                 Text(AppStrings.Scan.start)
                     .font(.headline)
@@ -179,11 +185,34 @@ struct LiDARScanView: View {
 
     private func saveRoom() {
         guard let room = capturedRoom else { return }
-
         do {
-            let summary = RoomDataProcessor.summarizeRoom(room)
+            try persistRoom(room)
+            dismiss()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func saveRoomAndContinue() {
+        guard let room = capturedRoom else { return }
+        do {
+            try persistRoom(room)
+            roomName = ""
+            roomType = "其他"
+            photos = []
+            adjustments = RoomAdjustments()
+            capturedRoom = nil
+            phase = .instructions
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func persistRoom(_ room: CapturedRoom) throws {
+            let adjustedRoom = RoomDataProcessor.applyingAdjustments(to: room, adjustments: adjustments)
+            let summary = RoomDataProcessor.summarizeRoom(adjustedRoom)
             let summaryData = try RoomDataProcessor.encodeSummary(summary)
-            let fullData = try RoomDataProcessor.encodeFullRoom(room)
+            let fullData = try RoomDataProcessor.encodeFullRoom(adjustedRoom)
 
             let trimmedName = roomName.trimmingCharacters(in: .whitespacesAndNewlines)
             let name: String
@@ -196,12 +225,16 @@ struct LiDARScanView: View {
                 name = trimmedName
             }
 
-            let quantityData = try QuantityTakeoffExporter.makeJSON(room: room, roomName: name, roomType: roomType)
+            let quantityData = try QuantityTakeoffExporter.makeJSON(
+                room: adjustedRoom,
+                roomName: name,
+                roomType: roomType
+            )
 
             var photoLabels: [String] = []
             var photoFileNames: [String] = []
             var photoComponentIDs: [String] = []
-            let labelMap = QuantityTakeoffExporter.componentLabels(room: room)
+            let labelMap = QuantityTakeoffExporter.componentLabels(room: adjustedRoom)
             for photo in deduplicatedPhotos(photos) {
                 let finalLabel: String
                 if let id = photo.componentID, let mapped = labelMap[id] {
@@ -219,26 +252,26 @@ struct LiDARScanView: View {
             do {
                 let usdzURL = FileManager.default.temporaryDirectory
                     .appendingPathComponent("\(UUID().uuidString).usdz")
-                try room.export(to: usdzURL, exportOptions: .model)
+                try adjustedRoom.export(to: usdzURL, exportOptions: .model)
                 usdzData = try Data(contentsOf: usdzURL)
                 try? FileManager.default.removeItem(at: usdzURL)
             } catch {
                 // USDZ 导出失败不影响记录保存
             }
 
-            let floorArea = RoomDataProcessor.estimateFloorArea(room)
-            let ceilingHeight = RoomDataProcessor.estimateCeilingHeight(room.walls)
+            let floorArea = RoomDataProcessor.estimateFloorArea(adjustedRoom)
+            let ceilingHeight = RoomDataProcessor.estimateCeilingHeight(adjustedRoom.walls)
 
             let record = RoomScanRecord(
                 roomName: name,
-                wallCount: room.walls.count,
-                doorCount: room.doors.count,
-                windowCount: room.windows.count,
-                openingCount: room.openings.count,
-                objectCount: room.objects.count,
+                wallCount: adjustedRoom.walls.count,
+                doorCount: adjustedRoom.doors.count,
+                windowCount: adjustedRoom.windows.count,
+                openingCount: adjustedRoom.openings.count,
+                objectCount: adjustedRoom.objects.count,
                 floorAreaSqM: floorArea,
                 ceilingHeightM: ceilingHeight,
-                totalWallAreaSqM: RoomDataProcessor.computeTotalWallArea(room.walls),
+                totalWallAreaSqM: RoomDataProcessor.computeTotalWallArea(adjustedRoom.walls),
                 volumeM3: floorArea * ceilingHeight,
                 roomType: roomType,
                 summaryJSON: summaryData,
@@ -247,14 +280,12 @@ struct LiDARScanView: View {
                 usdzData: usdzData,
                 photoLabels: photoLabels,
                 photoFileNames: photoFileNames,
-                photoComponentIDs: photoComponentIDs
+                photoComponentIDs: photoComponentIDs,
+                buildingID: buildingID,
+                adjustmentsJSON: AdjustmentStorage.encode(adjustments)
             )
 
             modelContext.insert(record)
             try modelContext.save()
-            dismiss()
-        } catch {
-            self.error = error.localizedDescription
-        }
     }
 }

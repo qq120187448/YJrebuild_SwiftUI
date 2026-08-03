@@ -84,7 +84,11 @@ struct RoomDetailView: View {
 
     private func exportQuantity() {
         do {
-            let capturedRoom = try RoomDataProcessor.decodeFullRoom(room.fullRoomDataJSON)
+            let baseRoom = try RoomDataProcessor.decodeFullRoom(room.fullRoomDataJSON)
+            let capturedRoom = RoomDataProcessor.applyingAdjustments(
+                to: baseRoom,
+                adjustments: AdjustmentStorage.decode(room.adjustmentsJSON)
+            )
             let photos = zip(room.photoLabels, room.photoFileNames).enumerated().compactMap { index, pair in
                 let id = index < room.photoComponentIDs.count ? room.photoComponentIDs[index] : ""
                 return PhotoStorage.load(
@@ -108,7 +112,11 @@ struct RoomDetailView: View {
 
     private func exportModel() {
         do {
-            let capturedRoom = try RoomDataProcessor.decodeFullRoom(room.fullRoomDataJSON)
+            let baseRoom = try RoomDataProcessor.decodeFullRoom(room.fullRoomDataJSON)
+            let capturedRoom = RoomDataProcessor.applyingAdjustments(
+                to: baseRoom,
+                adjustments: AdjustmentStorage.decode(room.adjustmentsJSON)
+            )
             isExportingModel = true
             shareURLs = try ModelExportService.makeExportFiles(
                 room: capturedRoom,

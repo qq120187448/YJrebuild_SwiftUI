@@ -7,7 +7,9 @@ struct RoomResultView: View {
     @Binding var roomName: String
     @Binding var roomType: String
     @Binding var photos: [PhotoAttachment]
+    @Binding var adjustments: RoomAdjustments
     let onSave: () -> Void
+    let onSaveAndContinue: () -> Void
     let onDiscard: () -> Void
 
     private let roomTypes = ["客厅", "卧室", "餐厅", "厨房", "卫生间", "其他"]
@@ -15,6 +17,7 @@ struct RoomResultView: View {
     @State private var shareURLs: [URL] = []
     @State private var isExporting = false
     @State private var isExportingModel = false
+    @State private var showAdjustments = false
     @State private var exportError: String?
 
     private var floorArea: Double {
@@ -121,6 +124,30 @@ struct RoomResultView: View {
                     .disabled(isExporting)
 
                     Button {
+                        onSaveAndContinue()
+                    } label: {
+                        Label("保存并扫描下一间", systemImage: "plus.rectangle.on.rectangle")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(.secondary.opacity(0.15))
+                            .foregroundColor(.accentColor)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+
+                    Button {
+                        showAdjustments = true
+                    } label: {
+                        Label("调整构件尺寸", systemImage: "ruler")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(.secondary.opacity(0.15))
+                            .foregroundColor(.accentColor)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+
+                    Button {
                         exportModel()
                     } label: {
                         HStack {
@@ -163,6 +190,9 @@ struct RoomResultView: View {
             set: { if !$0 { shareURLs = [] } }
         )) {
             ActivityView(activityItems: shareURLs)
+        }
+        .sheet(isPresented: $showAdjustments) {
+            ComponentAdjustmentView(room: room, adjustments: $adjustments)
         }
     }
 
@@ -236,6 +266,7 @@ struct RoomResultView: View {
     private func exportQuantity() {
         isExporting = true
         do {
+            let adjustedRoom = RoomDataProcessor.applyingAdjustments(to: room, adjustments: adjustments)
             let imageAttachments = photos.compactMap { photo -> XLSXWriter.ImageAttachment? in
                 guard let data = photo.image.jpegData(compressionQuality: 0.8) else { return nil }
                 return XLSXWriter.ImageAttachment(
@@ -246,7 +277,7 @@ struct RoomResultView: View {
                 )
             }
             shareURLs = try QuantityTakeoffExporter.makeExportFiles(
-                room: room,
+                room: adjustedRoom,
                 roomName: displayName,
                 roomType: roomType,
                 capturedAt: Date(),
