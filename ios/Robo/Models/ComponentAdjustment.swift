@@ -9,18 +9,18 @@ struct ComponentAdjustment: Codable, Identifiable, Hashable {
     var depth: Double?
 }
 
-struct RoomDimensionOverride: Codable {
+struct RoomDimensionOverride: Codable, Equatable {
     var length: Double?
     var width: Double?
 }
 
-struct WallThicknessSettings: Codable {
+struct WallThicknessSettings: Codable, Equatable {
     var external: Double = 0.2
     var internalWall: Double = 0.1
     var perWall: [String: Double] = [:]
 }
 
-struct RoomAdjustments: Codable {
+struct RoomAdjustments: Codable, Equatable {
     var components: [String: ComponentAdjustment] = [:]
     var roomDimensions: RoomDimensionOverride?
     var wallThickness: WallThicknessSettings?
