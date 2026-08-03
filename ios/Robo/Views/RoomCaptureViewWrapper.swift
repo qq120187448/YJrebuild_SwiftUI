@@ -48,7 +48,11 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
         let onComponentCaptured: (UIImage, String, String) -> Void
         private var seenComponentIDs: Set<String> = []
         private var pendingComponents: [String: PendingComponent] = [:]
+        private var bestFrameSnapshot: UIImage?
         private lazy var ciContext = CIContext()
+
+        private let maxCandidates = 5
+        private let goodScoreThreshold = 0.09
 
         private struct PendingComponent {
             let label: String
@@ -95,61 +99,83 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
 
             for (id, label) in found where !seenComponentIDs.contains(id) {
                 seenComponentIDs.insert(id)
-                pendingComponents[id] = PendingComponent(label: label)
+                if !hasZeroDimensions(in: room, id: id) {
+                    pendingComponents[id] = PendingComponent(label: label)
+                }
             }
             guard !pendingComponents.isEmpty, let frame = session.arSession.currentFrame else { return }
+            guard let snapshot = snapshot(from: frame) else { return }
+            bestFrameSnapshot = snapshot
 
-            var captureScores: [String: Double] = [:]
-            var removals: [String] = []
             for id in Array(pendingComponents.keys) {
                 guard let pending = pendingComponents[id] else { continue }
-                guard let geometry = componentGeometry(in: room, id: id) else {
-                    if !pending.candidates.isEmpty {
-                        deliverBest(id: id, pending: pending)
-                    }
-                    removals.append(id)
-                    continue
-                }
-                if pending.candidates.count >= 5 {
+                guard pending.candidates.count < maxCandidates else {
                     deliverBest(id: id, pending: pending)
-                    removals.append(id)
+                    pendingComponents.removeValue(forKey: id)
                     continue
                 }
-                if let score = projectionScore(geometry: geometry, frame: frame) {
-                    captureScores[id] = score
+                guard let geometry = componentGeometry(in: room, id: id) else {
+                    deliverFallback(id: id, pending: pending, snapshot: snapshot)
+                    pendingComponents.removeValue(forKey: id)
+                    continue
                 }
-            }
-            for id in removals {
-                pendingComponents.removeValue(forKey: id)
-            }
-            guard !captureScores.isEmpty, let image = snapshot(from: frame) else { return }
-
-            for (id, score) in captureScores {
-                guard var pending = pendingComponents[id] else { continue }
-                let shouldCapture = pending.lastCaptureTime == nil
-                    || frame.timestamp - (pending.lastCaptureTime ?? 0) >= 0.25
-                if shouldCapture {
-                    pending.candidates.append((image, score))
-                    pending.lastCaptureTime = frame.timestamp
-                    pendingComponents[id] = pending
+                guard let score = projectionScore(geometry: geometry, frame: frame) else { continue }
+                if let lastTime = pending.lastCaptureTime,
+                   frame.timestamp - lastTime < 0.3 {
+                    continue
+                }
+                var updated = pending
+                updated.candidates.append((snapshot, score))
+                updated.lastCaptureTime = frame.timestamp
+                pendingComponents[id] = updated
+                if updated.candidates.count >= maxCandidates || score >= goodScoreThreshold {
+                    deliverBest(id: id, pending: updated)
+                    pendingComponents.removeValue(forKey: id)
                 }
             }
         }
 
         private func deliverBest(id: String, pending: PendingComponent) {
             guard let best = pending.candidates.max(by: { $0.score < $1.score }) else { return }
+            deliver(image: best.image, label: pending.label, id: id)
+        }
+
+        private func deliverFallback(id: String, pending: PendingComponent, snapshot: UIImage?) {
+            if let best = pending.candidates.max(by: { $0.score < $1.score }) {
+                deliver(image: best.image, label: pending.label, id: id)
+            } else if let snapshot {
+                deliver(image: snapshot, label: pending.label, id: id)
+            }
+        }
+
+        private func deliver(image: UIImage, label: String, id: String) {
+            let resized = ImageResizer.resized(image, maxDimension: 1024)
             DispatchQueue.main.async {
-                self.onComponentCaptured(best.image, pending.label, id)
+                self.onComponentCaptured(resized, label, id)
             }
         }
 
         private func flushPendingPhotos() {
             for (id, pending) in pendingComponents {
-                if !pending.candidates.isEmpty {
-                    deliverBest(id: id, pending: pending)
-                }
+                deliverFallback(id: id, pending: pending, snapshot: bestFrameSnapshot)
             }
             pendingComponents.removeAll()
+        }
+
+        private func hasZeroDimensions(in room: CapturedRoom, id: String) -> Bool {
+            if let door = room.doors.first(where: { $0.identifier.uuidString == id }) {
+                return door.dimensions.x <= 0.001 && door.dimensions.y <= 0.001 && door.dimensions.z <= 0.001
+            }
+            if let window = room.windows.first(where: { $0.identifier.uuidString == id }) {
+                return window.dimensions.x <= 0.001 && window.dimensions.y <= 0.001 && window.dimensions.z <= 0.001
+            }
+            if let opening = room.openings.first(where: { $0.identifier.uuidString == id }) {
+                return opening.dimensions.x <= 0.001 && opening.dimensions.y <= 0.001 && opening.dimensions.z <= 0.001
+            }
+            if let object = room.objects.first(where: { $0.identifier.uuidString == id }) {
+                return object.dimensions.x <= 0.001 && object.dimensions.y <= 0.001 && object.dimensions.z <= 0.001
+            }
+            return false
         }
 
         private func componentGeometry(in room: CapturedRoom, id: String) -> (simd_float4x4, simd_float3)? {
@@ -174,6 +200,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
                 width: CGFloat(CVPixelBufferGetHeight(buffer)),
                 height: CGFloat(CVPixelBufferGetWidth(buffer))
             )
+            guard viewport.width > 0, viewport.height > 0 else { return nil }
             let half = SIMD3<Float>(geometry.1.x / 2, geometry.1.y / 2, geometry.1.z / 2)
             let localCorners: [SIMD3<Float>] = [
                 SIMD3(-half.x, -half.y, -half.z),
@@ -206,7 +233,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
             let ys = points.map { $0.y }
             let width = max(0, (xs.max() ?? 0) - (xs.min() ?? 0))
             let height = max(0, (ys.max() ?? 0) - (ys.min() ?? 0))
-            return Double(width * height)
+            return Double(width * height) / Double(viewport.width * viewport.height)
         }
 
         private func snapshot(from frame: ARFrame) -> UIImage? {

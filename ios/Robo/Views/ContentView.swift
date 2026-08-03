@@ -5,7 +5,7 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            CaptureHomeView()
+            CaptureHomeView(selectedTab: $selectedTab)
                 .tabItem {
                     Label(AppStrings.Tabs.capture, systemImage: "camera.metering.spot")
                 }

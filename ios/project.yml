@@ -30,8 +30,12 @@ targets:
       - path: Robo/Services/RoomDataProcessor.swift
       - path: Robo/Services/QuantityTakeoffExporter.swift
       - path: Robo/Services/PhotoStorage.swift
+      - path: Robo/Services/ImageResizer.swift
       - path: Robo/Services/UnitPriceStore.swift
       - path: Robo/Services/XLSXWriter.swift
+      - path: Robo/Services/ExportService.swift
+      - path: Robo/Services/FloorPlanSVGGenerator.swift
+      - path: Robo/Services/ModelExportService.swift
       - path: Robo/Views/ActivityView.swift
       - path: Robo/Views/ContentView.swift
       - path: Robo/Views/CaptureHomeView.swift
@@ -41,6 +45,7 @@ targets:
       - path: Robo/Views/RoomResultView.swift
       - path: Robo/Views/ScanHistoryView.swift
       - path: Robo/Views/RoomDetailView.swift
+      - path: Robo/Views/FloorPlan2DView.swift
       - path: Robo/Views/Room3DView.swift
       - path: Robo/Views/SettingsView.swift
     settings:

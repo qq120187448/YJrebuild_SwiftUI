@@ -2,6 +2,8 @@ import SwiftUI
 import SwiftData
 
 struct CaptureHomeView: View {
+    @Binding var selectedTab: Int
+
     @Query(sort: \RoomScanRecord.capturedAt, order: .reverse)
     private var rooms: [RoomScanRecord]
 
@@ -26,17 +28,21 @@ struct CaptureHomeView: View {
                     .padding(.horizontal, 32)
 
                 if !rooms.isEmpty {
-                    VStack(spacing: 6) {
-                        Text("已有 \(rooms.count) 条扫描记录")
-                            .font(.headline)
-                        Text("最近一次：\(rooms.first?.roomName ?? "")")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    Button {
+                        selectedTab = 1
+                    } label: {
+                        VStack(spacing: 6) {
+                            Text("已有 \(rooms.count) 条扫描记录")
+                                .font(.headline)
+                            Text("最近一次：\(rooms.first?.roomName ?? "")")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(.secondary.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                    .background(.secondary.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
                     .padding(.horizontal, 32)
                 }
 

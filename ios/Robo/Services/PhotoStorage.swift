@@ -12,7 +12,8 @@ enum PhotoStorage {
     static func save(image: UIImage, label: String) throws -> (label: String, fileName: String) {
         let fileName = "\(UUID().uuidString).jpg"
         let url = try directory().appendingPathComponent(fileName)
-        guard let data = image.jpegData(compressionQuality: 0.8) else {
+        let resized = ImageResizer.resized(image, maxDimension: 1024)
+        guard let data = resized.jpegData(compressionQuality: 0.8) else {
             throw NSError(domain: "PhotoStorage", code: 1, userInfo: [NSLocalizedDescriptionKey: "无法压缩照片"])
         }
         try data.write(to: url)

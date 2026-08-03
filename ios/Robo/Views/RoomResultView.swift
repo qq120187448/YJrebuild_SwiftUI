@@ -14,6 +14,7 @@ struct RoomResultView: View {
 
     @State private var shareURLs: [URL] = []
     @State private var isExporting = false
+    @State private var isExportingModel = false
     @State private var exportError: String?
 
     private var floorArea: Double {
@@ -118,6 +119,27 @@ struct RoomResultView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
                     .disabled(isExporting)
+
+                    Button {
+                        exportModel()
+                    } label: {
+                        HStack {
+                            if isExportingModel {
+                                ProgressView()
+                                    .tint(.accentColor)
+                            } else {
+                                Image(systemName: "cube.transparent")
+                            }
+                            Text("导出 3D 模型（USDZ/PLY）")
+                        }
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(.secondary.opacity(0.15))
+                        .foregroundColor(.accentColor)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .disabled(isExportingModel)
 
                     Button(AppStrings.Scan.discard, role: .destructive) {
                         onDiscard()
@@ -227,6 +249,7 @@ struct RoomResultView: View {
                 room: room,
                 roomName: displayName,
                 roomType: roomType,
+                capturedAt: Date(),
                 unitPrices: UnitPriceStore.load(),
                 photos: imageAttachments
             )
@@ -234,5 +257,18 @@ struct RoomResultView: View {
             exportError = error.localizedDescription
         }
         isExporting = false
+    }
+
+    private func exportModel() {
+        isExportingModel = true
+        do {
+            shareURLs = try ModelExportService.makeExportFiles(
+                room: room,
+                roomName: displayName
+            )
+        } catch {
+            exportError = error.localizedDescription
+        }
+        isExportingModel = false
     }
 }

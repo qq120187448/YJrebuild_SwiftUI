@@ -7,6 +7,7 @@ struct RoomDetailView: View {
 
     @State private var shareURLs: [URL] = []
     @State private var show3D = false
+    @State private var isExportingModel = false
 
     var body: some View {
         List {
@@ -34,18 +35,19 @@ struct RoomDetailView: View {
                 LabeledContent("实拍照片", value: "\(room.photoLabels.count) 张")
             }
 
-            if room.usdzData != nil {
-                Section("3D 预览") {
-                    Picker("视图", selection: $show3D) {
-                        Text("2D").tag(false)
-                        Text("3D").tag(true)
-                    }
-                    .pickerStyle(.segmented)
+            Section("预览") {
+                Picker("视图", selection: $show3D) {
+                    Text("2D").tag(false)
+                    Text("3D").tag(true)
+                }
+                .pickerStyle(.segmented)
 
-                    if show3D {
-                        Room3DView(room: room)
-                            .frame(height: 300)
-                    }
+                if show3D {
+                    Room3DView(room: room)
+                        .frame(height: 300)
+                } else {
+                    FloorPlan2DView(room: room)
+                        .frame(height: 300)
                 }
             }
 
@@ -55,6 +57,19 @@ struct RoomDetailView: View {
                 } label: {
                     Label(AppStrings.Scan.exportQuantity, systemImage: "doc.text")
                 }
+                Button {
+                    exportModel()
+                } label: {
+                    HStack {
+                        if isExportingModel {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "cube.transparent")
+                        }
+                        Text("导出 3D 模型（USDZ/PLY）")
+                    }
+                }
+                .disabled(isExportingModel)
             }
         }
         .navigationTitle("扫描详情")
@@ -82,11 +97,26 @@ struct RoomDetailView: View {
                 room: capturedRoom,
                 roomName: room.roomName,
                 roomType: room.roomType,
+                capturedAt: room.capturedAt,
                 unitPrices: UnitPriceStore.load(),
                 photos: photos
             )
         } catch {
             // 导出失败时保持静默，避免打断详情页
         }
+    }
+
+    private func exportModel() {
+        do {
+            let capturedRoom = try RoomDataProcessor.decodeFullRoom(room.fullRoomDataJSON)
+            isExportingModel = true
+            shareURLs = try ModelExportService.makeExportFiles(
+                room: capturedRoom,
+                roomName: room.roomName
+            )
+        } catch {
+            // 导出失败时保持静默，避免打断详情页
+        }
+        isExportingModel = false
     }
 }

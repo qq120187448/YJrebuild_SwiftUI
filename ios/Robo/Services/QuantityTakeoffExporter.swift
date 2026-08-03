@@ -1,5 +1,6 @@
 import Foundation
 import RoomPlan
+import UIKit
 
 struct QuantityTakeoffItem: Codable {
     let code: String
@@ -35,6 +36,23 @@ enum QuantityTakeoffExporter {
         }
         for (index, object) in room.objects.enumerated() {
             map[object.identifier] = "\(objectCategoryName(object.category))\(index + 1)"
+        }
+        return map
+    }
+
+    static func componentIDByLabel(room: CapturedRoom) -> [String: UUID] {
+        var map: [String: UUID] = [:]
+        for (index, door) in room.doors.enumerated() {
+            map["门\(index + 1)"] = door.identifier
+        }
+        for (index, window) in room.windows.enumerated() {
+            map["窗\(index + 1)"] = window.identifier
+        }
+        for (index, opening) in room.openings.enumerated() {
+            map["洞口\(index + 1)"] = opening.identifier
+        }
+        for (index, object) in room.objects.enumerated() {
+            map["\(objectCategoryName(object.category))\(index + 1)"] = object.identifier
         }
         return map
     }
@@ -140,6 +158,7 @@ enum QuantityTakeoffExporter {
         room: CapturedRoom,
         roomName: String,
         roomType: String,
+        capturedAt: Date,
         unitPrices: [String: Double],
         photos: [XLSXWriter.ImageAttachment]
     ) throws -> [URL] {
@@ -149,32 +168,48 @@ enum QuantityTakeoffExporter {
 
         let xlsxURL = directory.appendingPathComponent("工程量清单.xlsx")
         let labelMap = componentLabels(room: room)
-        let mappedPhotos = photos.map { photo -> XLSXWriter.ImageAttachment in
-            let label: String
+        let mappedPhotos = photos.compactMap { photo -> XLSXWriter.ImageAttachment? in
+            var label = photo.label
             if let idString = photo.componentID,
                let id = UUID(uuidString: idString),
                let mapped = labelMap[id] {
                 label = mapped
-            } else {
-                label = photo.label
             }
+            guard let image = UIImage(data: photo.data) else { return nil }
+            let resized = ImageResizer.resized(image, maxDimension: 1024)
+            guard let resizedData = resized.jpegData(compressionQuality: 0.8) else { return nil }
             return XLSXWriter.ImageAttachment(
                 label: label,
-                data: photo.data,
-                fileExtension: photo.fileExtension,
+                data: resizedData,
+                fileExtension: "jpg",
                 componentID: photo.componentID
             )
         }
-        let (photoSheet, photoLinks) = makePhotoSheet(photos: mappedPhotos)
+        let (_, mainItemRows) = makeMainSheet(
+            room: room,
+            roomName: roomName,
+            roomType: roomType,
+            capturedAt: capturedAt,
+            unitPrices: [:],
+            photoLinks: [:],
+            componentIDsByLabel: componentIDByLabel(room: room)
+        )
+        let (photoSheet, photoLinks) = makePhotoSheet(
+            photos: mappedPhotos,
+            mainItemRows: mainItemRows
+        )
+        let (mainSheet, _) = makeMainSheet(
+            room: room,
+            roomName: roomName,
+            roomType: roomType,
+            capturedAt: capturedAt,
+            unitPrices: unitPrices,
+            photoLinks: photoLinks,
+            componentIDsByLabel: componentIDByLabel(room: room)
+        )
         let workbook = try XLSXWriter.makeWorkbook(
             sheets: [
-                makeMainSheet(
-                    room: room,
-                    roomName: roomName,
-                    roomType: roomType,
-                    unitPrices: unitPrices,
-                    photoLinks: photoLinks
-                ),
+                mainSheet,
                 photoSheet
             ]
         )
@@ -186,9 +221,11 @@ enum QuantityTakeoffExporter {
         room: CapturedRoom,
         roomName: String,
         roomType: String,
+        capturedAt: Date,
         unitPrices: [String: Double],
-        photoLinks: [String: String]
-    ) -> XLSXWriter.Sheet {
+        photoLinks: [String: String],
+        componentIDsByLabel: [String: UUID]
+    ) -> (XLSXWriter.Sheet, [String: Int]) {
         let floorArea = RoomDataProcessor.estimateFloorArea(room)
         let ceilingHeight = RoomDataProcessor.estimateCeilingHeight(room.walls)
         let volume = floorArea * ceilingHeight
@@ -213,33 +250,20 @@ enum QuantityTakeoffExporter {
             $0 + 2 * (Double($1.dimensions.x) + Double($1.dimensions.y))
         }
         let sanitaryNames = ["洗手盆", "坐便器", "浴缸", "洗碗机", "洗衣机"]
-        let sanitaryCount = room.objects.filter {
-            sanitaryNames.contains(objectCategoryName($0.category))
-        }.count
-        let furnitureCount = room.objects.count - sanitaryCount
-
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "zh_CN")
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
 
         let summaryText = [
             "房间名称：\(roomName)",
+            "扫描时间：\(formatter.string(from: capturedAt))",
             "类型：\(roomType)",
             "建筑面积：\(String(format: "%.2f", floorArea)) m²",
             "层高：\(String(format: "%.2f", ceilingHeight)) m",
             "体积：\(String(format: "%.2f", volume)) m³",
             "周长：\(String(format: "%.2f", perimeter)) m",
             "形状：\(shapeName(room))",
-            "楼层：\(room.story)",
-            "识别类型：\(sectionNames(room))",
-            "墙：\(room.walls.count) 面",
-            "门：\(room.doors.count) 樘",
-            "窗：\(room.windows.count) 扇",
-            "开口：\(room.openings.count) 处",
-            "物体：\(room.objects.count) 个",
-            "洁具：\(sanitaryCount) 个",
-            "家具：\(furnitureCount) 个",
-            "生成：\(formatter.string(from: Date()))"
+            "识别类型：\(sectionNames(room))"
         ].joined(separator: "；")
 
         var rows: [[XLSXWriter.Cell]] = [
@@ -247,6 +271,11 @@ enum QuantityTakeoffExporter {
             [XLSXWriter.Cell("房间概要", bold: true), XLSXWriter.Cell(summaryText)],
             [XLSXWriter.Cell("")]
         ]
+
+        let summaryRowHeight = max(
+            30,
+            Double(summaryText.count / 70 + 1) * 16
+        )
 
         let groups: [(title: String, items: [QuantityTakeoffItem])] = [
             (
@@ -295,17 +324,20 @@ enum QuantityTakeoffExporter {
         ]
 
         var totalPrice = 0.0
+        var itemRows: [String: Int] = [:]
         for group in groups {
             rows.append([XLSXWriter.Cell(group.title, section: true)])
             rows.append(itemHeaderRow())
             for (index, item) in group.items.enumerated() {
                 let price = unitPrices[item.code] ?? unitPrices[item.name] ?? 0
                 totalPrice += item.quantity * price
+                itemRows[item.name] = rows.count + 1
                 rows.append(itemRow(
                     index: index,
                     item: item,
                     unitPrices: unitPrices,
-                    photoLinks: photoLinks
+                    photoLinks: photoLinks,
+                    componentIDsByLabel: componentIDsByLabel
                 ))
             }
             rows.append([XLSXWriter.Cell("")])
@@ -316,11 +348,13 @@ enum QuantityTakeoffExporter {
         ])
 
         let columnWidths: [Double] = [6, 12, 18, 32, 6, 10, 24, 18, 12, 12, 10]
-        return XLSXWriter.Sheet(
+        let sheet = XLSXWriter.Sheet(
             name: "工程量清单",
             rows: rows,
-            columnWidths: columnWidths
+            columnWidths: columnWidths,
+            rowHeights: [2: summaryRowHeight]
         )
+        return (sheet, itemRows)
     }
 
     // MARK: - Row builders
@@ -345,13 +379,16 @@ enum QuantityTakeoffExporter {
         index: Int,
         item: QuantityTakeoffItem,
         unitPrices: [String: Double],
-        photoLinks: [String: String]
+        photoLinks: [String: String],
+        componentIDsByLabel: [String: UUID]
     ) -> [XLSXWriter.Cell] {
         let price = unitPrices[item.code] ?? unitPrices[item.name] ?? 0
         let total = item.quantity * price
         let photoName = photoLabel(for: item)
         let photoCell: XLSXWriter.Cell
-        if !photoName.isEmpty, let location = photoLinks[photoName] {
+        let componentID = componentIDsByLabel[photoName]
+        let linkLocation = componentID.flatMap { photoLinks[$0.uuidString] } ?? photoLinks[photoName]
+        if !photoName.isEmpty, let location = linkLocation {
             photoCell = XLSXWriter.Cell("查看照片", hyperlink: location)
         } else {
             photoCell = XLSXWriter.Cell("")
@@ -372,7 +409,8 @@ enum QuantityTakeoffExporter {
     }
 
     private static func makePhotoSheet(
-        photos: [XLSXWriter.ImageAttachment]
+        photos: [XLSXWriter.ImageAttachment],
+        mainItemRows: [String: Int] = [:]
     ) -> (XLSXWriter.Sheet, [String: String]) {
         var rows: [[XLSXWriter.Cell]] = [
             [XLSXWriter.Cell("项目", bold: true), XLSXWriter.Cell("实拍照片", bold: true)]
@@ -384,31 +422,49 @@ enum QuantityTakeoffExporter {
         for photo in photos {
             let labelRow = rows.count + 1
             rows.append([XLSXWriter.Cell(photo.label, bold: true)])
-            for _ in 0..<5 {
-                rows.append([XLSXWriter.Cell("")])
-            }
+            rows.append([XLSXWriter.Cell("")])
+            let photoRow = labelRow + 1
             rowHeights[labelRow] = 22
-            for offset in 1...5 {
-                rowHeights[labelRow + offset] = 26
-            }
+
+            let (displayWidth, displayHeight) = displaySize(for: photo.data)
+            rowHeights[photoRow] = max(40, displayHeight * 0.75 + 5)
+
             images.append(XLSXWriter.ImageAttachment(
                 label: photo.label,
                 data: photo.data,
                 fileExtension: photo.fileExtension,
                 componentID: photo.componentID,
-                anchorRow: labelRow + 1
+                anchorRow: photoRow,
+                displayWidth: displayWidth,
+                displayHeight: displayHeight,
+                hyperlink: mainItemRows[photo.label].map { "#工程量清单!A\($0)" }
             ))
-            photoLinks[photo.label] = "'构件照片'!A\(labelRow)"
+            let location = "'构件照片'!A\(labelRow)"
+            photoLinks[photo.label] = location
+            if let componentID = photo.componentID {
+                photoLinks[componentID] = location
+            }
         }
 
         let sheet = XLSXWriter.Sheet(
             name: "构件照片",
             rows: rows,
             images: images,
-            columnWidths: [18, 60],
+            columnWidths: [18, 32],
             rowHeights: rowHeights
         )
         return (sheet, photoLinks)
+    }
+
+    private static func displaySize(for data: Data) -> (width: Double, height: Double) {
+        guard let image = UIImage(data: data) else { return (240, 180) }
+        let width = Double(image.size.width)
+        let height = Double(image.size.height)
+        guard width > 0, height > 0 else { return (240, 180) }
+        let maxWidth = 320.0
+        let maxHeight = 260.0
+        let scale = min(maxWidth / width, maxHeight / height, 1.0)
+        return (max(80, width * scale), max(60, height * scale))
     }
 
     private static func photoLabel(for item: QuantityTakeoffItem) -> String {

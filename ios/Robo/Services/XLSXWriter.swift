@@ -21,19 +21,28 @@ enum XLSXWriter {
         let fileExtension: String
         let componentID: String?
         let anchorRow: Int?
+        let displayWidth: Double?
+        let displayHeight: Double?
+        let hyperlink: String?
 
         init(
             label: String,
             data: Data,
             fileExtension: String,
             componentID: String? = nil,
-            anchorRow: Int? = nil
+            anchorRow: Int? = nil,
+            displayWidth: Double? = nil,
+            displayHeight: Double? = nil,
+            hyperlink: String? = nil
         ) {
             self.label = label
             self.data = data
             self.fileExtension = fileExtension
             self.componentID = componentID
             self.anchorRow = anchorRow
+            self.displayWidth = displayWidth
+            self.displayHeight = displayHeight
+            self.hyperlink = hyperlink
         }
     }
 
@@ -234,18 +243,31 @@ enum XLSXWriter {
                     let startRow = image.anchorRow ?? (baseRow + imageIndex * 13)
                     let endRow = startRow + 9
                     let imageId = imageIndex + 1
+                    let displayWidth = image.displayWidth ?? 240
+                    let displayHeight = image.displayHeight ?? 180
+                    let widthEMU = max(1, Int(displayWidth * 9525))
+                    let heightEMU = max(1, Int(displayHeight * 9525))
+                    let startColOffset = min(Int(displayWidth * 9525 / 2), 609600)
+                    let hyperlinkID = image.hyperlink.map { "h\(imageNumber)" }
 
                     drawingXML += """
                     <xdr:twoCellAnchor editAs="oneCell">
-                      <xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>\(startRow)</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
-                      <xdr:to><xdr:col>7</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>\(endRow)</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+                      <xdr:from><xdr:col>1</xdr:col><xdr:colOff>\(startColOffset)</xdr:colOff><xdr:row>\(startRow)</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+                      <xdr:to><xdr:col>8</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>\(endRow)</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
                       <xdr:pic>
                         <xdr:nvPicPr>
                           <xdr:cNvPr id="\(imageId)" name="\(xmlEscaped(image.label))"/>
                           <xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr>
                         </xdr:nvPicPr>
-                        <xdr:blipFill><a:blip r:embed="rId\(imageId)" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>
-                        <xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1524000" cy="1143000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>
+                        <xdr:blipFill>
+                          <a:blip r:embed="rId\(imageId)" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>
+                          <a:stretch><a:fillRect/></a:stretch>
+                        </xdr:blipFill>
+                        <xdr:spPr>
+                          <a:xfrm><a:off x="0" y="0"/><a:ext cx="\(widthEMU)" cy="\(heightEMU)"/></a:xfrm>
+                          <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+                          \(hyperlinkID.map { "<a:hlinkClick xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:id=\"rId\($0)\"/>" } ?? "")
+                        </xdr:spPr>
                       </xdr:pic>
                       <xdr:clientData/>
                     </xdr:twoCellAnchor>
@@ -256,6 +278,11 @@ enum XLSXWriter {
                     """
 
                     entries.append(MiniZIPWriter.Entry(name: "xl/media/\(fileName)", data: image.data))
+                    if let hyperlinkID, let target = image.hyperlink {
+                        drawingRels += """
+                        <Relationship Id="rId\(hyperlinkID)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="\(xmlEscaped(target))" TargetMode="External"/>
+                        """
+                    }
                     mediaIndex += 1
                 }
 
