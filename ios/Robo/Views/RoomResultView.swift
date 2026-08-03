@@ -8,6 +8,7 @@ struct RoomResultView: View {
     @Binding var roomType: String
     @Binding var photos: [PhotoAttachment]
     @Binding var adjustments: RoomAdjustments
+    let suiteMode: Bool
     let onSave: () -> Void
     let onSaveAndContinue: () -> Void
     let onDiscard: () -> Void
@@ -18,6 +19,7 @@ struct RoomResultView: View {
     @State private var isExporting = false
     @State private var isExportingModel = false
     @State private var showAdjustments = false
+    @State private var showQuantityPreview = false
     @State private var exportError: String?
 
     private var floorArea: Double {
@@ -93,7 +95,10 @@ struct RoomResultView: View {
 
                 VStack(spacing: 12) {
                     Button(action: onSave) {
-                        Label(AppStrings.Scan.save, systemImage: "square.and.arrow.down")
+                        Label(
+                            suiteMode ? "保存并结束整套房扫描" : AppStrings.Scan.save,
+                            systemImage: "square.and.arrow.down"
+                        )
                             .font(.headline)
                             .frame(maxWidth: .infinity)
                             .padding()
@@ -123,10 +128,24 @@ struct RoomResultView: View {
                     }
                     .disabled(isExporting)
 
+                    if suiteMode {
+                        Button {
+                            onSaveAndContinue()
+                        } label: {
+                            Label("保存并扫描下一间", systemImage: "plus.rectangle.on.rectangle")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(.secondary.opacity(0.15))
+                                .foregroundColor(.accentColor)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                    }
+
                     Button {
-                        onSaveAndContinue()
+                        showAdjustments = true
                     } label: {
-                        Label("保存并扫描下一间", systemImage: "plus.rectangle.on.rectangle")
+                        Label("调整构件尺寸", systemImage: "ruler")
                             .font(.headline)
                             .frame(maxWidth: .infinity)
                             .padding()
@@ -136,9 +155,9 @@ struct RoomResultView: View {
                     }
 
                     Button {
-                        showAdjustments = true
+                        showQuantityPreview = true
                     } label: {
-                        Label("调整构件尺寸", systemImage: "ruler")
+                        Label("预览工程量清单", systemImage: "list.number")
                             .font(.headline)
                             .frame(maxWidth: .infinity)
                             .padding()
@@ -193,6 +212,14 @@ struct RoomResultView: View {
         }
         .sheet(isPresented: $showAdjustments) {
             ComponentAdjustmentView(room: room, adjustments: $adjustments)
+        }
+        .sheet(isPresented: $showQuantityPreview) {
+            QuantityPreviewView(
+                room: room,
+                roomName: displayName,
+                roomType: roomType,
+                adjustments: adjustments
+            )
         }
     }
 
@@ -282,7 +309,8 @@ struct RoomResultView: View {
                 roomType: roomType,
                 capturedAt: Date(),
                 unitPrices: UnitPriceStore.load(),
-                photos: imageAttachments
+                photos: imageAttachments,
+                wallThickness: adjustments.wallThickness
             )
         } catch {
             exportError = error.localizedDescription

@@ -66,7 +66,11 @@ enum QuantityTakeoffExporter {
         return map
     }
 
-    static func makeItems(room: CapturedRoom, roomType: String) -> [QuantityTakeoffItem] {
+    static func makeItems(
+        room: CapturedRoom,
+        roomType: String,
+        wallThickness: WallThicknessSettings? = nil
+    ) -> [QuantityTakeoffItem] {
         let floorArea = RoomDataProcessor.estimateFloorArea(room)
         let ceilingHeight = RoomDataProcessor.estimateCeilingHeight(room.walls)
         let volume = floorArea * ceilingHeight
@@ -95,12 +99,7 @@ enum QuantityTakeoffExporter {
         }
         let plasterArea = max(0, wallArea - doorArea - windowArea - openingArea)
 
-        let wallVolume = room.walls.reduce(0.0) { total, wall in
-            let width = Double(wall.dimensions.x)
-            let height = Double(wall.dimensions.y)
-            let thickness = Double(wall.dimensions.z > 0 ? wall.dimensions.z : 0.18)
-            return total + width * height * thickness
-        }
+        let wallVolume = wallVolume(room, wallThickness: wallThickness)
 
         let returnHeight = (roomType.contains("卫生间") || roomType.contains("厨房")) ? 0.3 : 0.0
         let waterproofArea = floorArea + perimeter * returnHeight
@@ -136,8 +135,13 @@ enum QuantityTakeoffExporter {
         return items
     }
 
-    static func makeJSON(room: CapturedRoom, roomName: String, roomType: String) throws -> Data {
-        let items = makeItems(room: room, roomType: roomType).map { item -> [String: Any] in
+    static func makeJSON(
+        room: CapturedRoom,
+        roomName: String,
+        roomType: String,
+        wallThickness: WallThicknessSettings? = nil
+    ) throws -> Data {
+        let items = makeItems(room: room, roomType: roomType, wallThickness: wallThickness).map { item -> [String: Any] in
             [
                 "清单编码": item.code,
                 "项目名称": item.name,
@@ -169,7 +173,8 @@ enum QuantityTakeoffExporter {
         roomType: String,
         capturedAt: Date,
         unitPrices: [String: Double],
-        photos: [XLSXWriter.ImageAttachment]
+        photos: [XLSXWriter.ImageAttachment],
+        wallThickness: WallThicknessSettings? = nil
     ) throws -> [URL] {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("QuantityTakeoff-\(UUID().uuidString)", isDirectory: true)
@@ -202,7 +207,8 @@ enum QuantityTakeoffExporter {
             capturedAt: capturedAt,
             unitPrices: [:],
             photoLinks: [:],
-            componentIDsByLabel: componentIDByLabel(room: room)
+            componentIDsByLabel: componentIDByLabel(room: room),
+            wallThickness: wallThickness
         )
         let (photoSheet, photoLinks) = makePhotoSheet(
             photos: mappedPhotos,
@@ -215,7 +221,8 @@ enum QuantityTakeoffExporter {
             capturedAt: capturedAt,
             unitPrices: unitPrices,
             photoLinks: photoLinks,
-            componentIDsByLabel: componentIDByLabel(room: room)
+            componentIDsByLabel: componentIDByLabel(room: room),
+            wallThickness: wallThickness
         )
         let workbook = try XLSXWriter.makeWorkbook(
             sheets: [
@@ -268,7 +275,8 @@ enum QuantityTakeoffExporter {
                 capturedAt: input.capturedAt,
                 unitPrices: [:],
                 photoLinks: [:],
-                componentIDsByLabel: componentIDByLabel(room: adjustedRoom)
+                componentIDsByLabel: componentIDByLabel(room: adjustedRoom),
+                wallThickness: input.adjustments.wallThickness
             )
             let (photoSheet, photoLinks) = makePhotoSheet(
                 photos: dedupedPhotos,
@@ -283,7 +291,8 @@ enum QuantityTakeoffExporter {
                 unitPrices: UnitPriceStore.load(),
                 photoLinks: photoLinks,
                 componentIDsByLabel: componentIDByLabel(room: adjustedRoom),
-                sheetPrefix: "\(index + 1)-\(input.roomName)"
+                sheetPrefix: "\(index + 1)-\(input.roomName)",
+                wallThickness: input.adjustments.wallThickness
             )
             sheets.append(mainSheet)
             sheets.append(photoSheet)
@@ -321,7 +330,8 @@ enum QuantityTakeoffExporter {
         unitPrices: [String: Double],
         photoLinks: [String: String],
         componentIDsByLabel: [String: UUID],
-        sheetPrefix: String = ""
+        sheetPrefix: String = "",
+        wallThickness: WallThicknessSettings? = nil
     ) -> (XLSXWriter.Sheet, [String: Int]) {
         let floorArea = RoomDataProcessor.estimateFloorArea(room)
         let ceilingHeight = RoomDataProcessor.estimateCeilingHeight(room.walls)
@@ -385,7 +395,7 @@ enum QuantityTakeoffExporter {
                     perimeter: perimeter,
                     plasterArea: max(0, wallArea - doorArea - windowArea - openingArea),
                     wallArea: wallArea,
-                    wallVolume: wallVolume(room),
+                    wallVolume: wallVolume(room, wallThickness: wallThickness),
                     waterproofArea: waterproofArea(room, roomType: roomType, floorArea: floorArea, perimeter: perimeter)
                 )
             ),
@@ -726,12 +736,59 @@ enum QuantityTakeoffExporter {
     // MARK: - Metrics helpers
 
     private static func wallVolume(_ room: CapturedRoom) -> Double {
-        room.walls.reduce(0.0) { total, wall in
+        wallVolume(room, wallThickness: nil)
+    }
+
+    private static func wallVolume(
+        _ room: CapturedRoom,
+        wallThickness: WallThicknessSettings?
+    ) -> Double {
+        let thickness = wallThickness ?? WallThicknessSettings()
+        let gross = room.walls.reduce(0.0) { total, wall in
             let width = Double(wall.dimensions.x)
             let height = Double(wall.dimensions.y)
-            let thickness = Double(wall.dimensions.z > 0 ? wall.dimensions.z : 0.18)
-            return total + width * height * thickness
+            let wallThickness = wallThicknessFor(wall, walls: room.walls, settings: thickness)
+            return total + width * height * wallThickness
         }
+        let openingArea = room.doors.reduce(0.0) {
+            $0 + Double($1.dimensions.x * $1.dimensions.y)
+        } + room.windows.reduce(0.0) {
+            $0 + Double($1.dimensions.x * $1.dimensions.y)
+        } + room.openings.reduce(0.0) {
+            $0 + Double($1.dimensions.x * $1.dimensions.y)
+        }
+        let avgThickness = room.walls.isEmpty ? thickness.external : room.walls.reduce(0.0) {
+            $0 + wallThicknessFor($1, walls: room.walls, settings: thickness)
+        } / Double(room.walls.count)
+        return max(0, gross - openingArea * avgThickness)
+    }
+
+    /// External walls sit on the room's bounding rectangle; everything else is internal.
+    static func wallThicknessFor(
+        _ wall: CapturedRoom.Surface,
+        walls: [CapturedRoom.Surface],
+        settings: WallThicknessSettings
+    ) -> Double {
+        if let overrideValue = settings.perWall[wall.identifier.uuidString] {
+            return overrideValue
+        }
+        let center = wall.transform.columns.3
+        let positions = walls.map {
+            (x: Double($0.transform.columns.3.x), z: Double($0.transform.columns.3.z))
+        }
+        let xs = positions.map(\.x)
+        let zs = positions.map(\.z)
+        if let minX = xs.min(), let maxX = xs.max(),
+           let minZ = zs.min(), let maxZ = zs.max() {
+            let halfX = (maxX - minX) / 2
+            let halfZ = (maxZ - minZ) / 2
+            let centerX = (minX + maxX) / 2
+            let centerZ = (minZ + maxZ) / 2
+            let onBoundary = abs(Double(center.x) - centerX) >= halfX - 0.01
+                || abs(Double(center.z) - centerZ) >= halfZ - 0.01
+            return onBoundary ? settings.external : settings.internalWall
+        }
+        return settings.external
     }
 
     private static func waterproofArea(_ room: CapturedRoom, roomType: String, floorArea: Double, perimeter: Double) -> Double {

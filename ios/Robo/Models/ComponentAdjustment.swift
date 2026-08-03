@@ -14,9 +14,16 @@ struct RoomDimensionOverride: Codable {
     var width: Double?
 }
 
+struct WallThicknessSettings: Codable {
+    var external: Double = 0.2
+    var internalWall: Double = 0.1
+    var perWall: [String: Double] = [:]
+}
+
 struct RoomAdjustments: Codable {
     var components: [String: ComponentAdjustment] = [:]
     var roomDimensions: RoomDimensionOverride?
+    var wallThickness: WallThicknessSettings?
 }
 
 enum AdjustmentStorage {

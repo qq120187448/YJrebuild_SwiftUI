@@ -7,6 +7,9 @@ struct FloorPlan2DView: View {
 
     @State private var lengthText = ""
     @State private var widthText = ""
+    @State private var externalThicknessText = "0.20"
+    @State private var internalThicknessText = "0.10"
+    @State private var walls: [CapturedRoom.Surface] = []
 
     private struct PlanPoint {
         let x: Double
@@ -15,6 +18,10 @@ struct FloorPlan2DView: View {
 
     private var adjustments: RoomAdjustments {
         AdjustmentStorage.decode(room.adjustmentsJSON)
+    }
+
+    private var wallSettings: WallThicknessSettings {
+        adjustments.wallThickness ?? WallThicknessSettings()
     }
 
     private var displayedPoints: [PlanPoint] {
@@ -94,6 +101,8 @@ struct FloorPlan2DView: View {
                 context.fill(path, with: .color(Color(red: 0.93, green: 0.96, blue: 1.0)))
                 context.stroke(path, with: .color(.accentColor), lineWidth: 2.5)
 
+                drawWalls(in: &context, size: size, points: points)
+
                 let center = CGPoint(x: size.width / 2, y: size.height / 2)
                 context.draw(
                     Text(room.roomName).font(.headline),
@@ -130,15 +139,149 @@ struct FloorPlan2DView: View {
                     updateRoomDimension(length: nil, width: value)
                 }
             }
+
+            HStack(spacing: 12) {
+                thicknessEditor(
+                    title: "外墙厚 (m)",
+                    text: $externalThicknessText,
+                    value: wallSettings.external
+                ) { value in
+                    updateWallSettings { settings in
+                        settings.external = value
+                    }
+                }
+                thicknessEditor(
+                    title: "内墙厚 (m)",
+                    text: $internalThicknessText,
+                    value: wallSettings.internalWall
+                ) { value in
+                    updateWallSettings { settings in
+                        settings.internalWall = value
+                    }
+                }
+            }
+
+            if !walls.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("单墙厚度（可单独修改）")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(Array(walls.enumerated()), id: \.element.identifier) { index, wall in
+                        let thickness = wallSettings.perWall[wall.identifier.uuidString]
+                            ?? QuantityTakeoffExporter.wallThicknessFor(
+                                wall,
+                                walls: walls,
+                                settings: wallSettings
+                            )
+                        HStack {
+                            Text("墙\(index + 1)（\(wallSettings.perWall[wall.identifier.uuidString] == nil ? (isExternalWall(wall) ? "外墙" : "内墙") : "自定义")）")
+                                .font(.caption)
+                            Spacer()
+                            Text(String(format: "%.2f m", thickness))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            TextField("厚度", value: Binding(
+                                get: { thickness },
+                                set: { value in
+                                    updateWallSettings { settings in
+                                        settings.perWall[wall.identifier.uuidString] = value > 0 ? value : nil
+                                    }
+                                }
+                            ), format: .number)
+                                .keyboardType(.decimalPad)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 64)
+                        }
+                    }
+                }
+            }
         }
         .onAppear {
             lengthText = String(format: "%.2f", displayLength)
             widthText = String(format: "%.2f", displayWidth)
+            externalThicknessText = String(format: "%.2f", wallSettings.external)
+            internalThicknessText = String(format: "%.2f", wallSettings.internalWall)
+            walls = (try? RoomDataProcessor.decodeFullRoom(room.fullRoomDataJSON).walls) ?? []
         }
         .onChange(of: room.adjustmentsJSON) { _, _ in
             lengthText = String(format: "%.2f", displayLength)
             widthText = String(format: "%.2f", displayWidth)
+            externalThicknessText = String(format: "%.2f", wallSettings.external)
+            internalThicknessText = String(format: "%.2f", wallSettings.internalWall)
         }
+    }
+
+    private func drawWalls(
+        in context: inout GraphicsContext,
+        size: CGSize,
+        points: [PlanPoint]
+    ) {
+        guard points.count >= 3, !walls.isEmpty else { return }
+        let bounds = polygonBounds(points)
+        let scale = min(
+            (size.width - 40) / max(bounds.width, 0.01),
+            (size.height - 40) / max(bounds.height, 0.01)
+        )
+        func project(_ point: SIMD3<Float>) -> CGPoint {
+            CGPoint(
+                x: 20 + (Double(point.x) - bounds.minX) * scale,
+                y: 20 + (bounds.minY + bounds.height - Double(point.z)) * scale
+            )
+        }
+
+        for wall in walls {
+            let height = Double(wall.dimensions.y)
+            let width = Double(wall.dimensions.x)
+            guard height > 0.01, width > 0.01 else { continue }
+            let thickness = QuantityTakeoffExporter.wallThicknessFor(
+                wall,
+                walls: walls,
+                settings: wallSettings
+            )
+            let transform = wall.transform
+            let xAxis = SIMD3<Float>(transform.columns.0.x, 0, transform.columns.0.z)
+            let zAxis = SIMD3<Float>(transform.columns.2.x, 0, transform.columns.2.z)
+            let normalizedX = simd_normalize(xAxis)
+            let normalizedZ = simd_normalize(zAxis)
+            let center = SIMD3<Float>(
+                transform.columns.3.x,
+                0,
+                transform.columns.3.z
+            )
+            let halfW = Float(width / 2)
+            let halfT = Float(thickness / 2)
+            let corners = [
+                center - normalizedX * halfW - normalizedZ * halfT,
+                center + normalizedX * halfW - normalizedZ * halfT,
+                center + normalizedX * halfW + normalizedZ * halfT,
+                center - normalizedX * halfW + normalizedZ * halfT
+            ].map(project)
+
+            var rect = Path()
+            rect.move(to: corners[0])
+            for corner in corners.dropFirst() {
+                rect.addLine(to: corner)
+            }
+            rect.closeSubpath()
+
+            let isExternal = isExternalWall(wall)
+            context.fill(
+                rect,
+                with: .color(isExternal
+                    ? Color(red: 0.55, green: 0.62, blue: 0.72)
+                    : Color(red: 0.82, green: 0.86, blue: 0.92))
+            )
+            context.stroke(
+                rect,
+                with: .color(.primary.opacity(0.45)),
+                lineWidth: 0.8
+            )
+        }
+    }
+
+    private func isExternalWall(_ wall: CapturedRoom.Surface) -> Bool {
+        let reference = WallThicknessSettings()
+        return QuantityTakeoffExporter.wallThicknessFor(wall, walls: walls, settings: reference) >= 0.15
     }
 
     private func dimensionEditor(
@@ -162,6 +305,38 @@ struct FloorPlan2DView: View {
                     }
                 }
         }
+    }
+
+    private func thicknessEditor(
+        title: String,
+        text: Binding<String>,
+        value: Double,
+        commit: @escaping (Double) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField(title, text: text)
+                .keyboardType(.decimalPad)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit {
+                    if let parsed = Double(text.wrappedValue), parsed > 0.01 {
+                        commit(parsed)
+                    } else {
+                        text.wrappedValue = String(format: "%.2f", value)
+                    }
+                }
+        }
+    }
+
+    private func updateWallSettings(_ mutate: (inout WallThicknessSettings) -> Void) {
+        var settings = wallSettings
+        mutate(&settings)
+        var newAdjustments = adjustments
+        newAdjustments.wallThickness = settings
+        room.adjustmentsJSON = AdjustmentStorage.encode(newAdjustments)
+        try? modelContext.save()
     }
 
     private func updateRoomDimension(length: Double?, width: Double?) {

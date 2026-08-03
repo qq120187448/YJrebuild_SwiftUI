@@ -45,6 +45,7 @@ targets:
       - path: Robo/Views/RoomCaptureViewWrapper.swift
       - path: Robo/Views/RoomResultView.swift
       - path: Robo/Views/ComponentAdjustmentView.swift
+      - path: Robo/Views/QuantityPreviewView.swift
       - path: Robo/Views/ScanHistoryView.swift
       - path: Robo/Views/RoomDetailView.swift
       - path: Robo/Views/FloorPlan2DView.swift

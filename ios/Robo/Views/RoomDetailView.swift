@@ -8,6 +8,7 @@ struct RoomDetailView: View {
     @State private var shareURLs: [URL] = []
     @State private var show3D = false
     @State private var isExportingModel = false
+    @State private var showQuantityPreview = false
 
     var body: some View {
         List {
@@ -70,6 +71,12 @@ struct RoomDetailView: View {
                     }
                 }
                 .disabled(isExportingModel)
+
+                Button {
+                    showQuantityPreview = true
+                } label: {
+                    Label("预览工程量清单", systemImage: "list.number")
+                }
             }
         }
         .navigationTitle("扫描详情")
@@ -80,14 +87,23 @@ struct RoomDetailView: View {
         )) {
             ActivityView(activityItems: shareURLs)
         }
+        .sheet(isPresented: $showQuantityPreview) {
+            QuantityPreviewView(
+                room: (try? RoomDataProcessor.decodeFullRoom(room.fullRoomDataJSON)) ?? CapturedRoom(),
+                roomName: room.roomName,
+                roomType: room.roomType,
+                adjustments: AdjustmentStorage.decode(room.adjustmentsJSON)
+            )
+        }
     }
 
     private func exportQuantity() {
         do {
             let baseRoom = try RoomDataProcessor.decodeFullRoom(room.fullRoomDataJSON)
+            let savedAdjustments = AdjustmentStorage.decode(room.adjustmentsJSON)
             let capturedRoom = RoomDataProcessor.applyingAdjustments(
                 to: baseRoom,
-                adjustments: AdjustmentStorage.decode(room.adjustmentsJSON)
+                adjustments: savedAdjustments
             )
             let photos = zip(room.photoLabels, room.photoFileNames).enumerated().compactMap { index, pair in
                 let id = index < room.photoComponentIDs.count ? room.photoComponentIDs[index] : ""
@@ -103,7 +119,8 @@ struct RoomDetailView: View {
                 roomType: room.roomType,
                 capturedAt: room.capturedAt,
                 unitPrices: UnitPriceStore.load(),
-                photos: photos
+                photos: photos,
+                wallThickness: savedAdjustments.wallThickness
             )
         } catch {
             // 导出失败时保持静默，避免打断详情页

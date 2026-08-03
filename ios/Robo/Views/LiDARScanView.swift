@@ -16,6 +16,7 @@ struct LiDARScanView: View {
     @State private var photos: [PhotoAttachment] = []
     @State private var adjustments = RoomAdjustments()
     @State private var buildingID: String?
+    @State private var suiteMode = false
 
     private enum ScanPhase {
         case instructions
@@ -46,6 +47,7 @@ struct LiDARScanView: View {
                                 roomType: $roomType,
                                 photos: $photos,
                                 adjustments: $adjustments,
+                                suiteMode: suiteMode,
                                 onSave: saveRoom,
                                 onSaveAndContinue: saveRoomAndContinue,
                                 onDiscard: { dismiss() }
@@ -100,6 +102,10 @@ struct LiDARScanView: View {
 
             Text(AppStrings.Scan.title)
                 .font(.title.bold())
+
+            Toggle("套房连续扫描（整套房多房间）", isOn: $suiteMode)
+                .font(.subheadline)
+                .padding(.horizontal, 40)
 
             VStack(alignment: .leading, spacing: 12) {
                 tipRow(icon: "sun.max", text: "保证光线充足")
@@ -228,7 +234,8 @@ struct LiDARScanView: View {
             let quantityData = try QuantityTakeoffExporter.makeJSON(
                 room: adjustedRoom,
                 roomName: name,
-                roomType: roomType
+                roomType: roomType,
+                wallThickness: adjustments.wallThickness
             )
 
             var photoLabels: [String] = []
