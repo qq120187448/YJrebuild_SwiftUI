@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import RoomPlan
 
 struct FloorPlan2DView: View {
     @Environment(\.modelContext) private var modelContext
