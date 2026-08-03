@@ -101,10 +101,6 @@ struct RoomDetailView: View {
         do {
             let baseRoom = try RoomDataProcessor.decodeFullRoom(room.fullRoomDataJSON)
             let savedAdjustments = AdjustmentStorage.decode(room.adjustmentsJSON)
-            let capturedRoom = RoomDataProcessor.applyingAdjustments(
-                to: baseRoom,
-                adjustments: savedAdjustments
-            )
             let photos = zip(room.photoLabels, room.photoFileNames).enumerated().compactMap { index, pair in
                 let id = index < room.photoComponentIDs.count ? room.photoComponentIDs[index] : ""
                 return PhotoStorage.load(
@@ -114,13 +110,13 @@ struct RoomDetailView: View {
                 )
             }
             shareURLs = try QuantityTakeoffExporter.makeExportFiles(
-                room: capturedRoom,
+                room: baseRoom,
                 roomName: room.roomName,
                 roomType: room.roomType,
                 capturedAt: room.capturedAt,
                 unitPrices: UnitPriceStore.load(),
                 photos: photos,
-                wallThickness: savedAdjustments.wallThickness
+                adjustments: savedAdjustments
             )
         } catch {
             // 导出失败时保持静默，避免打断详情页
@@ -130,13 +126,9 @@ struct RoomDetailView: View {
     private func exportModel() {
         do {
             let baseRoom = try RoomDataProcessor.decodeFullRoom(room.fullRoomDataJSON)
-            let capturedRoom = RoomDataProcessor.applyingAdjustments(
-                to: baseRoom,
-                adjustments: AdjustmentStorage.decode(room.adjustmentsJSON)
-            )
             isExportingModel = true
             shareURLs = try ModelExportService.makeExportFiles(
-                room: capturedRoom,
+                room: baseRoom,
                 roomName: room.roomName
             )
         } catch {

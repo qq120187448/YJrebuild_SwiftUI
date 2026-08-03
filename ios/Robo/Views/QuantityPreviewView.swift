@@ -7,24 +7,16 @@ struct QuantityPreviewView: View {
     let roomType: String
     let adjustments: RoomAdjustments
 
-    private var adjustedRoom: CapturedRoom {
-        RoomDataProcessor.applyingAdjustments(to: room, adjustments: adjustments)
-    }
-
     private var items: [QuantityTakeoffItem] {
-        QuantityTakeoffExporter.makeItems(
-            room: adjustedRoom,
-            roomType: roomType,
-            wallThickness: adjustments.wallThickness
-        )
+        QuantityTakeoffExporter.makeItems(room: room, roomType: roomType, adjustments: adjustments)
     }
 
     private var floorArea: Double {
-        RoomDataProcessor.estimateFloorArea(adjustedRoom)
+        QuantityTakeoffExporter.adjustedFloorArea(room, adjustments: adjustments)
     }
 
     private var ceilingHeight: Double {
-        RoomDataProcessor.estimateCeilingHeight(adjustedRoom.walls)
+        QuantityTakeoffExporter.adjustedCeilingHeight(room, adjustments: adjustments)
     }
 
     var body: some View {

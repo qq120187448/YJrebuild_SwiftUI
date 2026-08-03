@@ -120,10 +120,6 @@ struct ScanHistoryView: View {
         do {
             let inputs = try group.rooms.map { record -> QuantityTakeoffExporter.RoomExportInput in
                 let baseRoom = try RoomDataProcessor.decodeFullRoom(record.fullRoomDataJSON)
-                let capturedRoom = RoomDataProcessor.applyingAdjustments(
-                    to: baseRoom,
-                    adjustments: AdjustmentStorage.decode(record.adjustmentsJSON)
-                )
                 let photos = zip(record.photoLabels, record.photoFileNames).enumerated().compactMap { index, pair in
                     let id = index < record.photoComponentIDs.count ? record.photoComponentIDs[index] : ""
                     return PhotoStorage.load(
@@ -133,7 +129,7 @@ struct ScanHistoryView: View {
                     )
                 }
                 return QuantityTakeoffExporter.RoomExportInput(
-                    room: capturedRoom,
+                    room: baseRoom,
                     roomName: record.roomName,
                     roomType: record.roomType,
                     capturedAt: record.capturedAt,

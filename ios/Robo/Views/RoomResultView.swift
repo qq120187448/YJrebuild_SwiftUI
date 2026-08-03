@@ -293,7 +293,6 @@ struct RoomResultView: View {
     private func exportQuantity() {
         isExporting = true
         do {
-            let adjustedRoom = RoomDataProcessor.applyingAdjustments(to: room, adjustments: adjustments)
             let imageAttachments = photos.compactMap { photo -> XLSXWriter.ImageAttachment? in
                 guard let data = photo.image.jpegData(compressionQuality: 0.8) else { return nil }
                 return XLSXWriter.ImageAttachment(
@@ -304,13 +303,13 @@ struct RoomResultView: View {
                 )
             }
             shareURLs = try QuantityTakeoffExporter.makeExportFiles(
-                room: adjustedRoom,
+                room: room,
                 roomName: displayName,
                 roomType: roomType,
                 capturedAt: Date(),
                 unitPrices: UnitPriceStore.load(),
                 photos: imageAttachments,
-                wallThickness: adjustments.wallThickness
+                adjustments: adjustments
             )
         } catch {
             exportError = error.localizedDescription

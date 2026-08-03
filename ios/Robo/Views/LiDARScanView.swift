@@ -215,10 +215,9 @@ struct LiDARScanView: View {
     }
 
     private func persistRoom(_ room: CapturedRoom) throws {
-            let adjustedRoom = RoomDataProcessor.applyingAdjustments(to: room, adjustments: adjustments)
-            let summary = RoomDataProcessor.summarizeRoom(adjustedRoom)
+            let summary = RoomDataProcessor.summarizeRoom(room)
             let summaryData = try RoomDataProcessor.encodeSummary(summary)
-            let fullData = try RoomDataProcessor.encodeFullRoom(adjustedRoom)
+            let fullData = try RoomDataProcessor.encodeFullRoom(room)
 
             let trimmedName = roomName.trimmingCharacters(in: .whitespacesAndNewlines)
             let name: String
@@ -232,16 +231,16 @@ struct LiDARScanView: View {
             }
 
             let quantityData = try QuantityTakeoffExporter.makeJSON(
-                room: adjustedRoom,
+                room: room,
                 roomName: name,
                 roomType: roomType,
-                wallThickness: adjustments.wallThickness
+                adjustments: adjustments
             )
 
             var photoLabels: [String] = []
             var photoFileNames: [String] = []
             var photoComponentIDs: [String] = []
-            let labelMap = QuantityTakeoffExporter.componentLabels(room: adjustedRoom)
+            let labelMap = QuantityTakeoffExporter.componentLabels(room: room)
             for photo in deduplicatedPhotos(photos) {
                 let finalLabel: String
                 if let id = photo.componentID, let mapped = labelMap[id] {
@@ -259,26 +258,26 @@ struct LiDARScanView: View {
             do {
                 let usdzURL = FileManager.default.temporaryDirectory
                     .appendingPathComponent("\(UUID().uuidString).usdz")
-                try adjustedRoom.export(to: usdzURL, exportOptions: .model)
+                try room.export(to: usdzURL, exportOptions: .model)
                 usdzData = try Data(contentsOf: usdzURL)
                 try? FileManager.default.removeItem(at: usdzURL)
             } catch {
                 // USDZ 导出失败不影响记录保存
             }
 
-            let floorArea = RoomDataProcessor.estimateFloorArea(adjustedRoom)
-            let ceilingHeight = RoomDataProcessor.estimateCeilingHeight(adjustedRoom.walls)
+            let floorArea = RoomDataProcessor.estimateFloorArea(room)
+            let ceilingHeight = RoomDataProcessor.estimateCeilingHeight(room.walls)
 
             let record = RoomScanRecord(
                 roomName: name,
-                wallCount: adjustedRoom.walls.count,
-                doorCount: adjustedRoom.doors.count,
-                windowCount: adjustedRoom.windows.count,
-                openingCount: adjustedRoom.openings.count,
-                objectCount: adjustedRoom.objects.count,
+                wallCount: room.walls.count,
+                doorCount: room.doors.count,
+                windowCount: room.windows.count,
+                openingCount: room.openings.count,
+                objectCount: room.objects.count,
                 floorAreaSqM: floorArea,
                 ceilingHeightM: ceilingHeight,
-                totalWallAreaSqM: RoomDataProcessor.computeTotalWallArea(adjustedRoom.walls),
+                totalWallAreaSqM: RoomDataProcessor.computeTotalWallArea(room.walls),
                 volumeM3: floorArea * ceilingHeight,
                 roomType: roomType,
                 summaryJSON: summaryData,

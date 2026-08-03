@@ -69,37 +69,76 @@ enum QuantityTakeoffExporter {
     static func makeItems(
         room: CapturedRoom,
         roomType: String,
-        wallThickness: WallThicknessSettings? = nil
+        adjustments: RoomAdjustments = RoomAdjustments()
     ) -> [QuantityTakeoffItem] {
-        let floorArea = RoomDataProcessor.estimateFloorArea(room)
-        let ceilingHeight = RoomDataProcessor.estimateCeilingHeight(room.walls)
+        let floorArea = adjustedFloorArea(room, adjustments: adjustments)
+        let ceilingHeight = adjustedCeilingHeight(room, adjustments: adjustments)
         let volume = floorArea * ceilingHeight
-        let perimeter = roomPerimeter(room)
+        let perimeter = adjustedPerimeter(room, adjustments: adjustments)
 
-        let wallArea = room.walls.reduce(0.0) {
-            $0 + Double($1.dimensions.x * $1.dimensions.y)
+        let wallArea = room.walls.reduce(0.0) { total, wall in
+            let dims = adjustedDimensions(
+                for: wall.identifier,
+                adjustments: adjustments.components,
+                measured: wall.dimensions
+            )
+            return total + Double(dims.x * dims.y)
         }
-        let doorArea = room.doors.reduce(0.0) {
-            $0 + Double($1.dimensions.x * $1.dimensions.y)
+        let doorArea = room.doors.reduce(0.0) { total, door in
+            let dims = adjustedDimensions(
+                for: door.identifier,
+                adjustments: adjustments.components,
+                measured: door.dimensions
+            )
+            return total + Double(dims.x * dims.y)
         }
-        let windowArea = room.windows.reduce(0.0) {
-            $0 + Double($1.dimensions.x * $1.dimensions.y)
+        let windowArea = room.windows.reduce(0.0) { total, window in
+            let dims = adjustedDimensions(
+                for: window.identifier,
+                adjustments: adjustments.components,
+                measured: window.dimensions
+            )
+            return total + Double(dims.x * dims.y)
         }
-        let openingArea = room.openings.reduce(0.0) {
-            $0 + Double($1.dimensions.x * $1.dimensions.y)
+        let openingArea = room.openings.reduce(0.0) { total, opening in
+            let dims = adjustedDimensions(
+                for: opening.identifier,
+                adjustments: adjustments.components,
+                measured: opening.dimensions
+            )
+            return total + Double(dims.x * dims.y)
         }
-        let doorPerimeter = room.doors.reduce(0.0) {
-            $0 + 2 * (Double($1.dimensions.x) + Double($1.dimensions.y))
+        let doorPerimeter = room.doors.reduce(0.0) { total, door in
+            let dims = adjustedDimensions(
+                for: door.identifier,
+                adjustments: adjustments.components,
+                measured: door.dimensions
+            )
+            return total + 2 * (Double(dims.x) + Double(dims.y))
         }
-        let windowPerimeter = room.windows.reduce(0.0) {
-            $0 + 2 * (Double($1.dimensions.x) + Double($1.dimensions.y))
+        let windowPerimeter = room.windows.reduce(0.0) { total, window in
+            let dims = adjustedDimensions(
+                for: window.identifier,
+                adjustments: adjustments.components,
+                measured: window.dimensions
+            )
+            return total + 2 * (Double(dims.x) + Double(dims.y))
         }
-        let openingPerimeter = room.openings.reduce(0.0) {
-            $0 + 2 * (Double($1.dimensions.x) + Double($1.dimensions.y))
+        let openingPerimeter = room.openings.reduce(0.0) { total, opening in
+            let dims = adjustedDimensions(
+                for: opening.identifier,
+                adjustments: adjustments.components,
+                measured: opening.dimensions
+            )
+            return total + 2 * (Double(dims.x) + Double(dims.y))
         }
         let plasterArea = max(0, wallArea - doorArea - windowArea - openingArea)
 
-        let wallVolume = wallVolume(room, wallThickness: wallThickness)
+        let wallVolume = wallVolume(
+            room,
+            wallThickness: adjustments.wallThickness,
+            adjustments: adjustments
+        )
 
         let returnHeight = (roomType.contains("卫生间") || roomType.contains("厨房")) ? 0.3 : 0.0
         let waterproofArea = floorArea + perimeter * returnHeight
@@ -122,6 +161,7 @@ enum QuantityTakeoffExporter {
         )
         items += doorWindowItems(
             room: room,
+            adjustments: adjustments,
             doorArea: doorArea,
             windowArea: windowArea,
             openingArea: openingArea,
@@ -129,8 +169,12 @@ enum QuantityTakeoffExporter {
             windowPerimeter: windowPerimeter,
             openingPerimeter: openingPerimeter
         )
-        items += sanitaryItems(room: room, sanitaryObjects: sanitaryObjects)
-        items += furnitureItems(room: room, sanitaryNames: sanitaryNames)
+        items += sanitaryItems(
+            room: room,
+            adjustments: adjustments,
+            sanitaryObjects: sanitaryObjects
+        )
+        items += furnitureItems(room: room, sanitaryNames: sanitaryNames, adjustments: adjustments)
         items += structureItems()
         return items
     }
@@ -139,9 +183,9 @@ enum QuantityTakeoffExporter {
         room: CapturedRoom,
         roomName: String,
         roomType: String,
-        wallThickness: WallThicknessSettings? = nil
+        adjustments: RoomAdjustments = RoomAdjustments()
     ) throws -> Data {
-        let items = makeItems(room: room, roomType: roomType, wallThickness: wallThickness).map { item -> [String: Any] in
+        let items = makeItems(room: room, roomType: roomType, adjustments: adjustments).map { item -> [String: Any] in
             [
                 "清单编码": item.code,
                 "项目名称": item.name,
@@ -152,8 +196,8 @@ enum QuantityTakeoffExporter {
                 "备注": item.note
             ]
         }
-        let floorArea = RoomDataProcessor.estimateFloorArea(room)
-        let ceilingHeight = RoomDataProcessor.estimateCeilingHeight(room.walls)
+        let floorArea = adjustedFloorArea(room, adjustments: adjustments)
+        let ceilingHeight = adjustedCeilingHeight(room, adjustments: adjustments)
         let envelope: [String: Any] = [
             "清单名称": "房间工程量清单",
             "房间名称": roomName,
@@ -174,7 +218,7 @@ enum QuantityTakeoffExporter {
         capturedAt: Date,
         unitPrices: [String: Double],
         photos: [XLSXWriter.ImageAttachment],
-        wallThickness: WallThicknessSettings? = nil
+        adjustments: RoomAdjustments = RoomAdjustments()
     ) throws -> [URL] {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("QuantityTakeoff-\(UUID().uuidString)", isDirectory: true)
@@ -208,7 +252,7 @@ enum QuantityTakeoffExporter {
             unitPrices: [:],
             photoLinks: [:],
             componentIDsByLabel: componentIDByLabel(room: room),
-            wallThickness: wallThickness
+            adjustments: adjustments
         )
         let (photoSheet, photoLinks) = makePhotoSheet(
             photos: mappedPhotos,
@@ -222,7 +266,7 @@ enum QuantityTakeoffExporter {
             unitPrices: unitPrices,
             photoLinks: photoLinks,
             componentIDsByLabel: componentIDByLabel(room: room),
-            wallThickness: wallThickness
+            adjustments: adjustments
         )
         let workbook = try XLSXWriter.makeWorkbook(
             sheets: [
@@ -245,10 +289,7 @@ enum QuantityTakeoffExporter {
 
         var sheets: [XLSXWriter.Sheet] = []
         for (index, input) in inputs.enumerated() {
-            let adjustedRoom = RoomDataProcessor.applyingAdjustments(
-                to: input.room,
-                adjustments: input.adjustments
-            )
+            let adjustedRoom = input.room
             let labelMap = componentLabels(room: adjustedRoom)
             let mappedPhotos = input.photos.compactMap { photo -> XLSXWriter.ImageAttachment? in
                 var label = photo.label
@@ -276,7 +317,7 @@ enum QuantityTakeoffExporter {
                 unitPrices: [:],
                 photoLinks: [:],
                 componentIDsByLabel: componentIDByLabel(room: adjustedRoom),
-                wallThickness: input.adjustments.wallThickness
+                adjustments: input.adjustments
             )
             let (photoSheet, photoLinks) = makePhotoSheet(
                 photos: dedupedPhotos,
@@ -292,7 +333,7 @@ enum QuantityTakeoffExporter {
                 photoLinks: photoLinks,
                 componentIDsByLabel: componentIDByLabel(room: adjustedRoom),
                 sheetPrefix: "\(index + 1)-\(input.roomName)",
-                wallThickness: input.adjustments.wallThickness
+                adjustments: input.adjustments
             )
             sheets.append(mainSheet)
             sheets.append(photoSheet)
@@ -331,30 +372,39 @@ enum QuantityTakeoffExporter {
         photoLinks: [String: String],
         componentIDsByLabel: [String: UUID],
         sheetPrefix: String = "",
-        wallThickness: WallThicknessSettings? = nil
+        adjustments: RoomAdjustments = RoomAdjustments()
     ) -> (XLSXWriter.Sheet, [String: Int]) {
-        let floorArea = RoomDataProcessor.estimateFloorArea(room)
-        let ceilingHeight = RoomDataProcessor.estimateCeilingHeight(room.walls)
+        let floorArea = adjustedFloorArea(room, adjustments: adjustments)
+        let ceilingHeight = adjustedCeilingHeight(room, adjustments: adjustments)
         let volume = floorArea * ceilingHeight
-        let perimeter = roomPerimeter(room)
-        let wallArea = RoomDataProcessor.computeTotalWallArea(room.walls)
-        let doorArea = room.doors.reduce(0.0) {
-            $0 + Double($1.dimensions.x * $1.dimensions.y)
+        let perimeter = adjustedPerimeter(room, adjustments: adjustments)
+        let wallArea = room.walls.reduce(0.0) { total, wall in
+            let dims = adjustedDimensions(for: wall.identifier, adjustments: adjustments.components, measured: wall.dimensions)
+            return total + Double(dims.x * dims.y)
         }
-        let windowArea = room.windows.reduce(0.0) {
-            $0 + Double($1.dimensions.x * $1.dimensions.y)
+        let doorArea = room.doors.reduce(0.0) { total, door in
+            let dims = adjustedDimensions(for: door.identifier, adjustments: adjustments.components, measured: door.dimensions)
+            return total + Double(dims.x * dims.y)
         }
-        let openingArea = room.openings.reduce(0.0) {
-            $0 + Double($1.dimensions.x * $1.dimensions.y)
+        let windowArea = room.windows.reduce(0.0) { total, window in
+            let dims = adjustedDimensions(for: window.identifier, adjustments: adjustments.components, measured: window.dimensions)
+            return total + Double(dims.x * dims.y)
         }
-        let doorPerimeter = room.doors.reduce(0.0) {
-            $0 + 2 * (Double($1.dimensions.x) + Double($1.dimensions.y))
+        let openingArea = room.openings.reduce(0.0) { total, opening in
+            let dims = adjustedDimensions(for: opening.identifier, adjustments: adjustments.components, measured: opening.dimensions)
+            return total + Double(dims.x * dims.y)
         }
-        let windowPerimeter = room.windows.reduce(0.0) {
-            $0 + 2 * (Double($1.dimensions.x) + Double($1.dimensions.y))
+        let doorPerimeter = room.doors.reduce(0.0) { total, door in
+            let dims = adjustedDimensions(for: door.identifier, adjustments: adjustments.components, measured: door.dimensions)
+            return total + 2 * (Double(dims.x) + Double(dims.y))
         }
-        let openingPerimeter = room.openings.reduce(0.0) {
-            $0 + 2 * (Double($1.dimensions.x) + Double($1.dimensions.y))
+        let windowPerimeter = room.windows.reduce(0.0) { total, window in
+            let dims = adjustedDimensions(for: window.identifier, adjustments: adjustments.components, measured: window.dimensions)
+            return total + 2 * (Double(dims.x) + Double(dims.y))
+        }
+        let openingPerimeter = room.openings.reduce(0.0) { total, opening in
+            let dims = adjustedDimensions(for: opening.identifier, adjustments: adjustments.components, measured: opening.dimensions)
+            return total + 2 * (Double(dims.x) + Double(dims.y))
         }
         let sanitaryNames = ["洗手盆", "坐便器", "浴缸", "洗碗机", "洗衣机"]
         let formatter = DateFormatter()
@@ -395,7 +445,11 @@ enum QuantityTakeoffExporter {
                     perimeter: perimeter,
                     plasterArea: max(0, wallArea - doorArea - windowArea - openingArea),
                     wallArea: wallArea,
-                    wallVolume: wallVolume(room, wallThickness: wallThickness),
+                    wallVolume: wallVolume(
+                        room,
+                        wallThickness: adjustments.wallThickness,
+                        adjustments: adjustments
+                    ),
                     waterproofArea: waterproofArea(room, roomType: roomType, floorArea: floorArea, perimeter: perimeter)
                 )
             ),
@@ -403,6 +457,7 @@ enum QuantityTakeoffExporter {
                 "二、门窗",
                 doorWindowItems(
                     room: room,
+                    adjustments: adjustments,
                     doorArea: doorArea,
                     windowArea: windowArea,
                     openingArea: openingArea,
@@ -415,6 +470,7 @@ enum QuantityTakeoffExporter {
                 "三、洁具给排水",
                 sanitaryItems(
                     room: room,
+                    adjustments: adjustments,
                     sanitaryObjects: room.objects.filter {
                         sanitaryNames.contains(objectCategoryName($0.category))
                     }
@@ -422,7 +478,7 @@ enum QuantityTakeoffExporter {
             ),
             (
                 "四、家具家电",
-                furnitureItems(room: room, sanitaryNames: sanitaryNames)
+                furnitureItems(room: room, sanitaryNames: sanitaryNames, adjustments: adjustments)
             ),
             (
                 "五、待点云结构",
@@ -623,6 +679,7 @@ enum QuantityTakeoffExporter {
 
     private static func doorWindowItems(
         room: CapturedRoom,
+        adjustments: RoomAdjustments,
         doorArea: Double,
         windowArea: Double,
         openingArea: Double,
@@ -633,8 +690,13 @@ enum QuantityTakeoffExporter {
         var items: [QuantityTakeoffItem] = []
 
         for (index, door) in room.doors.enumerated() {
-            let width = Double(door.dimensions.x)
-            let height = Double(door.dimensions.y)
+            let dims = adjustedDimensions(
+                for: door.identifier,
+                adjustments: adjustments.components,
+                measured: door.dimensions
+            )
+            let width = Double(dims.x)
+            let height = Double(dims.y)
             let area = width * height
             let perimeter = 2 * (width + height)
             items.append(item(
@@ -651,8 +713,13 @@ enum QuantityTakeoffExporter {
         }
 
         for (index, window) in room.windows.enumerated() {
-            let width = Double(window.dimensions.x)
-            let height = Double(window.dimensions.y)
+            let dims = adjustedDimensions(
+                for: window.identifier,
+                adjustments: adjustments.components,
+                measured: window.dimensions
+            )
+            let width = Double(dims.x)
+            let height = Double(dims.y)
             let area = width * height
             let perimeter = 2 * (width + height)
             items.append(item(
@@ -676,7 +743,11 @@ enum QuantityTakeoffExporter {
         return items
     }
 
-    private static func sanitaryItems(room: CapturedRoom, sanitaryObjects: [CapturedRoom.Object]) -> [QuantityTakeoffItem] {
+    private static func sanitaryItems(
+        room: CapturedRoom,
+        adjustments: RoomAdjustments,
+        sanitaryObjects: [CapturedRoom.Object]
+    ) -> [QuantityTakeoffItem] {
         var items: [QuantityTakeoffItem] = []
         let grouped = Dictionary(grouping: sanitaryObjects, by: { objectCategoryName($0.category) })
         for key in grouped.keys.sorted() {
@@ -690,8 +761,8 @@ enum QuantityTakeoffExporter {
             let name = objectCategoryName(object.category)
             items.append(item(
                 objectCode(for: name), "\(name)\(index + 1)",
-                objectSpec(object), "个", 1, "1 个",
-                "体积 \(rounded(objectVolume(object))) m³"
+                objectSpec(object, adjustments: adjustments), "个", 1, "1 个",
+                "体积 \(rounded(objectVolume(object, adjustments: adjustments))) m³"
             ))
         }
         if !sanitaryObjects.isEmpty {
@@ -701,7 +772,11 @@ enum QuantityTakeoffExporter {
         return items
     }
 
-    private static func furnitureItems(room: CapturedRoom, sanitaryNames: [String]) -> [QuantityTakeoffItem] {
+    private static func furnitureItems(
+        room: CapturedRoom,
+        sanitaryNames: [String],
+        adjustments: RoomAdjustments
+    ) -> [QuantityTakeoffItem] {
         let furniture = room.objects.filter {
             !sanitaryNames.contains(objectCategoryName($0.category))
         }
@@ -718,8 +793,8 @@ enum QuantityTakeoffExporter {
             let name = objectCategoryName(object.category)
             items.append(item(
                 objectCode(for: name), "\(name)\(index + 1)",
-                objectSpec(object), "个", 1, "1 个",
-                "体积 \(rounded(objectVolume(object))) m³"
+                objectSpec(object, adjustments: adjustments), "个", 1, "1 个",
+                "体积 \(rounded(objectVolume(object, adjustments: adjustments))) m³"
             ))
         }
         return items
@@ -735,27 +810,75 @@ enum QuantityTakeoffExporter {
 
     // MARK: - Metrics helpers
 
-    private static func wallVolume(_ room: CapturedRoom) -> Double {
-        wallVolume(room, wallThickness: nil)
+    static func adjustedDimensions(
+        for identifier: UUID,
+        adjustments: [String: ComponentAdjustment],
+        measured: simd_float3
+    ) -> simd_float3 {
+        guard let adjustment = adjustments[identifier.uuidString] else { return measured }
+        var result = measured
+        if let width = adjustment.width, width > 0.01 {
+            result.x = Float(width)
+        }
+        if let height = adjustment.height, height > 0.01 {
+            result.y = Float(height)
+        }
+        if let depth = adjustment.depth, depth > 0.01 {
+            result.z = Float(depth)
+        }
+        return result
+    }
+
+    static func adjustedFloorArea(_ room: CapturedRoom, adjustments: RoomAdjustments) -> Double {
+        let base = RoomDataProcessor.estimateFloorArea(room)
+        guard let dimensions = adjustments.roomDimensions,
+              let length = dimensions.length,
+              let width = dimensions.width else {
+            return base
+        }
+        return max(0, length * width)
+    }
+
+    static func adjustedCeilingHeight(_ room: CapturedRoom, adjustments: RoomAdjustments) -> Double {
+        RoomDataProcessor.estimateCeilingHeight(room.walls)
+    }
+
+    static func adjustedPerimeter(_ room: CapturedRoom, adjustments: RoomAdjustments) -> Double {
+        let base = roomPerimeter(room)
+        guard let dimensions = adjustments.roomDimensions,
+              let length = dimensions.length,
+              let width = dimensions.width else {
+            return base
+        }
+        return 2 * (length + width)
     }
 
     private static func wallVolume(
         _ room: CapturedRoom,
-        wallThickness: WallThicknessSettings?
+        wallThickness: WallThicknessSettings?,
+        adjustments: RoomAdjustments = RoomAdjustments()
     ) -> Double {
         let thickness = wallThickness ?? WallThicknessSettings()
         let gross = room.walls.reduce(0.0) { total, wall in
-            let width = Double(wall.dimensions.x)
-            let height = Double(wall.dimensions.y)
+            let dims = adjustedDimensions(
+                for: wall.identifier,
+                adjustments: adjustments.components,
+                measured: wall.dimensions
+            )
+            let width = Double(dims.x)
+            let height = Double(dims.y)
             let wallThickness = wallThicknessFor(wall, walls: room.walls, settings: thickness)
             return total + width * height * wallThickness
         }
-        let openingArea = room.doors.reduce(0.0) {
-            $0 + Double($1.dimensions.x * $1.dimensions.y)
-        } + room.windows.reduce(0.0) {
-            $0 + Double($1.dimensions.x * $1.dimensions.y)
-        } + room.openings.reduce(0.0) {
-            $0 + Double($1.dimensions.x * $1.dimensions.y)
+        let openingArea = room.doors.reduce(0.0) { total, door in
+            let dims = adjustedDimensions(for: door.identifier, adjustments: adjustments.components, measured: door.dimensions)
+            return total + Double(dims.x * dims.y)
+        } + room.windows.reduce(0.0) { total, window in
+            let dims = adjustedDimensions(for: window.identifier, adjustments: adjustments.components, measured: window.dimensions)
+            return total + Double(dims.x * dims.y)
+        } + room.openings.reduce(0.0) { total, opening in
+            let dims = adjustedDimensions(for: opening.identifier, adjustments: adjustments.components, measured: opening.dimensions)
+            return total + Double(dims.x * dims.y)
         }
         let avgThickness = room.walls.isEmpty ? thickness.external : room.walls.reduce(0.0) {
             $0 + wallThicknessFor($1, walls: room.walls, settings: thickness)
@@ -839,15 +962,31 @@ enum QuantityTakeoffExporter {
         return names.isEmpty ? "未识别" : names.joined(separator: "、")
     }
 
-    private static func objectSpec(_ object: CapturedRoom.Object) -> String {
-        let width = Double(object.dimensions.x)
-        let depth = Double(object.dimensions.y)
-        let height = Double(object.dimensions.z)
+    private static func objectSpec(
+        _ object: CapturedRoom.Object,
+        adjustments: RoomAdjustments
+    ) -> String {
+        let dims = adjustedDimensions(
+            for: object.identifier,
+            adjustments: adjustments.components,
+            measured: object.dimensions
+        )
+        let width = Double(dims.x)
+        let depth = Double(dims.y)
+        let height = Double(dims.z)
         return "宽 \(rounded(width)) × 深 \(rounded(depth)) × 高 \(rounded(height)) m"
     }
 
-    private static func objectVolume(_ object: CapturedRoom.Object) -> Double {
-        Double(object.dimensions.x) * Double(object.dimensions.y) * Double(object.dimensions.z)
+    private static func objectVolume(
+        _ object: CapturedRoom.Object,
+        adjustments: RoomAdjustments
+    ) -> Double {
+        let dims = adjustedDimensions(
+            for: object.identifier,
+            adjustments: adjustments.components,
+            measured: object.dimensions
+        )
+        return Double(dims.x) * Double(dims.y) * Double(dims.z)
     }
 
     private static func item(
