@@ -29,7 +29,7 @@ struct FloorPlan2DView: View {
             func project(_ point: PlanPoint) -> CGPoint {
                 CGPoint(
                     x: 20 + (point.x - bounds.minX) * scale,
-                    y: 20 + (bounds.maxY - point.y) * scale
+                    y: 20 + (bounds.minY + bounds.height - point.y) * scale
                 )
             }
 

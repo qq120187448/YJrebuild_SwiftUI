@@ -248,7 +248,7 @@ enum XLSXWriter {
                     let widthEMU = max(1, Int(displayWidth * 9525))
                     let heightEMU = max(1, Int(displayHeight * 9525))
                     let startColOffset = min(Int(displayWidth * 9525 / 2), 609600)
-                    let hyperlinkID = image.hyperlink.map { "h\(imageNumber)" }
+                    let hyperlinkID = image.hyperlink == nil ? nil : "h\(imageNumber)"
 
                     drawingXML += """
                     <xdr:twoCellAnchor editAs="oneCell">
