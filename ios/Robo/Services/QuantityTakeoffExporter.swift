@@ -168,7 +168,7 @@ enum QuantityTakeoffExporter {
 
         let xlsxURL = directory.appendingPathComponent("工程量清单.xlsx")
         let labelMap = componentLabels(room: room)
-        let mappedPhotos = photos.compactMap { photo -> XLSXWriter.ImageAttachment? in
+        var mappedPhotos = photos.compactMap { photo -> XLSXWriter.ImageAttachment? in
             var label = photo.label
             if let idString = photo.componentID,
                let id = UUID(uuidString: idString),
@@ -176,7 +176,7 @@ enum QuantityTakeoffExporter {
                 label = mapped
             }
             guard let image = UIImage(data: photo.data) else { return nil }
-            let resized = ImageResizer.resized(image, maxDimension: 1024)
+            let resized = ImageResizer.resized(image, maxDimension: 512)
             guard let resizedData = resized.jpegData(compressionQuality: 0.8) else { return nil }
             return XLSXWriter.ImageAttachment(
                 label: label,
@@ -185,6 +185,7 @@ enum QuantityTakeoffExporter {
                 componentID: photo.componentID
             )
         }
+        mappedPhotos = deduplicatePhotos(mappedPhotos)
         let (_, mainItemRows) = makeMainSheet(
             room: room,
             roomName: roomName,
@@ -215,6 +216,25 @@ enum QuantityTakeoffExporter {
         )
         try workbook.write(to: xlsxURL)
         return [xlsxURL]
+    }
+
+    private static func deduplicatePhotos(
+        _ photos: [XLSXWriter.ImageAttachment]
+    ) -> [XLSXWriter.ImageAttachment] {
+        var seenComponentIDs = Set<String>()
+        var seenLabels = Set<String>()
+        return photos.reversed().filter { photo in
+            var duplicate = false
+            if let componentID = photo.componentID {
+                duplicate = seenComponentIDs.contains(componentID)
+                seenComponentIDs.insert(componentID)
+            }
+            if !duplicate {
+                duplicate = seenLabels.contains(photo.label)
+                seenLabels.insert(photo.label)
+            }
+            return !duplicate
+        }.reversed()
     }
 
     static func makeMainSheet(
@@ -462,7 +482,7 @@ enum QuantityTakeoffExporter {
         let height = Double(image.size.height)
         guard width > 0, height > 0 else { return (240, 180) }
         let maxWidth = 320.0
-        let maxHeight = 260.0
+        let maxHeight = 300.0
         let scale = min(maxWidth / width, maxHeight / height, 1.0)
         return (max(80, width * scale), max(60, height * scale))
     }

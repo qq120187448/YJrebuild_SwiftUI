@@ -47,6 +47,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
         let onCaptureError: (Error) -> Void
         let onComponentCaptured: (UIImage, String, String) -> Void
         private var seenComponentIDs: Set<String> = []
+        private var deliveredComponentIDs: Set<String> = []
         private var pendingComponents: [String: PendingComponent] = [:]
         private var bestFrameSnapshot: UIImage?
         private lazy var ciContext = CIContext()
@@ -97,7 +98,8 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
                     "\(QuantityTakeoffExporter.objectCategoryName(object.category))\(index + 1)"
             }
 
-            for (id, label) in found where !seenComponentIDs.contains(id) {
+            for (id, label) in found
+            where !seenComponentIDs.contains(id) && !deliveredComponentIDs.contains(id) {
                 seenComponentIDs.insert(id)
                 if !hasZeroDimensions(in: room, id: id) {
                     pendingComponents[id] = PendingComponent(label: label)
@@ -116,6 +118,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
                 }
                 guard let geometry = componentGeometry(in: room, id: id) else {
                     deliverFallback(id: id, pending: pending, snapshot: snapshot)
+                    deliveredComponentIDs.insert(id)
                     pendingComponents.removeValue(forKey: id)
                     continue
                 }
@@ -130,6 +133,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
                 pendingComponents[id] = updated
                 if updated.candidates.count >= maxCandidates || score >= goodScoreThreshold {
                     deliverBest(id: id, pending: updated)
+                    deliveredComponentIDs.insert(id)
                     pendingComponents.removeValue(forKey: id)
                 }
             }
@@ -138,6 +142,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
         private func deliverBest(id: String, pending: PendingComponent) {
             guard let best = pending.candidates.max(by: { $0.score < $1.score }) else { return }
             deliver(image: best.image, label: pending.label, id: id)
+            deliveredComponentIDs.insert(id)
         }
 
         private func deliverFallback(id: String, pending: PendingComponent, snapshot: UIImage?) {
@@ -146,6 +151,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
             } else if let snapshot {
                 deliver(image: snapshot, label: pending.label, id: id)
             }
+            deliveredComponentIDs.insert(id)
         }
 
         private func deliver(image: UIImage, label: String, id: String) {

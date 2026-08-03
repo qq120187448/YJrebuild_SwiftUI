@@ -160,6 +160,23 @@ struct LiDARScanView: View {
         }
     }
 
+    private func deduplicatedPhotos(_ input: [PhotoAttachment]) -> [PhotoAttachment] {
+        var seenIDs = Set<UUID>()
+        var seenLabels = Set<String>()
+        return input.reversed().filter { photo in
+            var duplicate = false
+            if let id = photo.componentID {
+                duplicate = seenIDs.contains(id)
+                seenIDs.insert(id)
+            }
+            if !duplicate && seenLabels.contains(photo.label) {
+                duplicate = true
+            }
+            seenLabels.insert(photo.label)
+            return !duplicate
+        }.reversed()
+    }
+
     private func saveRoom() {
         guard let room = capturedRoom else { return }
 
@@ -185,7 +202,7 @@ struct LiDARScanView: View {
             var photoFileNames: [String] = []
             var photoComponentIDs: [String] = []
             let labelMap = QuantityTakeoffExporter.componentLabels(room: room)
-            for photo in photos {
+            for photo in deduplicatedPhotos(photos) {
                 let finalLabel: String
                 if let id = photo.componentID, let mapped = labelMap[id] {
                     finalLabel = mapped

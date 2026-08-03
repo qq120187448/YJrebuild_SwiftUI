@@ -239,9 +239,7 @@ enum XLSXWriter {
                 for (imageIndex, image) in sheet.images.enumerated() {
                     let imageNumber = mediaIndex
                     let fileName = "image\(imageNumber).\(image.fileExtension)"
-                    let baseRow = sheet.rows.count + 1
-                    let startRow = image.anchorRow ?? (baseRow + imageIndex * 13)
-                    let endRow = startRow + 9
+                    let startRow = image.anchorRow ?? (sheet.rows.count + 1 + imageIndex * 2)
                     let imageId = imageIndex + 1
                     let displayWidth = image.displayWidth ?? 240
                     let displayHeight = image.displayHeight ?? 180
@@ -251,9 +249,9 @@ enum XLSXWriter {
                     let hyperlinkID = image.hyperlink == nil ? nil : "h\(imageNumber)"
 
                     drawingXML += """
-                    <xdr:twoCellAnchor editAs="oneCell">
+                    <xdr:oneCellAnchor editAs="oneCell">
                       <xdr:from><xdr:col>1</xdr:col><xdr:colOff>\(startColOffset)</xdr:colOff><xdr:row>\(startRow)</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
-                      <xdr:to><xdr:col>8</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>\(endRow)</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+                      <xdr:ext cx="\(widthEMU)" cy="\(heightEMU)"/>
                       <xdr:pic>
                         <xdr:nvPicPr>
                           <xdr:cNvPr id="\(imageId)" name="\(xmlEscaped(image.label))"/>
@@ -270,7 +268,7 @@ enum XLSXWriter {
                         </xdr:spPr>
                       </xdr:pic>
                       <xdr:clientData/>
-                    </xdr:twoCellAnchor>
+                    </xdr:oneCellAnchor>
                     """
 
                     drawingRels += """
