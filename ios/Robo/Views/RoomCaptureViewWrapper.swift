@@ -11,6 +11,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
     let onCaptureComplete: (CapturedRoom) -> Void
     let onCaptureError: (Error) -> Void
     var onComponentCaptured: (UIImage, String, String) -> Void = { _, _, _ in }
+    var onStatusUpdate: (Int, Int) -> Void = { _, _ in }
 
     func makeUIView(context: Context) -> RoomCaptureView {
         let captureView = RoomCaptureView(frame: .zero)
@@ -37,7 +38,8 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
         Coordinator(
             onCaptureComplete: onCaptureComplete,
             onCaptureError: onCaptureError,
-            onComponentCaptured: onComponentCaptured
+            onComponentCaptured: onComponentCaptured,
+            onStatusUpdate: onStatusUpdate
         )
     }
 
@@ -46,6 +48,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
         let onCaptureComplete: (CapturedRoom) -> Void
         let onCaptureError: (Error) -> Void
         let onComponentCaptured: (UIImage, String, String) -> Void
+        let onStatusUpdate: (Int, Int) -> Void
         private var seenComponentIDs: Set<String> = []
         private var deliveredComponentIDs: Set<String> = []
         private var pendingComponents: [String: PendingComponent] = [:]
@@ -64,11 +67,13 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
         init(
             onCaptureComplete: @escaping (CapturedRoom) -> Void,
             onCaptureError: @escaping (Error) -> Void,
-            onComponentCaptured: @escaping (UIImage, String, String) -> Void
+            onComponentCaptured: @escaping (UIImage, String, String) -> Void,
+            onStatusUpdate: @escaping (Int, Int) -> Void
         ) {
             self.onCaptureComplete = onCaptureComplete
             self.onCaptureError = onCaptureError
             self.onComponentCaptured = onComponentCaptured
+            self.onStatusUpdate = onStatusUpdate
             super.init()
         }
 
@@ -136,6 +141,9 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
                     deliveredComponentIDs.insert(id)
                     pendingComponents.removeValue(forKey: id)
                 }
+            }
+            DispatchQueue.main.async {
+                self.onStatusUpdate(self.deliveredComponentIDs.count, self.seenComponentIDs.count)
             }
         }
 
@@ -218,8 +226,8 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
                 SIMD3(-half.x, half.y, half.z),
                 SIMD3(half.x, half.y, half.z)
             ]
-            let margin: CGFloat = 20
             var points: [CGPoint] = []
+            var insideCount = 0
             for corner in localCorners {
                 let world = geometry.0 * SIMD4<Float>(corner.x, corner.y, corner.z, 1)
                 let projected = frame.camera.projectPoint(
@@ -227,19 +235,28 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
                     orientation: .portrait,
                     viewportSize: viewport
                 )
-                guard projected.x >= margin,
-                      projected.y >= margin,
-                      projected.x <= viewport.width - margin,
-                      projected.y <= viewport.height - margin else {
-                    return nil
-                }
                 points.append(projected)
+                if projected.x >= 0, projected.y >= 0,
+                   projected.x <= viewport.width, projected.y <= viewport.height {
+                    insideCount += 1
+                }
             }
+            let center = frame.camera.projectPoint(
+                SIMD3<Float>(geometry.0.columns.3.x, geometry.0.columns.3.y, geometry.0.columns.3.z),
+                orientation: .portrait,
+                viewportSize: viewport
+            )
+            guard center.x >= 0, center.y >= 0,
+                  center.x <= viewport.width, center.y <= viewport.height else {
+                return nil
+            }
+            guard insideCount >= 2 else { return nil }
             let xs = points.map { $0.x }
             let ys = points.map { $0.y }
             let width = max(0, (xs.max() ?? 0) - (xs.min() ?? 0))
             let height = max(0, (ys.max() ?? 0) - (ys.min() ?? 0))
-            return Double(width * height) / Double(viewport.width * viewport.height)
+            let visibleFraction = Double(insideCount) / Double(localCorners.count)
+            return visibleFraction * Double(width * height) / Double(viewport.width * viewport.height)
         }
 
         private func snapshot(from frame: ARFrame) -> UIImage? {
@@ -265,7 +282,38 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
                 onCaptureError(error)
                 return
             }
+            ensureFinalRoomPhotos(processedResult)
             onCaptureComplete(processedResult)
+        }
+
+        private func ensureFinalRoomPhotos(_ room: CapturedRoom) {
+            var components: [(id: UUID, label: String)] = []
+            for (index, door) in room.doors.enumerated() {
+                components.append((door.identifier, "门\(index + 1)"))
+            }
+            for (index, window) in room.windows.enumerated() {
+                components.append((window.identifier, "窗\(index + 1)"))
+            }
+            for (index, opening) in room.openings.enumerated() {
+                components.append((opening.identifier, "洞口\(index + 1)"))
+            }
+            for (index, object) in room.objects.enumerated() {
+                components.append((
+                    object.identifier,
+                    "\(QuantityTakeoffExporter.objectCategoryName(object.category))\(index + 1)"
+                ))
+            }
+            for component in components {
+                let idString = component.id.uuidString
+                guard !deliveredComponentIDs.contains(idString) else { continue }
+                if let snapshot = bestFrameSnapshot {
+                    deliver(image: snapshot, label: component.label, id: idString)
+                    deliveredComponentIDs.insert(idString)
+                }
+            }
+            DispatchQueue.main.async {
+                self.onStatusUpdate(self.deliveredComponentIDs.count, components.count)
+            }
         }
     }
 }

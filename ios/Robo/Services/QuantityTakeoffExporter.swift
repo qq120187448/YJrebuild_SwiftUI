@@ -227,7 +227,16 @@ enum QuantityTakeoffExporter {
 
         let xlsxURL = directory.appendingPathComponent("工程量清单.xlsx")
         let labelMap = componentLabels(room: room)
+        let validIDs = Set(
+            room.doors.map(\.identifier.uuidString)
+                + room.windows.map(\.identifier.uuidString)
+                + room.openings.map(\.identifier.uuidString)
+                + room.objects.map(\.identifier.uuidString)
+        )
         var mappedPhotos = photos.compactMap { photo -> XLSXWriter.ImageAttachment? in
+            if let componentID = photo.componentID, !validIDs.contains(componentID) {
+                return nil
+            }
             var label = photo.label
             if let idString = photo.componentID,
                let id = UUID(uuidString: idString),
@@ -292,7 +301,16 @@ enum QuantityTakeoffExporter {
         for (index, input) in inputs.enumerated() {
             let adjustedRoom = input.room
             let labelMap = componentLabels(room: adjustedRoom)
+            let validIDs = Set(
+                adjustedRoom.doors.map(\.identifier.uuidString)
+                    + adjustedRoom.windows.map(\.identifier.uuidString)
+                    + adjustedRoom.openings.map(\.identifier.uuidString)
+                    + adjustedRoom.objects.map(\.identifier.uuidString)
+            )
             let mappedPhotos = input.photos.compactMap { photo -> XLSXWriter.ImageAttachment? in
+                if let componentID = photo.componentID, !validIDs.contains(componentID) {
+                    return nil
+                }
                 var label = photo.label
                 if let idString = photo.componentID,
                    let id = UUID(uuidString: idString),
@@ -587,10 +605,8 @@ enum QuantityTakeoffExporter {
 
         for photo in photos {
             let labelRow = rows.count + 1
-            rows.append([XLSXWriter.Cell(photo.label, bold: true)])
-            rows.append([XLSXWriter.Cell("")])
-            let photoRow = labelRow + 1
-            rowHeights[labelRow] = 22
+            rows.append([XLSXWriter.Cell(photo.label, bold: true), XLSXWriter.Cell("")])
+            let photoRow = labelRow
 
             let (displayWidth, displayHeight) = displaySize(for: photo.data)
             rowHeights[photoRow] = max(40, displayHeight * 0.75 + 5)

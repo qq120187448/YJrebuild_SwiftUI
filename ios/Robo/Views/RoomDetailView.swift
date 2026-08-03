@@ -21,6 +21,8 @@ struct RoomDetailView: View {
                         .foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 4)
+                FloorPlan2DView(room: room)
+                    .frame(minHeight: 320)
             }
 
             Section("工程量") {

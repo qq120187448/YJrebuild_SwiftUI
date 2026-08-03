@@ -17,6 +17,8 @@ struct LiDARScanView: View {
     @State private var adjustments = RoomAdjustments()
     @State private var buildingID: String?
     @State private var suiteMode = false
+    @State private var photographedCount = 0
+    @State private var recognizedCount = 0
 
     private enum ScanPhase {
         case instructions
@@ -147,20 +149,50 @@ struct LiDARScanView: View {
     }
 
     private var scanningView: some View {
-        RoomCaptureViewWrapper(
-            stopRequested: $stopRequested,
-            onCaptureComplete: { room in
-                capturedRoom = room
-                phase = .results
-            },
-            onCaptureError: { err in
-                error = err.localizedDescription
-            },
-            onComponentCaptured: { image, label, componentID in
-                appendComponentPhoto(image: image, label: label, componentID: componentID)
+        ZStack {
+            RoomCaptureViewWrapper(
+                stopRequested: $stopRequested,
+                onCaptureComplete: { room in
+                    capturedRoom = room
+                    phase = .results
+                },
+                onCaptureError: { err in
+                    error = err.localizedDescription
+                },
+                onComponentCaptured: { image, label, componentID in
+                    appendComponentPhoto(image: image, label: label, componentID: componentID)
+                },
+                onStatusUpdate: { photographed, recognized in
+                    photographedCount = photographed
+                    recognizedCount = recognized
+                }
+            )
+            .ignoresSafeArea()
+
+            VStack {
+                HStack(spacing: 10) {
+                    Image(systemName: "camera.fill")
+                        .foregroundStyle(.white)
+                    Text("已拍 \(photographedCount)/\(max(recognizedCount, photographedCount))")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.white)
+                    Spacer()
+                    if recognizedCount > photographedCount {
+                        Text("有构件未拍照")
+                            .font(.caption)
+                            .foregroundStyle(.yellow)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(.black.opacity(0.55))
+                .clipShape(Capsule())
+                .padding(.top, 8)
+                .padding(.horizontal, 16)
+
+                Spacer()
             }
-        )
-        .ignoresSafeArea()
+        }
     }
 
     private func appendComponentPhoto(image: UIImage, label: String, componentID: String) {
