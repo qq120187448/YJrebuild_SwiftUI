@@ -1,6 +1,7 @@
 import Foundation
 import RoomPlan
 import UIKit
+import simd
 
 struct QuantityTakeoffItem: Codable {
     let code: String
