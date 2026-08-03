@@ -94,7 +94,15 @@ struct RoomDetailView: View {
                 room: try? RoomDataProcessor.decodeFullRoom(room.fullRoomDataJSON),
                 roomName: room.roomName,
                 roomType: room.roomType,
-                adjustments: AdjustmentStorage.decode(room.adjustmentsJSON)
+                adjustments: AdjustmentStorage.decode(room.adjustmentsJSON),
+                photos: zip(room.photoLabels, room.photoFileNames).enumerated().compactMap { index, pair in
+                    let id = index < room.photoComponentIDs.count ? room.photoComponentIDs[index] : ""
+                    return PhotoStorage.load(
+                        label: pair.0,
+                        fileName: pair.1,
+                        componentID: id.isEmpty ? nil : id
+                    )
+                }
             )
         }
     }

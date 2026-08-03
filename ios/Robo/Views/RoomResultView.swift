@@ -218,7 +218,16 @@ struct RoomResultView: View {
                 room: room,
                 roomName: displayName,
                 roomType: roomType,
-                adjustments: adjustments
+                adjustments: adjustments,
+                photos: photos.compactMap { photo -> XLSXWriter.ImageAttachment? in
+                    guard let data = photo.image.jpegData(compressionQuality: 0.7) else { return nil }
+                    return XLSXWriter.ImageAttachment(
+                        label: photo.label,
+                        data: data,
+                        fileExtension: "jpg",
+                        componentID: photo.componentID?.uuidString
+                    )
+                }
             )
         }
     }

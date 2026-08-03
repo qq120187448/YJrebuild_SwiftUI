@@ -1,11 +1,25 @@
 import SwiftUI
 import RoomPlan
+import UIKit
 
 struct QuantityPreviewView: View {
     let room: CapturedRoom?
     let roomName: String
     let roomType: String
     let adjustments: RoomAdjustments
+    var photos: [XLSXWriter.ImageAttachment] = []
+
+    private var photoByLabel: [String: UIImage] {
+        var map: [String: UIImage] = [:]
+        for photo in photos {
+            guard let image = UIImage(data: photo.data) else { continue }
+            map[photo.label] = image
+            if let componentID = photo.componentID {
+                map[componentID] = image
+            }
+        }
+        return map
+    }
 
     private var items: [QuantityTakeoffItem] {
         guard let room else { return [] }
@@ -39,17 +53,35 @@ struct QuantityPreviewView: View {
                 ForEach(groupedItems, id: \.title) { group in
                     Section(group.title) {
                         ForEach(group.items, id: \.name) { item in
-                            VStack(alignment: .leading, spacing: 3) {
-                                HStack {
-                                    Text(item.name)
-                                        .font(.subheadline)
-                                    Spacer()
-                                    Text("\(formatQuantity(item.quantity)) \(item.unit)")
-                                        .font(.subheadline.monospacedDigit())
+                            HStack(spacing: 10) {
+                                if let thumb = photoByLabel[item.name] {
+                                    Image(uiImage: thumb)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 44, height: 44)
+                                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                                } else {
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(Color.secondary.opacity(0.12))
+                                        .frame(width: 44, height: 44)
+                                        .overlay(
+                                            Image(systemName: "photo")
+                                                .font(.caption)
+                                                .foregroundStyle(.tertiary)
+                                        )
                                 }
-                                Text(item.spec.isEmpty ? item.formula : "\(item.spec)｜\(item.formula)")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack {
+                                        Text(item.name)
+                                            .font(.subheadline)
+                                        Spacer()
+                                        Text("\(formatQuantity(item.quantity)) \(item.unit)")
+                                            .font(.subheadline.monospacedDigit())
+                                    }
+                                    Text(item.spec.isEmpty ? item.formula : "\(item.spec)｜\(item.formula)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }

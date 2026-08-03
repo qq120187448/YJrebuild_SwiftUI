@@ -84,6 +84,15 @@ struct LiDARScanView: View {
                 }
             }
         }
+        .onAppear {
+            updateScreenSleepPrevention()
+        }
+        .onDisappear {
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
+        .onChange(of: phase) { _, _ in
+            updateScreenSleepPrevention()
+        }
     }
 
     private var navigationTitle: String {
@@ -193,6 +202,10 @@ struct LiDARScanView: View {
                 Spacer()
             }
         }
+    }
+
+    private func updateScreenSleepPrevention() {
+        UIApplication.shared.isIdleTimerDisabled = (phase == .scanning)
     }
 
     private func appendComponentPhoto(image: UIImage, label: String, componentID: String) {
