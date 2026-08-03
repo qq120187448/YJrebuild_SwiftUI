@@ -2,27 +2,33 @@ import SwiftUI
 import RoomPlan
 
 struct QuantityPreviewView: View {
-    let room: CapturedRoom
+    let room: CapturedRoom?
     let roomName: String
     let roomType: String
     let adjustments: RoomAdjustments
 
     private var items: [QuantityTakeoffItem] {
-        QuantityTakeoffExporter.makeItems(room: room, roomType: roomType, adjustments: adjustments)
+        guard let room else { return [] }
+        return QuantityTakeoffExporter.makeItems(room: room, roomType: roomType, adjustments: adjustments)
     }
 
     private var floorArea: Double {
-        QuantityTakeoffExporter.adjustedFloorArea(room, adjustments: adjustments)
+        guard let room else { return 0 }
+        return QuantityTakeoffExporter.adjustedFloorArea(room, adjustments: adjustments)
     }
 
     private var ceilingHeight: Double {
-        QuantityTakeoffExporter.adjustedCeilingHeight(room, adjustments: adjustments)
+        guard let room else { return 0 }
+        return QuantityTakeoffExporter.adjustedCeilingHeight(room, adjustments: adjustments)
     }
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
+                    if room == nil {
+                        LabeledContent("房间数据", value: "无法读取，请重新扫描")
+                    }
                     LabeledContent("房间", value: roomName)
                     LabeledContent("类型", value: roomType)
                     LabeledContent("建筑面积", value: String(format: "%.2f m²", floorArea))

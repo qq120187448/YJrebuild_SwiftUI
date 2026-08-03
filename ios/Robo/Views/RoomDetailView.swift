@@ -89,7 +89,7 @@ struct RoomDetailView: View {
         }
         .sheet(isPresented: $showQuantityPreview) {
             QuantityPreviewView(
-                room: (try? RoomDataProcessor.decodeFullRoom(room.fullRoomDataJSON)) ?? CapturedRoom(),
+                room: try? RoomDataProcessor.decodeFullRoom(room.fullRoomDataJSON),
                 roomName: room.roomName,
                 roomType: room.roomType,
                 adjustments: AdjustmentStorage.decode(room.adjustmentsJSON)
