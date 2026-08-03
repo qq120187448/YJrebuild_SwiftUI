@@ -3,12 +3,16 @@ import SwiftData
 import RoomPlan
 
 struct RoomDetailView: View {
+    @Environment(\.modelContext) private var modelContext
     let room: RoomScanRecord
 
     @State private var shareURLs: [URL] = []
     @State private var show3D = false
     @State private var isExportingModel = false
     @State private var showQuantityPreview = false
+    @State private var showComponentAdjustments = false
+    @State private var componentAdjustments = RoomAdjustments()
+    @State private var adjustmentRoom: CapturedRoom?
 
     var body: some View {
         List {
@@ -79,6 +83,13 @@ struct RoomDetailView: View {
                 } label: {
                     Label("预览工程量清单", systemImage: "list.number")
                 }
+                Button {
+                    adjustmentRoom = try? RoomDataProcessor.decodeFullRoom(room.fullRoomDataJSON)
+                    componentAdjustments = AdjustmentStorage.decode(room.adjustmentsJSON)
+                    showComponentAdjustments = true
+                } label: {
+                    Label("调整构件尺寸", systemImage: "ruler")
+                }
             }
         }
         .navigationTitle("扫描详情")
@@ -104,6 +115,18 @@ struct RoomDetailView: View {
                     )
                 }
             )
+        }
+        .sheet(isPresented: $showComponentAdjustments) {
+            if let adjustmentRoom {
+                ComponentAdjustmentView(
+                    room: adjustmentRoom,
+                    adjustments: $componentAdjustments
+                )
+            }
+        }
+        .onChange(of: componentAdjustments) { _, newValue in
+            room.adjustmentsJSON = AdjustmentStorage.encode(newValue)
+            try? modelContext.save()
         }
     }
 

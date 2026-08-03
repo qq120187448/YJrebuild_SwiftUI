@@ -266,7 +266,8 @@ enum QuantityTakeoffExporter {
         )
         let (photoSheet, photoLinks) = makePhotoSheet(
             photos: mappedPhotos,
-            mainItemRows: mainItemRows
+            mainItemRows: mainItemRows,
+            missingLabels: missingComponentLabels(room: room, photos: mappedPhotos)
         )
         let (mainSheet, _) = makeMainSheet(
             room: room,
@@ -341,7 +342,8 @@ enum QuantityTakeoffExporter {
             let (photoSheet, photoLinks) = makePhotoSheet(
                 photos: dedupedPhotos,
                 mainItemRows: mainItemRows,
-                sheetPrefix: "\(index + 1)-\(input.roomName)"
+                sheetPrefix: "\(index + 1)-\(input.roomName)",
+                missingLabels: missingComponentLabels(room: adjustedRoom, photos: dedupedPhotos)
             )
             let (mainSheet, _) = makeMainSheet(
                 room: adjustedRoom,
@@ -594,7 +596,8 @@ enum QuantityTakeoffExporter {
     private static func makePhotoSheet(
         photos: [XLSXWriter.ImageAttachment],
         mainItemRows: [String: Int] = [:],
-        sheetPrefix: String = ""
+        sheetPrefix: String = "",
+        missingLabels: [String] = []
     ) -> (XLSXWriter.Sheet, [String: String]) {
         var rows: [[XLSXWriter.Cell]] = [
             [XLSXWriter.Cell("项目", bold: true), XLSXWriter.Cell("实拍照片", bold: true)]
@@ -631,6 +634,13 @@ enum QuantityTakeoffExporter {
             }
         }
 
+        for label in missingLabels {
+            let labelRow = rows.count + 1
+            rows.append([XLSXWriter.Cell(label, bold: true), XLSXWriter.Cell("未拍到")])
+            rowHeights[labelRow] = 24
+            photoLinks[label] = "'\(sheetPrefix.isEmpty ? "构件照片" : "\(sheetPrefix)-构件照片")'!A\(labelRow)"
+        }
+
         let sheet = XLSXWriter.Sheet(
             name: sheetPrefix.isEmpty ? "构件照片" : "\(sheetPrefix)-构件照片",
             rows: rows,
@@ -639,6 +649,31 @@ enum QuantityTakeoffExporter {
             rowHeights: rowHeights
         )
         return (sheet, photoLinks)
+    }
+
+    private static func missingComponentLabels(
+        room: CapturedRoom,
+        photos: [XLSXWriter.ImageAttachment]
+    ) -> [String] {
+        let photoLabels = Set(photos.map(\.label))
+        var labels: [String] = []
+        for (index, door) in room.doors.enumerated() {
+            let label = "门\(index + 1)"
+            if !photoLabels.contains(label) { labels.append(label) }
+        }
+        for (index, window) in room.windows.enumerated() {
+            let label = "窗\(index + 1)"
+            if !photoLabels.contains(label) { labels.append(label) }
+        }
+        for (index, opening) in room.openings.enumerated() {
+            let label = "洞口\(index + 1)"
+            if !photoLabels.contains(label) { labels.append(label) }
+        }
+        for (index, object) in room.objects.enumerated() {
+            let label = "\(objectCategoryName(object.category))\(index + 1)"
+            if !photoLabels.contains(label) { labels.append(label) }
+        }
+        return labels
     }
 
     private static func displaySize(for data: Data) -> (width: Double, height: Double) {

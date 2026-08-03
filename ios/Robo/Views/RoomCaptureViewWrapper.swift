@@ -52,16 +52,31 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
         private var seenComponentIDs: Set<String> = []
         private var deliveredComponentIDs: Set<String> = []
         private var pendingComponents: [String: PendingComponent] = [:]
-        private var bestFrameSnapshot: UIImage?
+        private var liveComponents: [String: LiveComponentInfo] = [:]
+        private var capturedPhotosByLiveID: [String: (image: UIImage, label: String)] = [:]
         private lazy var ciContext = CIContext()
 
         private let maxCandidates = 5
         private let goodScoreThreshold = 0.09
+        private let matchDistanceThreshold: Float = 0.6
 
         private struct PendingComponent {
             let label: String
             var candidates: [(image: UIImage, score: Double)] = []
             var lastCaptureTime: TimeInterval?
+        }
+
+        private enum ComponentKind: Hashable {
+            case door
+            case window
+            case opening
+            case object(String)
+        }
+
+        private struct LiveComponentInfo {
+            let kind: ComponentKind
+            let center: SIMD3<Float>
+            let dimensions: SIMD3<Float>
         }
 
         init(
@@ -110,9 +125,13 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
                     pendingComponents[id] = PendingComponent(label: label)
                 }
             }
+            for (id, _) in found {
+                if let info = componentInfo(in: room, id: id) {
+                    liveComponents[id] = info
+                }
+            }
             guard !pendingComponents.isEmpty, let frame = session.arSession.currentFrame else { return }
             guard let snapshot = snapshot(from: frame) else { return }
-            bestFrameSnapshot = snapshot
 
             for id in Array(pendingComponents.keys) {
                 guard let pending = pendingComponents[id] else { continue }
@@ -122,7 +141,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
                     continue
                 }
                 guard let geometry = componentGeometry(in: room, id: id) else {
-                    deliverFallback(id: id, pending: pending, snapshot: snapshot)
+                    deliverFallback(id: id, pending: pending)
                     deliveredComponentIDs.insert(id)
                     pendingComponents.removeValue(forKey: id)
                     continue
@@ -149,15 +168,15 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
 
         private func deliverBest(id: String, pending: PendingComponent) {
             guard let best = pending.candidates.max(by: { $0.score < $1.score }) else { return }
-            deliver(image: best.image, label: pending.label, id: id)
+            let resized = ImageResizer.resized(best.image, maxDimension: 1024)
+            capturedPhotosByLiveID[id] = (resized, pending.label)
             deliveredComponentIDs.insert(id)
         }
 
-        private func deliverFallback(id: String, pending: PendingComponent, snapshot: UIImage?) {
+        private func deliverFallback(id: String, pending: PendingComponent) {
             if let best = pending.candidates.max(by: { $0.score < $1.score }) {
-                deliver(image: best.image, label: pending.label, id: id)
-            } else if let snapshot {
-                deliver(image: snapshot, label: pending.label, id: id)
+                let resized = ImageResizer.resized(best.image, maxDimension: 1024)
+                capturedPhotosByLiveID[id] = (resized, pending.label)
             }
             deliveredComponentIDs.insert(id)
         }
@@ -171,7 +190,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
 
         private func flushPendingPhotos() {
             for (id, pending) in pendingComponents {
-                deliverFallback(id: id, pending: pending, snapshot: bestFrameSnapshot)
+                deliverFallback(id: id, pending: pending)
             }
             pendingComponents.removeAll()
         }
@@ -282,38 +301,118 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
                 onCaptureError(error)
                 return
             }
-            ensureFinalRoomPhotos(processedResult)
+            deliverMatchedFinalPhotos(processedResult)
             onCaptureComplete(processedResult)
         }
 
-        private func ensureFinalRoomPhotos(_ room: CapturedRoom) {
-            var components: [(id: UUID, label: String)] = []
+        private func deliverMatchedFinalPhotos(_ room: CapturedRoom) {
+            var finalComponents: [(id: UUID, label: String, kind: ComponentKind, center: SIMD3<Float>)] = []
             for (index, door) in room.doors.enumerated() {
-                components.append((door.identifier, "门\(index + 1)"))
-            }
-            for (index, window) in room.windows.enumerated() {
-                components.append((window.identifier, "窗\(index + 1)"))
-            }
-            for (index, opening) in room.openings.enumerated() {
-                components.append((opening.identifier, "洞口\(index + 1)"))
-            }
-            for (index, object) in room.objects.enumerated() {
-                components.append((
-                    object.identifier,
-                    "\(QuantityTakeoffExporter.objectCategoryName(object.category))\(index + 1)"
+                finalComponents.append((
+                    door.identifier,
+                    "门\(index + 1)",
+                    .door,
+                    center(of: door.transform)
                 ))
             }
-            for component in components {
+            for (index, window) in room.windows.enumerated() {
+                finalComponents.append((
+                    window.identifier,
+                    "窗\(index + 1)",
+                    .window,
+                    center(of: window.transform)
+                ))
+            }
+            for (index, opening) in room.openings.enumerated() {
+                finalComponents.append((
+                    opening.identifier,
+                    "洞口\(index + 1)",
+                    .opening,
+                    center(of: opening.transform)
+                ))
+            }
+            for (index, object) in room.objects.enumerated() {
+                let label = "\(QuantityTakeoffExporter.objectCategoryName(object.category))\(index + 1)"
+                finalComponents.append((
+                    object.identifier,
+                    label,
+                    .object(QuantityTakeoffExporter.objectCategoryName(object.category)),
+                    center(of: object.transform)
+                ))
+            }
+
+            var matchedCount = 0
+            for component in finalComponents {
                 let idString = component.id.uuidString
-                guard !deliveredComponentIDs.contains(idString) else { continue }
-                if let snapshot = bestFrameSnapshot {
-                    deliver(image: snapshot, label: component.label, id: idString)
-                    deliveredComponentIDs.insert(idString)
+                guard let liveID = bestLiveMatch(
+                    kind: component.kind,
+                    center: component.center
+                ), let photo = capturedPhotosByLiveID[liveID] else {
+                    continue
                 }
+                deliver(image: photo.image, label: component.label, id: idString)
+                deliveredComponentIDs.insert(idString)
+                matchedCount += 1
             }
             DispatchQueue.main.async {
-                self.onStatusUpdate(self.deliveredComponentIDs.count, components.count)
+                self.onStatusUpdate(matchedCount, finalComponents.count)
             }
+        }
+
+        private func bestLiveMatch(kind: ComponentKind, center: SIMD3<Float>) -> String? {
+            var bestID: String?
+            var bestDistance = matchDistanceThreshold
+            for (id, info) in liveComponents where info.kind == kind {
+                let distance = simd_distance(info.center, center)
+                if distance < bestDistance {
+                    bestDistance = distance
+                    bestID = id
+                }
+            }
+            return bestID
+        }
+
+        private func componentInfo(
+            in room: CapturedRoom,
+            id: String
+        ) -> LiveComponentInfo? {
+            if let door = room.doors.first(where: { $0.identifier.uuidString == id }) {
+                return LiveComponentInfo(
+                    kind: .door,
+                    center: center(of: door.transform),
+                    dimensions: door.dimensions
+                )
+            }
+            if let window = room.windows.first(where: { $0.identifier.uuidString == id }) {
+                return LiveComponentInfo(
+                    kind: .window,
+                    center: center(of: window.transform),
+                    dimensions: window.dimensions
+                )
+            }
+            if let opening = room.openings.first(where: { $0.identifier.uuidString == id }) {
+                return LiveComponentInfo(
+                    kind: .opening,
+                    center: center(of: opening.transform),
+                    dimensions: opening.dimensions
+                )
+            }
+            if let object = room.objects.first(where: { $0.identifier.uuidString == id }) {
+                return LiveComponentInfo(
+                    kind: .object(QuantityTakeoffExporter.objectCategoryName(object.category)),
+                    center: center(of: object.transform),
+                    dimensions: object.dimensions
+                )
+            }
+            return nil
+        }
+
+        private func center(of transform: simd_float4x4) -> SIMD3<Float> {
+            SIMD3<Float>(
+                transform.columns.3.x,
+                transform.columns.3.y,
+                transform.columns.3.z
+            )
         }
     }
 }
