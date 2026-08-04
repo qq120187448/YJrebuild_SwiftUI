@@ -75,7 +75,7 @@ enum ObjectScanExporter {
         add("占地面积（投影面积）", two(footprint), "m²")
 
         var images: [XLSXWriter.ImageAttachment] = []
-        if let thumbnail {
+        if let thumbnail = input.thumbnail {
             let resized = ImageResizer.resized(thumbnail, maxDimension: 512)
             if let png = resized.pngData() {
             images.append(XLSXWriter.ImageAttachment(
