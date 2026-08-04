@@ -1509,12 +1509,12 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             for: .portrait,
             viewportSize: viewportSize
         )
-        let normalized = displayTransform.inverted().applying(
-            CGPoint(
-                x: projected.x / viewportSize.width,
-                y: projected.y / viewportSize.height
-            )
-        )
+        let inverseTransform = displayTransform.inverted()
+        let normalizedPoint = CGPoint(
+            x: projected.x / viewportSize.width,
+            y: projected.y / viewportSize.height
+        ).applying(inverseTransform)
+        let normalized = normalizedPoint
         let imageWidth = Int(frame.camera.imageResolution.width)
         let imageHeight = Int(frame.camera.imageResolution.height)
         let pixelX = Int(normalized.x * CGFloat(imageWidth))
@@ -1540,18 +1540,18 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
               pixelX < yWidth, pixelY < yHeight else {
             return nil
         }
-        let y = Float(yBase[pixelY * yRow + pixelX])
+        let yValue = Float(yBase[pixelY * yRow + pixelX])
         let uvX = min(uvWidth - 1, pixelX / 2)
         let uvY = min(uvHeight - 1, pixelY / 2)
         let uvIndex = uvY * uvRow + uvX * 2
-        let cb = Float(uvBase[uvIndex]) - 128
-        let cr = Float(uvBase[uvIndex + 1]) - 128
-        var r = (y + 1.402 * cr) / 255
-        var g = (y - 0.344136 * cb - 0.714136 * cr) / 255
-        var b = (y + 1.772 * cb) / 255
-        r = min(max(r, 0), 1)
-        g = min(max(g, 0), 1)
-        b = min(max(b, 0), 1)
+        let cbValue = Float(uvBase[uvIndex]) - 128
+        let crValue = Float(uvBase[uvIndex + 1]) - 128
+        let rRaw = (yValue + 1.402 * crValue) / 255
+        let gRaw = (yValue - 0.344136 * cbValue - 0.714136 * crValue) / 255
+        let bRaw = (yValue + 1.772 * cbValue) / 255
+        let r: Float = min(max(rRaw, 0), 1)
+        let g: Float = min(max(gRaw, 0), 1)
+        let b: Float = min(max(bRaw, 0), 1)
         return SIMD3<Float>(r, g, b)
     }
 
