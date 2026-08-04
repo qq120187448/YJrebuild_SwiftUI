@@ -157,7 +157,7 @@ enum ObjectBoxVisual {
             let action = SCNAction.repeatForever(
                 SCNAction.customAction(duration: duration) { animatedNode, elapsed in
                     let t = elapsed.truncatingRemainder(dividingBy: duration) / duration
-                    let halfSpan = (t - 0.5) * edge.length
+                    let halfSpan = Float((t - 0.5) * Double(edge.length))
                     let alongAxis = edge.axis * halfSpan
                     let position = edge.offset + alongAxis
                     animatedNode.position = SCNVector3(position.x, position.y, position.z)
