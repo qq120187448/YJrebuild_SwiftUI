@@ -656,6 +656,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         case .ended, .cancelled:
             rotateStartScreen = nil
             rotateStartTransform = nil
+            filterVoxelMapToCropBox()
         default:
             break
         }
@@ -708,6 +709,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         case .ended, .cancelled:
             moveStartScreen = nil
             moveStartCenter = nil
+            filterVoxelMapToCropBox()
         default:
             break
         }
@@ -729,6 +731,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             updateVolumeExtent(newExtent)
         case .ended, .cancelled:
             scaleStartExtent = nil
+            filterVoxelMapToCropBox()
         default:
             break
         }
@@ -900,6 +903,19 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
 
     private func pointInsideCropBox(_ world: SIMD3<Float>) -> Bool {
         cropVolume?.contains(worldPoint: world) ?? true
+    }
+
+    private func filterVoxelMapToCropBox() {
+        guard let volume = cropVolume else { return }
+        var filtered: [Int64: VoxelAccumulator] = [:]
+        for (key, accumulator) in voxelMap {
+            let inv = 1 / max(accumulator.count, 1)
+            let position = accumulator.sum * inv
+            if volume.contains(worldPoint: position) {
+                filtered[key] = accumulator
+            }
+        }
+        voxelMap = filtered
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
