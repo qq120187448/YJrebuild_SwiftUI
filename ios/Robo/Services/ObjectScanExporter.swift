@@ -37,6 +37,7 @@ enum ObjectScanExporter {
             "扫描时间：\(formatter.string(from: input.capturedAt))",
             "原始点数：\(input.rawPointCount)",
             "目标点数：\(input.metrics.targetPointCount ?? input.metrics.processedPointCount)",
+            "已剔除背景点：\(input.metrics.backgroundRemovedCount ?? 0)（\(String(format: "%.1f%%", (input.metrics.backgroundRemovedRatio ?? 0) * 100))）",
             "AABB 外包围：\(two(aabb.sizeX)) × \(two(aabb.sizeY)) × \(two(aabb.sizeZ)) m",
             "OBB 长宽高：\(two(obbLength)) × \(two(obbWidth)) × \(two(obbHeight)) m",
             "体素网格体积：\(three(voxelVolume)) m³",
@@ -83,6 +84,13 @@ enum ObjectScanExporter {
         }
         if let coverage = input.metrics.voxelCoverageEstimate {
             add("点云覆盖率", "\(Int((coverage * 100).rounded()))%", "%")
+        }
+        if let removedCount = input.metrics.backgroundRemovedCount {
+            add(
+                "已剔除背景点",
+                "\(removedCount)（\(String(format: "%.1f%%", (input.metrics.backgroundRemovedRatio ?? 0) * 100))）",
+                "个"
+            )
         }
         if let vertexCount = input.metrics.voxelMeshVertexCount,
            let triangleCount = input.metrics.voxelMeshTriangleCount {

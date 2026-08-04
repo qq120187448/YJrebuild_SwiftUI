@@ -49,6 +49,17 @@ struct ObjectPoint: Codable, Sendable, Hashable {
     }
 }
 
+struct ScanPlaneInfo: Sendable {
+    var centerX: Float
+    var centerY: Float
+    var centerZ: Float
+    var normalX: Float
+    var normalY: Float
+    var normalZ: Float
+    var width: Float
+    var height: Float
+}
+
 struct ObjectScanMetrics: Codable, Sendable {
     struct AABB: Codable, Sendable {
         var minX: Double
@@ -86,6 +97,8 @@ struct ObjectScanMetrics: Codable, Sendable {
     var voxelCoverageEstimate: Double?
     var voxelMeshVertexCount: Int?
     var voxelMeshTriangleCount: Int?
+    var backgroundRemovedCount: Int?
+    var backgroundRemovedRatio: Double?
 }
 
 struct ObjectScanProcessResult: Sendable {
@@ -133,26 +146,47 @@ enum ObjectScanProcessor {
     static func process(
         points: [ObjectPoint],
         voxelSize: Float = 0.02,
-        gridSize: Float = 0.05
+        gridSize: Float = 0.05,
+        planes: [ScanPlaneInfo] = []
     ) throws -> ObjectScanProcessResult {
         let nonBackground = points.filter { !isBackgroundClassification($0.classification) }
         let source = nonBackground.isEmpty ? points : nonBackground
+        let classificationRemoved = max(0, points.count - source.count)
         let downsampled = voxelDownsample(source, voxelSize: voxelSize)
-        let (keptPoints, groundY) = removeGround(downsampled)
+        let (planeFiltered, planeAnchorRemoved) = removePlanePoints(downsampled, planes: planes)
+        let (keptPoints, groundY) = removeGround(planeFiltered)
+        let groundRemoved = max(0, planeFiltered.count - keptPoints.count)
         let planeCleaned = removeDominantPlanes(keptPoints)
+        let planeRemoved = max(0, keptPoints.count - planeCleaned.count)
         let allClusters = connectedClusters(planeCleaned, cellSize: 0.08)
-        let candidateClusters = allClusters
+        let objectClusters = allClusters.filter { !isLikelyBackgroundCluster($0) }
+        let candidateClusters = objectClusters
             .filter { $0.count >= 20 }
             .sorted { $0.count > $1.count }
         let totalClusterCount = allClusters.count
-        let candidates = candidateClusters.isEmpty ? [keptPoints] : Array(candidateClusters.prefix(6))
+        let candidates: [[ObjectPoint]]
+        if !candidateClusters.isEmpty {
+            candidates = Array(candidateClusters.prefix(6))
+        } else if !objectClusters.isEmpty {
+            candidates = Array(objectClusters.sorted { $0.count > $1.count }.prefix(6))
+        } else {
+            candidates = [keptPoints]
+        }
+        let removedBackgroundCount = classificationRemoved
+            + planeAnchorRemoved
+            + groundRemoved
+            + planeRemoved
+        let removedBackgroundRatio = Double(removedBackgroundCount) / Double(max(points.count, 1))
 
         var options: [ObjectScanClusterOption] = []
         for cluster in candidates {
             let pair = metricsAndUSDZ(
                 for: cluster,
                 groundY: groundY,
-                gridSize: gridSize
+                gridSize: gridSize,
+                planes: planes,
+                backgroundRemovedCount: removedBackgroundCount,
+                backgroundRemovedRatio: removedBackgroundRatio
             )
             var metrics = pair.metrics
             metrics.pointCount = points.count
@@ -184,7 +218,10 @@ enum ObjectScanProcessor {
     static func metricsAndUSDZ(
         for points: [ObjectPoint],
         groundY: Float? = nil,
-        gridSize: Float = 0.05
+        gridSize: Float = 0.05,
+        planes: [ScanPlaneInfo] = [],
+        backgroundRemovedCount: Int? = nil,
+        backgroundRemovedRatio: Double? = nil
     ) -> (metrics: ObjectScanMetrics, voxelUSDZData: Data?) {
         guard !points.isEmpty else {
             return (
@@ -218,7 +255,7 @@ enum ObjectScanProcessor {
         let heightfield = computeHeightfield(points, groundY: resolvedGroundY, gridSize: gridSize)
         let hull = convexHull(points)
         let footprint = footprintArea(points)
-        let voxel = voxelReconstruct(points)
+        let voxel = voxelReconstruct(points, planes: planes)
         let metrics = ObjectScanMetrics(
             pointCount: points.count,
             processedPointCount: points.count,
@@ -242,7 +279,9 @@ enum ObjectScanProcessor {
             voxelMeshSurfaceAreaM2: voxel.contactExcludedSurfaceAreaM2,
             voxelCoverageEstimate: voxel.coverageEstimate,
             voxelMeshVertexCount: voxel.vertexCount,
-            voxelMeshTriangleCount: voxel.triangleCount
+            voxelMeshTriangleCount: voxel.triangleCount,
+            backgroundRemovedCount: backgroundRemovedCount,
+            backgroundRemovedRatio: backgroundRemovedRatio
         )
         return (metrics, voxel.usdzData ?? hull.usdzData)
     }
@@ -253,7 +292,8 @@ enum ObjectScanProcessor {
 
     static func voxelReconstruct(
         _ points: [ObjectPoint],
-        targetVoxelsPerAxis: Int = 96
+        targetVoxelsPerAxis: Int = 96,
+        planes: [ScanPlaneInfo] = []
     ) -> VoxelReconstructionResult {
         guard points.count >= 8 else { return VoxelReconstructionResult() }
         let aabb = computeAABB(points)
@@ -378,7 +418,12 @@ enum ObjectScanProcessor {
 
         let closedMesh = manifold.meshGL()
         let totalArea = max(0, manifold.surfaceArea)
-        let contacts = contactAreas(from: closedMesh, aabb: aabb, voxelSize: voxelSize)
+        let contacts = contactAreas(
+            from: closedMesh,
+            aabb: aabb,
+            voxelSize: voxelSize,
+            planes: planes
+        )
         let volume = max(0, manifold.volume)
         let excludedArea = max(0, totalArea - contacts.ground - contacts.wall)
         let knownColumns = Double(maxYByColumn.count)
@@ -449,7 +494,8 @@ enum ObjectScanProcessor {
     private static func contactAreas(
         from mesh: MeshGL<HullVector>,
         aabb: ObjectScanMetrics.AABB,
-        voxelSize: Float
+        voxelSize: Float,
+        planes: [ScanPlaneInfo] = []
     ) -> (ground: Double, wall: Double) {
         let vertices = mesh.vertices
         let tolerance = Double(voxelSize) * 0.75
@@ -458,6 +504,7 @@ enum ObjectScanProcessor {
         let maxXPlane = aabb.maxX + Double(voxelSize) * 0.5
         let minZPlane = aabb.minZ + Double(voxelSize) * 0.5
         let maxZPlane = aabb.maxZ + Double(voxelSize) * 0.5
+        let wallPlanes = planes.filter { abs(Double($0.normalY)) < 0.7 }
         var groundArea = 0.0
         var wallArea = 0.0
 
@@ -474,6 +521,26 @@ enum ObjectScanProcessor {
             if abs(centroid.y - groundY) <= tolerance && normal.y < -0.5 {
                 groundArea += area
                 continue
+            }
+            if !wallPlanes.isEmpty {
+                let wallMatch = wallPlanes.contains { plane in
+                    let center = SIMD3<Double>(Double(plane.centerX), Double(plane.centerY), Double(plane.centerZ))
+                    var planeNormal = SIMD3<Double>(
+                        Double(plane.normalX),
+                        Double(plane.normalY),
+                        Double(plane.normalZ)
+                    )
+                    let planeNormalLength = simd_length(planeNormal)
+                    guard planeNormalLength > 1e-6 else { return false }
+                    planeNormal /= planeNormalLength
+                    let distance = abs(simd_dot(centroid - center, planeNormal))
+                    let normalAlignment = abs(simd_dot(normal, planeNormal))
+                    return distance <= tolerance * 1.5 && normalAlignment > 0.7
+                }
+                if wallMatch {
+                    wallArea += area
+                    continue
+                }
             }
             guard abs(normal.y) < 0.5 else { continue }
             if abs(centroid.x - maxXPlane) <= tolerance && normal.x > 0.5 {
@@ -540,6 +607,97 @@ enum ObjectScanProcessor {
         let groundY = ys[index]
         let threshold = groundY + 0.01
         return (points.filter { $0.y >= threshold }, groundY)
+    }
+
+    private static func removePlanePoints(
+        _ points: [ObjectPoint],
+        planes: [ScanPlaneInfo],
+        distanceThreshold: Float = 0.03
+    ) -> ([ObjectPoint], Int) {
+        guard !planes.isEmpty else { return (points, 0) }
+        let kept = points.filter { point in
+            for plane in planes {
+                let center = SIMD3<Float>(plane.centerX, plane.centerY, plane.centerZ)
+                var normal = SIMD3<Float>(plane.normalX, plane.normalY, plane.normalZ)
+                let normalLength = simd_length(normal)
+                guard normalLength > 1e-6 else { continue }
+                normal /= normalLength
+                let distance = abs(simd_dot(point.position - center, normal))
+                guard distance <= distanceThreshold else { continue }
+                if planeContains(point.position, plane: plane, normal: normal, margin: 0.05) {
+                    return false
+                }
+            }
+            return true
+        }
+        return (kept, points.count - kept.count)
+    }
+
+    private static func planeContains(
+        _ point: SIMD3<Float>,
+        plane: ScanPlaneInfo,
+        normal: SIMD3<Float>,
+        margin: Float
+    ) -> Bool {
+        let reference = abs(normal.x) < 0.9
+            ? SIMD3<Float>(1, 0, 0)
+            : SIMD3<Float>(0, 1, 0)
+        var u = simd_cross(normal, reference)
+        let uLength = simd_length(u)
+        guard uLength > 1e-6 else { return false }
+        u /= uLength
+        let v = simd_cross(normal, u)
+        let center = SIMD3<Float>(plane.centerX, plane.centerY, plane.centerZ)
+        let localX = abs(simd_dot(point - center, u))
+        let localY = abs(simd_dot(point - center, v))
+        return localX <= plane.width * 0.5 + margin
+            && localY <= plane.height * 0.5 + margin
+    }
+
+    private static func isLikelyBackgroundCluster(_ points: [ObjectPoint]) -> Bool {
+        guard points.count >= 60 else { return false }
+        let aabb = computeAABB(points)
+        let dims = [aabb.sizeX, aabb.sizeY, aabb.sizeZ].sorted(by: >)
+        let largest = dims[0]
+        let smallest = dims[2]
+        let planarity = smallest / max(largest, 1e-6)
+        if planarity < 0.06 && largest > 0.6 && smallest < 0.12 {
+            return true
+        }
+        if aabb.sizeY < 0.12 && aabb.sizeX > 0.8 && aabb.sizeZ > 0.8 {
+            return true
+        }
+        if points.count >= 120 {
+            let mean = points.reduce(SIMD3<Float>.zero) { $0 + $1.position }
+                / Float(points.count)
+            var covariance = [[Float]](repeating: [Float](repeating: 0, count: 3), count: 3)
+            for point in points {
+                let d = point.position - mean
+                for row in 0..<3 {
+                    for column in 0..<3 {
+                        covariance[row][column] += d[row] * d[column]
+                    }
+                }
+            }
+            let axes = jacobiEigenvectors(covariance)
+            var extents: [Float] = []
+            for axis in axes {
+                var minValue = Float.greatestFiniteMagnitude
+                var maxValue = -Float.greatestFiniteMagnitude
+                for point in points {
+                    let projection = simd_dot(point.position - mean, axis)
+                    minValue = min(minValue, projection)
+                    maxValue = max(maxValue, projection)
+                }
+                extents.append(max(maxValue - minValue, 0))
+            }
+            let sorted = extents.sorted(by: >)
+            let spread = sorted[2] / max(sorted[0], 1e-6)
+            if spread < 0.05 && sorted[0] > 0.7 && sorted[1] > 0.3 {
+                return true
+            }
+        }
+        return false
     }
 
     static func removeDominantPlanes(

@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import ARKit
+import CoreImage
 import CoreVideo
 import SceneKit
 import simd
@@ -45,6 +46,7 @@ struct ObjectScanView: View {
     @State private var isCapturing = false
     @State private var pointCount = 0
     @State private var capturedPoints: [ObjectPoint] = []
+    @State private var capturedPlanes: [ScanPlaneInfo] = []
     @State private var objectName = ""
     @State private var result: ObjectScanProcessResult?
     @State private var selectedClusterIndex = 0
@@ -152,6 +154,7 @@ struct ObjectScanView: View {
             Button {
                 objectName = ""
                 capturedPoints = []
+                capturedPlanes = []
                 pointCount = 0
                 selectedClusterIndex = 0
                 isProcessing = false
@@ -204,8 +207,9 @@ struct ObjectScanView: View {
                 onPointCount: { count in
                     pointCount = count
                 },
-                onPointsCaptured: { points in
+                onPointsCaptured: { points, planes in
                     capturedPoints = points
+                    capturedPlanes = planes
                     processCapturedPoints()
                 },
                 onCropBoxPlaced: {
@@ -426,6 +430,13 @@ struct ObjectScanView: View {
                 LabeledContent("原始点数", value: "\(current.metrics.pointCount)")
                 LabeledContent("目标点数", value: "\(current.metrics.targetPointCount ?? current.points.count)")
                 LabeledContent("点簇数量", value: "\(current.metrics.clusterCount ?? 1)")
+                if let removedCount = current.metrics.backgroundRemovedCount,
+                   let ratio = current.metrics.backgroundRemovedRatio {
+                    LabeledContent(
+                        "已剔除背景点",
+                        value: "\(removedCount)（\(String(format: "%.1f%%", ratio * 100))）"
+                    )
+                }
                 LabeledContent(
                     "AABB 外包围尺寸",
                     value: String(
@@ -605,9 +616,13 @@ struct ObjectScanView: View {
         isProcessing = true
         selectedClusterIndex = 0
         let points = capturedPoints
+        let planes = capturedPlanes
         Task.detached(priority: .userInitiated) {
             do {
-                let processed = try ObjectScanProcessor.process(points: points)
+                let processed = try ObjectScanProcessor.process(
+                    points: points,
+                    planes: planes
+                )
                 await MainActor.run {
                     self.result = processed
                     self.isProcessing = false
@@ -706,7 +721,7 @@ private struct ObjectScanARView: UIViewControllerRepresentable {
     @Binding var clearRequested: Bool
 
     let onPointCount: (Int) -> Void
-    let onPointsCaptured: ([ObjectPoint]) -> Void
+    let onPointsCaptured: ([ObjectPoint], [ScanPlaneInfo]) -> Void
     let onCropBoxPlaced: () -> Void
     let onCropBoxCleared: () -> Void
     let onCommandHandled: () -> Void
@@ -771,7 +786,7 @@ private struct ObjectScanARView: UIViewControllerRepresentable {
 
 private final class ObjectScanARViewController: UIViewController, ARSessionDelegate {
     var onPointCount: ((Int) -> Void)?
-    var onPointsCaptured: (([ObjectPoint]) -> Void)?
+    var onPointsCaptured: (([ObjectPoint], [ScanPlaneInfo]) -> Void)?
     var onCropBoxPlaced: (() -> Void)?
     var onCropBoxCleared: (() -> Void)?
     var pointSize: Double = 1.5
@@ -784,6 +799,15 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     private var voxelSize: Float = 0.02
     private let maxVoxels = 200_000
     private var voxelMap: [Int64: VoxelAccumulator] = [:]
+    private var lastPlaneInfos: [ScanPlaneInfo] = []
+    private let ciContext = CIContext(options: [
+        .workingColorSpace: NSNull(),
+        .useSoftwareRenderer: false
+    ])
+    private var portraitPixels: [UInt8]?
+    private var portraitPixelWidth = 0
+    private var portraitPixelHeight = 0
+    private var portraitPixelScale: CGFloat = 1
     private var cropVolume: ObjectCropVolume?
     private var cropBoxNode: SCNNode?
     private var meshOcclusionNodes: [UUID: SCNNode] = [:]
@@ -859,9 +883,10 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         guard !didDeliver else { return }
         didDeliver = true
         let points = snapshotPoints()
+        let planes = lastPlaneInfos
         DispatchQueue.main.async {
             self.onPointCount?(points.count)
-            self.onPointsCaptured?(points)
+            self.onPointsCaptured?(points, planes)
         }
     }
 
@@ -1457,6 +1482,20 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         frameCount += 1
         guard frameCount % 10 == 0 else { return }
 
+        lastPlaneInfos = frame.anchors.compactMap { anchor in
+            guard let plane = anchor as? ARPlaneAnchor else { return nil }
+            let transform = plane.transform
+            return ScanPlaneInfo(
+                centerX: transform.columns.3.x,
+                centerY: transform.columns.3.y,
+                centerZ: transform.columns.3.z,
+                normalX: transform.columns.2.x,
+                normalY: transform.columns.2.y,
+                normalZ: transform.columns.2.z,
+                width: plane.extent.x,
+                height: plane.extent.y
+            )
+        }
         captureMeshPoints(from: frame)
         if voxelMap.count >= maxVoxels {
             compactVoxelMap()
@@ -1568,6 +1607,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     }
 
     private func captureMeshPoints(from frame: ARFrame) {
+        preparePortraitColorImage(from: frame)
         for anchor in frame.anchors {
             guard let mesh = anchor as? ARMeshAnchor else { continue }
             let geometry = mesh.geometry
@@ -1624,61 +1664,64 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     }
 
     private func sampleCameraColor(frame: ARFrame, world: SIMD3<Float>) -> SIMD3<Float>? {
-        let viewportSize = sceneView.bounds.size
-        guard viewportSize.width > 0, viewportSize.height > 0 else { return nil }
+        guard let pixels = portraitPixels else { return nil }
+        let buffer = frame.capturedImage
+        let portraitWidth = CGFloat(CVPixelBufferGetHeight(buffer))
+        let portraitHeight = CGFloat(CVPixelBufferGetWidth(buffer))
+        guard portraitWidth > 0, portraitHeight > 0 else { return nil }
         let projected = frame.camera.projectPoint(
             world,
             orientation: .portrait,
-            viewportSize: viewportSize
+            viewportSize: CGSize(width: portraitWidth, height: portraitHeight)
         )
-        let displayTransform = frame.displayTransform(
-            for: .portrait,
-            viewportSize: viewportSize
-        )
-        let inverseTransform = displayTransform.inverted()
-        let normalizedPoint = CGPoint(
-            x: projected.x / viewportSize.width,
-            y: projected.y / viewportSize.height
-        ).applying(inverseTransform)
-        let normalized = normalizedPoint
-        let imageWidth = Int(frame.camera.imageResolution.width)
-        let imageHeight = Int(frame.camera.imageResolution.height)
-        let pixelX = Int(normalized.x * CGFloat(imageWidth))
-        let pixelY = Int(normalized.y * CGFloat(imageHeight))
-
-        let image = frame.capturedImage
-        CVPixelBufferLockBaseAddress(image, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(image, .readOnly) }
-        guard CVPixelBufferGetPlaneCount(image) >= 2,
-              let yBase = CVPixelBufferGetBaseAddressOfPlane(image, 0)?
-                .assumingMemoryBound(to: UInt8.self),
-              let uvBase = CVPixelBufferGetBaseAddressOfPlane(image, 1)?
-                .assumingMemoryBound(to: UInt8.self) else {
+        guard projected.x.isFinite, projected.y.isFinite,
+              projected.x >= 0, projected.y >= 0,
+              projected.x <= portraitWidth, projected.y <= portraitHeight else {
             return nil
         }
-        let yWidth = CVPixelBufferGetWidthOfPlane(image, 0)
-        let yHeight = CVPixelBufferGetHeightOfPlane(image, 0)
-        let uvWidth = CVPixelBufferGetWidthOfPlane(image, 1)
-        let uvHeight = CVPixelBufferGetHeightOfPlane(image, 1)
-        let yRow = CVPixelBufferGetBytesPerRowOfPlane(image, 0)
-        let uvRow = CVPixelBufferGetBytesPerRowOfPlane(image, 1)
-        guard pixelX >= 0, pixelY >= 0,
-              pixelX < yWidth, pixelY < yHeight else {
-            return nil
-        }
-        let yValue = Float(yBase[pixelY * yRow + pixelX])
-        let uvX = min(uvWidth - 1, pixelX / 2)
-        let uvY = min(uvHeight - 1, pixelY / 2)
-        let uvIndex = uvY * uvRow + uvX * 2
-        let cbValue = Float(uvBase[uvIndex]) - 128
-        let crValue = Float(uvBase[uvIndex + 1]) - 128
-        let rRaw = (yValue + 1.402 * crValue) / 255
-        let gRaw = (yValue - 0.344136 * cbValue - 0.714136 * crValue) / 255
-        let bRaw = (yValue + 1.772 * cbValue) / 255
-        let r: Float = min(max(rRaw, 0), 1)
-        let g: Float = min(max(gRaw, 0), 1)
-        let b: Float = min(max(bRaw, 0), 1)
+        let px = min(max(Int(projected.x * portraitPixelScale), 0), portraitPixelWidth - 1)
+        let py = min(max(Int(projected.y * portraitPixelScale), 0), portraitPixelHeight - 1)
+        let offset = (py * portraitPixelWidth + px) * 4
+        let r = Float(pixels[offset]) / 255
+        let g = Float(pixels[offset + 1]) / 255
+        let b = Float(pixels[offset + 2]) / 255
         return SIMD3<Float>(r, g, b)
+    }
+
+    private func preparePortraitColorImage(from frame: ARFrame) {
+        let buffer = frame.capturedImage
+        let width = CVPixelBufferGetHeight(buffer)
+        let height = CVPixelBufferGetWidth(buffer)
+        guard width > 0, height > 0 else { return }
+        let source = CIImage(cvPixelBuffer: buffer).oriented(.right)
+        let scale: CGFloat = 0.5
+        let scaled = source.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let extent = scaled.extent
+        let bounds = CGRect(origin: .zero, size: extent.size).integral
+        let translated: CIImage
+        if abs(extent.origin.x) > 0.5 || abs(extent.origin.y) > 0.5 {
+            translated = scaled.transformed(by: CGAffineTransform(
+                translationX: -extent.origin.x,
+                y: -extent.origin.y
+            ))
+        } else {
+            translated = scaled
+        }
+        let outWidth = max(1, Int(bounds.width))
+        let outHeight = max(1, Int(bounds.height))
+        var pixels = [UInt8](repeating: 0, count: outWidth * outHeight * 4)
+        ciContext.render(
+            translated,
+            toBitmap: &pixels,
+            rowBytes: outWidth * 4,
+            bounds: bounds,
+            format: .RGBA8,
+            colorSpace: CGColorSpaceCreateDeviceRGB()
+        )
+        portraitPixels = pixels
+        portraitPixelWidth = outWidth
+        portraitPixelHeight = outHeight
+        portraitPixelScale = scale
     }
 
     private func classificationColor(_ classification: ARMeshClassification?) -> SIMD3<Float> {
@@ -1755,8 +1798,8 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         let material = SCNMaterial()
         material.lightingModel = .constant
         material.diffuse.contents = UIColor.white
-        material.emission.contents = UIColor.white
-        material.blendMode = .add
+        material.emission.contents = UIColor.black
+        material.blendMode = .alpha
         material.writesToDepthBuffer = false
         let radius = CGFloat(pointSize)
         let geometry = SCNGeometry.objectPointCloud(
@@ -1778,23 +1821,27 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         guard let depthMap = frame.smoothedSceneDepth?.depthMap ?? frame.sceneDepth?.depthMap else {
             return true
         }
-        let viewportSize = sceneView.bounds.size
-        guard viewportSize.width > 0, viewportSize.height > 0 else { return true }
+        let buffer = frame.capturedImage
+        let portraitWidth = CGFloat(CVPixelBufferGetHeight(buffer))
+        let portraitHeight = CGFloat(CVPixelBufferGetWidth(buffer))
+        guard portraitWidth > 0, portraitHeight > 0 else { return true }
         let projected = frame.camera.projectPoint(
             world,
             orientation: .portrait,
-            viewportSize: viewportSize
+            viewportSize: CGSize(width: portraitWidth, height: portraitHeight)
         )
-        let inverse = frame.displayTransform(for: .portrait, viewportSize: viewportSize).inverted()
-        let normalized = CGPoint(
-            x: projected.x / viewportSize.width,
-            y: projected.y / viewportSize.height
-        ).applying(inverse)
+        guard projected.x.isFinite, projected.y.isFinite,
+              projected.x >= 0, projected.y >= 0,
+              projected.x <= portraitWidth, projected.y <= portraitHeight else {
+            return true
+        }
         let depthWidth = CVPixelBufferGetWidth(depthMap)
         let depthHeight = CVPixelBufferGetHeight(depthMap)
         guard depthWidth > 0, depthHeight > 0 else { return true }
-        let depthX = Int(normalized.x * CGFloat(depthWidth))
-        let depthY = Int(normalized.y * CGFloat(depthHeight))
+        let normalizedX = projected.y / portraitHeight
+        let normalizedY = 1 - projected.x / portraitWidth
+        let depthX = Int(normalizedX * CGFloat(depthWidth))
+        let depthY = Int(normalizedY * CGFloat(depthHeight))
         guard depthX >= 0, depthY >= 0, depthX < depthWidth, depthY < depthHeight else {
             return true
         }

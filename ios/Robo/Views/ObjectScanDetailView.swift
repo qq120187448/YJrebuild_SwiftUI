@@ -33,6 +33,13 @@ struct ObjectScanDetailView: View {
                 LabeledContent("处理点数", value: "\(record.processedPointCount)")
                 LabeledContent("目标点数", value: "\(record.targetPointCount)")
                 LabeledContent("点簇数量", value: "\(record.clusterCount)")
+                if let removedCount = metrics?.backgroundRemovedCount,
+                   let ratio = metrics?.backgroundRemovedRatio {
+                    LabeledContent(
+                        "已剔除背景点",
+                        value: "\(removedCount)（\(String(format: "%.1f%%", ratio * 100))）"
+                    )
+                }
                 LabeledContent(
                     "AABB 外包围尺寸",
                     value: String(
