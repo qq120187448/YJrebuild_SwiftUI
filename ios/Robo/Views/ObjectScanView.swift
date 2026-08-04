@@ -15,6 +15,22 @@ enum AxisMoveCommand: Equatable {
     case zPlus
 }
 
+enum ObjectPreviewMode: String, CaseIterable, Identifiable {
+    case all
+    case highlightTarget
+    case targetOnly
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all: return "全部点云"
+        case .highlightTarget: return "高亮目标"
+        case .targetOnly: return "仅显示目标"
+        }
+    }
+}
+
 struct ObjectScanView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
@@ -42,6 +58,7 @@ struct ObjectScanView: View {
     @State private var axisMoveCommand: AxisMoveCommand = .none
     @State private var boxMetrics: ObjectScanMetrics?
     @State private var boxUSDZData: Data?
+    @State private var previewMode: ObjectPreviewMode = .highlightTarget
     @State private var isComputingBoxMetrics = false
     @State private var pointSize: Double = ObjectScanSettings.pointSize
     @State private var scanPlaceRequested = false
@@ -319,8 +336,17 @@ struct ObjectScanView: View {
         let current = currentPointsAndMetrics(result)
         return List {
             Section("3D 预览与裁剪") {
+                Picker("预览模式", selection: $previewMode) {
+                    ForEach(ObjectPreviewMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+
                 ObjectCropBox3DView(
                     points: sampled(result.allPoints, limit: 80_000),
+                    targetPoints: current.points,
+                    previewMode: previewMode,
                     cropVolume: cropVolume,
                     placeRequested: placeCropBoxRequested,
                     axisMoveCommand: axisMoveCommand,
@@ -1059,7 +1085,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         let query = sceneView.raycastQuery(
             from: screenCenter,
             allowing: .estimatedPlane,
-            alignment: .any
+            alignment: .horizontal
         )
         let result = query.flatMap { sceneView.session.raycast($0).first }
 
@@ -1071,17 +1097,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                 transform.columns.3.y,
                 transform.columns.3.z
             )
-            let normal = SIMD3<Float>(
-                transform.columns.1.x,
-                transform.columns.1.y,
-                transform.columns.1.z
-            )
-            if abs(normal.y) > 0.7 {
-                center = hit + SIMD3<Float>(0, extent.y * 0.5, 0)
-            } else {
-                let flatNormal = simd_normalize(SIMD3<Float>(normal.x, 0, normal.z))
-                center = hit + flatNormal * (extent.z * 0.5)
-            }
+            center = hit + SIMD3<Float>(0, extent.y * 0.5, 0)
         } else {
             let cameraTransform = sceneView.session.currentFrame?.camera.transform
                 ?? matrix_identity_float4x4
@@ -1125,7 +1141,6 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         let center = volume.center
         let half = volume.extent * 0.5
         var floorY: Float?
-        var wallNormal: SIMD3<Float>?
 
         for anchor in planeAnchors {
             let transform = anchor.transform
@@ -1140,24 +1155,14 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                 transform.columns.2.z
             )
             let distance = simd_dot(center - planeCenter, normal)
-            if abs(normal.y) > 0.7, abs(distance) < 0.6 {
+            if abs(normal.y) > 0.7, abs(distance) < 0.25 {
                 floorY = planeCenter.y
-            } else if abs(normal.y) < 0.3, abs(distance) < 0.6 {
-                wallNormal = normal
             }
         }
 
         var transform = volume.transform
         if let floorY {
             transform.columns.3.y = floorY + half.y
-        }
-        if let wallNormal {
-            let flat = simd_normalize(SIMD3<Float>(wallNormal.x, 0, wallNormal.z))
-            let yaw = atan2(flat.x, flat.z)
-            let yawQuat = simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0))
-            var newTransform = simd_float4x4(yawQuat)
-            newTransform.columns.3 = transform.columns.3
-            transform = newTransform
         }
 
         let newCenter = SIMD3<Float>(

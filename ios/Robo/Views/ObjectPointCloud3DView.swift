@@ -118,7 +118,8 @@ extension SCNGeometry {
         worldPointSize: Float = 0.02,
         minScreenRadius: CGFloat = 1,
         maxScreenRadius: CGFloat = 1,
-        material overrideMaterial: SCNMaterial? = nil
+        material overrideMaterial: SCNMaterial? = nil,
+        colorTransform: ((ObjectPoint) -> SIMD4<Float>)? = nil
     ) -> SCNGeometry {
         let vertices = points.map { SCNVector3($0.x, $0.y, $0.z) }
         let vertexSource = SCNGeometrySource(vertices: vertices)
@@ -126,10 +127,11 @@ extension SCNGeometry {
         var colorValues: [Float] = []
         colorValues.reserveCapacity(points.count * 4)
         for point in points {
-            colorValues.append(point.r)
-            colorValues.append(point.g)
-            colorValues.append(point.b)
-            colorValues.append(1)
+            let color = colorTransform?(point) ?? SIMD4(point.r, point.g, point.b, 1)
+            colorValues.append(color.x)
+            colorValues.append(color.y)
+            colorValues.append(color.z)
+            colorValues.append(color.w)
         }
         let colorData = colorValues.withUnsafeBytes { rawBuffer in
             Data(bytes: rawBuffer.baseAddress!, count: rawBuffer.count)
@@ -155,6 +157,7 @@ extension SCNGeometry {
         material.lightingModel = .constant
         if overrideMaterial == nil {
             material.diffuse.contents = UIColor.white
+            material.blendMode = .alpha
         }
         geometry.materials = [material]
         return geometry

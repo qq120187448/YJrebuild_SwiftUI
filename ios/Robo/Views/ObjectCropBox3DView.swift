@@ -5,6 +5,8 @@ import simd
 
 struct ObjectCropBox3DView: UIViewRepresentable {
     let points: [ObjectPoint]
+    let targetPoints: [ObjectPoint]
+    let previewMode: ObjectPreviewMode
     let cropVolume: ObjectCropVolume?
     let placeRequested: Bool
     let axisMoveCommand: AxisMoveCommand
@@ -103,6 +105,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
         var parent: ObjectCropBox3DView
 
         private var lastPointCount = -1
+        private var lastPreviewSignature = ""
         fileprivate var pan: UIPanGestureRecognizer?
         fileprivate var pinch: UIPinchGestureRecognizer?
         fileprivate var movePan: UIPanGestureRecognizer?
@@ -124,13 +127,37 @@ struct ObjectCropBox3DView: UIViewRepresentable {
 
         func rebuild(_ scnView: SCNView) {
             guard let scene = scnView.scene else { return }
-            if parent.points.count != lastPointCount {
+            let previewSignature = parent.previewMode.rawValue + "|" + String(parent.targetPoints.count)
+            if parent.points.count != lastPointCount || previewSignature != lastPreviewSignature {
                 lastPointCount = parent.points.count
+                lastPreviewSignature = previewSignature
                 scene.rootNode.childNodes
                     .filter { $0.name == "objectPoints" }
                     .forEach { $0.removeFromParentNode() }
                 if !parent.points.isEmpty {
-                    let geometry = SCNGeometry.objectPointCloud(points: parent.points)
+                    let targetSet = Set(parent.targetPoints)
+                    let displayPoints: [ObjectPoint]
+                    let colorTransform: ((ObjectPoint) -> SIMD4<Float>)?
+                    switch parent.previewMode {
+                    case .all:
+                        displayPoints = parent.points
+                        colorTransform = nil
+                    case .highlightTarget:
+                        displayPoints = parent.points
+                        colorTransform = { point in
+                            if targetSet.contains(point) {
+                                return SIMD4(point.r, point.g, point.b, 1)
+                            }
+                            return SIMD4(0.45, 0.48, 0.52, 0.16)
+                        }
+                    case .targetOnly:
+                        displayPoints = parent.points.filter { targetSet.contains($0) }
+                        colorTransform = nil
+                    }
+                    let geometry = SCNGeometry.objectPointCloud(
+                        points: displayPoints,
+                        colorTransform: colorTransform
+                    )
                     let node = SCNNode(geometry: geometry)
                     node.name = "objectPoints"
                     scene.rootNode.addChildNode(node)
@@ -405,7 +432,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
             guard let volume = parent.cropVolume else { return }
             let groundY = parent.points.map { $0.y }.min() ?? 0
             let targetY = groundY + volume.extent.y * 0.5
-            guard abs(volume.center.y - targetY) < 0.4 else { return }
+            guard abs(volume.center.y - targetY) < 0.25 else { return }
             let newCenter = SIMD3<Float>(volume.center.x, targetY, volume.center.z)
             var transform = volume.transform
             transform.columns.3 = SIMD4<Float>(

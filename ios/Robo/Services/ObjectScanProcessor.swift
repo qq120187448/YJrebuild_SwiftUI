@@ -17,7 +17,7 @@ private struct HullVector: Manifold3D.Vector3 {
     }
 }
 
-struct ObjectPoint: Codable, Sendable {
+struct ObjectPoint: Codable, Sendable, Hashable {
     var x: Float
     var y: Float
     var z: Float
