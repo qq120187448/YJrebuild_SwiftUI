@@ -362,12 +362,15 @@ enum ObjectScanProcessor {
         let vertices = buffer.positions.map {
             HullVector(x: Double($0.x), y: Double($0.y), z: Double($0.z))
         }
-        let triangles = stride(from: 0, to: buffer.indices.count, by: 3).map { i in
-            Triangle(
-                Int(buffer.indices[i]),
-                Int(buffer.indices[i + 1]),
-                Int(buffer.indices[i + 2])
-            )
+        var triangles: [Triangle] = []
+        triangles.reserveCapacity(buffer.indices.count / 3)
+        var triangleIndex = 0
+        while triangleIndex + 2 < buffer.indices.count {
+            let a = Int(buffer.indices[triangleIndex])
+            let b = Int(buffer.indices[triangleIndex + 1])
+            let c = Int(buffer.indices[triangleIndex + 2])
+            triangles.append(Triangle(a, b, c))
+            triangleIndex += 3
         }
         let meshGL = MeshGL<HullVector>(vertices: vertices, triangles: triangles)
         var manifold: Manifold<HullVector>?
@@ -493,9 +496,9 @@ enum ObjectScanProcessor {
 
     private static func decodeVoxelKey(_ key: Int64) -> (Int, Int, Int) {
         (
-            (key & 0xFFFFF) - 0x80000,
-            ((key >> 20) & 0xFFFFF) - 0x80000,
-            ((key >> 40) & 0xFFFFF) - 0x80000
+            Int((key & 0xFFFFF) - 0x80000),
+            Int(((key >> 20) & 0xFFFFF) - 0x80000),
+            Int(((key >> 40) & 0xFFFFF) - 0x80000)
         )
     }
 
