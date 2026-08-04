@@ -72,7 +72,14 @@ enum ObjectScanExporter {
         add("凸包表面积", three(input.metrics.convexHullSurfaceAreaM2), "m²")
         add("高度场体积", three(input.metrics.heightfieldVolumeM3), "m³")
         add("高度场表面积", three(input.metrics.heightfieldSurfaceAreaM2), "m²")
+        add("不规则物体表面积（不含地面/墙面接触）", three(input.metrics.heightfieldSurfaceAreaM2), "m²")
+        add("地面接触面积（投影面积）", two(input.metrics.groundContactAreaM2 ?? input.metrics.footprintAreaM2 ?? 0), "m²")
+        add("靠墙接触面积", two(input.metrics.wallContactAreaM2 ?? 0), "m²")
         add("占地面积（投影面积）", two(footprint), "m²")
+        rows.append([
+            XLSXWriter.Cell("备注"),
+            XLSXWriter.Cell("不规则物体表面积按高度场顶部表面计算，已扣除地面接触面积与靠墙接触面积。")
+        ])
 
         var images: [XLSXWriter.ImageAttachment] = []
         if let thumbnail = input.thumbnail {

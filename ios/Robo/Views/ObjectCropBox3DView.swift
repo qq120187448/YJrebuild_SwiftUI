@@ -163,7 +163,6 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                 }
             )
             ObjectBoxVisual.addAxes(to: root, extent: volume.extent)
-            ObjectBoxVisual.addFlow(to: root, extent: volume.extent)
             scene.rootNode.addChildNode(root)
         }
 
@@ -236,6 +235,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                 moveStartScreen = nil
                 moveStartCenter = nil
                 rotateStartTransform = nil
+                snapToGround()
                 if let volume = parent.cropVolume {
                     parent.onCropBoxEditEnded(volume)
                 }
@@ -304,6 +304,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                 isMoving = false
                 moveStartScreen = nil
                 moveStartCenter = nil
+                snapToGround()
                 if let volume = parent.cropVolume {
                     parent.onCropBoxEditEnded(volume)
                 }
@@ -348,6 +349,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
             case .ended, .cancelled:
                 isScaling = false
                 scaleStartExtent = nil
+                snapToGround()
                 if let volume = parent.cropVolume {
                     parent.onCropBoxEditEnded(volume)
                 }
@@ -383,6 +385,28 @@ struct ObjectCropBox3DView: UIViewRepresentable {
             guard let volume = parent.cropVolume else { return }
             let delta: Float = 0.05
             let newCenter = volume.center + axis * delta
+            var transform = volume.transform
+            transform.columns.3 = SIMD4<Float>(
+                newCenter.x,
+                newCenter.y,
+                newCenter.z,
+                1
+            )
+            let updated = ObjectCropVolume(
+                center: newCenter,
+                extent: volume.extent,
+                transform: transform
+            )
+            parent.onCropVolumeChanged(updated)
+            parent.onCropBoxEditEnded(updated)
+        }
+
+        private func snapToGround() {
+            guard let volume = parent.cropVolume else { return }
+            let groundY = parent.points.map { $0.y }.min() ?? 0
+            let targetY = groundY + volume.extent.y * 0.5
+            guard abs(volume.center.y - targetY) < 0.4 else { return }
+            let newCenter = SIMD3<Float>(volume.center.x, targetY, volume.center.z)
             var transform = volume.transform
             transform.columns.3 = SIMD4<Float>(
                 newCenter.x,

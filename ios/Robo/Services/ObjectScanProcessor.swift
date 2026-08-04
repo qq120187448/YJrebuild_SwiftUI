@@ -76,6 +76,8 @@ struct ObjectScanMetrics: Codable, Sendable {
     var convexHullVolumeM3: Double
     var convexHullSurfaceAreaM2: Double
     var footprintAreaM2: Double?
+    var groundContactAreaM2: Double?
+    var wallContactAreaM2: Double?
 }
 
 struct ObjectScanProcessResult: Sendable {
@@ -145,7 +147,9 @@ enum ObjectScanProcessor {
                 heightfieldSurfaceAreaM2: heightfield.surfaceAreaM2,
                 convexHullVolumeM3: hull.volumeM3,
                 convexHullSurfaceAreaM2: hull.surfaceAreaM2,
-                footprintAreaM2: footprint
+                footprintAreaM2: footprint,
+                groundContactAreaM2: footprint,
+                wallContactAreaM2: 0
             )
             options.append(
                 ObjectScanClusterOption(
@@ -189,7 +193,9 @@ enum ObjectScanProcessor {
                 heightfieldSurfaceAreaM2: 0,
                 convexHullVolumeM3: 0,
                 convexHullSurfaceAreaM2: 0,
-                footprintAreaM2: 0
+                footprintAreaM2: 0,
+                groundContactAreaM2: 0,
+                wallContactAreaM2: 0
             )
         }
         let groundY = points.map { $0.y }.min() ?? 0
@@ -212,7 +218,9 @@ enum ObjectScanProcessor {
             heightfieldSurfaceAreaM2: heightfield.surfaceAreaM2,
             convexHullVolumeM3: hull.volumeM3,
             convexHullSurfaceAreaM2: hull.surfaceAreaM2,
-            footprintAreaM2: footprint
+            footprintAreaM2: footprint,
+            groundContactAreaM2: footprint,
+            wallContactAreaM2: 0
         )
     }
 
