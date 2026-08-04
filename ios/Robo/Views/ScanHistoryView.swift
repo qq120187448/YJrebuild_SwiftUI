@@ -1,8 +1,16 @@
 import SwiftUI
 import SwiftData
 
+enum ScanHistoryFilter: Hashable {
+    case all
+    case room
+    case object
+}
+
 struct ScanHistoryView: View {
     @Environment(\.modelContext) private var modelContext
+    @Binding var filter: ScanHistoryFilter
+
     @Query(sort: \RoomScanRecord.capturedAt, order: .reverse)
     private var rooms: [RoomScanRecord]
 
@@ -35,21 +43,27 @@ struct ScanHistoryView: View {
         }
     }
 
+    init(filter: Binding<ScanHistoryFilter> = .constant(.all)) {
+        _filter = filter
+    }
+
     var body: some View {
         NavigationStack {
-            Group {
-                if rooms.isEmpty && objectScans.isEmpty {
-                    ContentUnavailableView {
-                        Label("暂无扫描记录", systemImage: "camera.metering.spot")
-                    } description: {
-                        Text("扫描房间后，工程量清单会保存在这里。")
-                    } actions: {
-                        Button(AppStrings.Scan.start) {
-                            showingLiDAR = true
-                        }
+            List {
+                Section {
+                    Picker("类型", selection: $filter) {
+                        Text("全部").tag(ScanHistoryFilter.all)
+                        Text("房间").tag(ScanHistoryFilter.room)
+                        Text("物体").tag(ScanHistoryFilter.object)
                     }
-                } else {
-                    List {
+                    .pickerStyle(.segmented)
+                }
+                .listRowInsets(EdgeInsets())
+
+                if filter == .all || filter == .room {
+                    if rooms.isEmpty {
+                        emptyRow("暂无房间扫描记录", systemImage: "house")
+                    } else {
                         ForEach(buildingGroups) { group in
                             Section {
                                 ForEach(group.rooms) { room in
@@ -83,7 +97,7 @@ struct ScanHistoryView: View {
                                     Text(group.name)
                                     Spacer()
                                     if group.rooms.count > 1 {
-                                        Button("导出整套") {
+                                        Button("导出整房") {
                                             exportBuilding(group)
                                         }
                                         .font(.caption)
@@ -91,30 +105,34 @@ struct ScanHistoryView: View {
                                 }
                             }
                         }
+                    }
+                }
 
-                        if !objectScans.isEmpty {
-                            Section("物体工程扫描") {
-                                ForEach(objectScans) { record in
-                                    NavigationLink(value: record) {
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(record.objectName)
-                                                .font(.headline)
-                                            Text("点数 \(record.pointCount) · 体积 \(String(format: "%.3f m³", record.heightfieldVolumeM3))")
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                            Text("表面积 \(String(format: "%.3f m²", record.heightfieldSurfaceAreaM2))")
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                        .padding(.vertical, 2)
+                if filter == .all || filter == .object {
+                    if objectScans.isEmpty {
+                        emptyRow("暂无物体工程扫描记录", systemImage: "cube.transparent")
+                    } else {
+                        Section("物体工程扫描") {
+                            ForEach(objectScans) { record in
+                                NavigationLink(value: record) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(record.objectName)
+                                            .font(.headline)
+                                        Text("点数 \(record.pointCount) · 体积 \(String(format: "%.3f m³", record.heightfieldVolumeM3))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Text("表面积 \(String(format: "%.3f m²", record.heightfieldSurfaceAreaM2))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
                                     }
-                                    .swipeActions(edge: .trailing) {
-                                        Button(role: .destructive) {
-                                            modelContext.delete(record)
-                                            try? modelContext.save()
-                                        } label: {
-                                            Label("删除", systemImage: "trash")
-                                        }
+                                    .padding(.vertical, 2)
+                                }
+                                .swipeActions(edge: .trailing) {
+                                    Button(role: .destructive) {
+                                        modelContext.delete(record)
+                                        try? modelContext.save()
+                                    } label: {
+                                        Label("删除", systemImage: "trash")
                                     }
                                 }
                             }
@@ -148,6 +166,17 @@ struct ScanHistoryView: View {
         )) {
             ActivityView(activityItems: shareURLs)
         }
+    }
+
+    private func emptyRow(_ text: String, systemImage: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+            Text(text)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 20)
     }
 
     private func exportBuilding(_ group: BuildingGroup) {

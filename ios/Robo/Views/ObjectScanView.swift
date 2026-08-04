@@ -18,6 +18,8 @@ struct ObjectScanView: View {
     @State private var phase: Phase = .instructions
     @State private var isCapturing = false
     @State private var pointCount = 0
+    @State private var coverageRatio: Float = 0
+    @State private var suggestedAngle: Float?
     @State private var capturedPoints: [ObjectPoint] = []
     @State private var objectName = ""
     @State private var result: ObjectScanProcessResult?
@@ -103,7 +105,7 @@ struct ObjectScanView: View {
             VStack(alignment: .leading, spacing: 12) {
                 tipRow(icon: "figure.walk", text: "围绕物体缓慢移动，让 LiDAR 扫到全部表面")
                 tipRow(icon: "move.3d", text: "尽量保持物体完整出现在画面中")
-                tipRow(icon: "clock", text: "扫描越完整，体积和表面积越准确")
+                tipRow(icon: "scope", text: "按提示移动到未覆盖方向，覆盖率会实时更新")
             }
             .padding(.horizontal, 24)
             Spacer()
@@ -111,6 +113,8 @@ struct ObjectScanView: View {
                 objectName = ""
                 capturedPoints = []
                 pointCount = 0
+                coverageRatio = 0
+                suggestedAngle = nil
                 isProcessing = false
                 isCapturing = true
                 phase = .scanning
@@ -149,6 +153,10 @@ struct ObjectScanView: View {
                 onPointsCaptured: { points in
                     capturedPoints = points
                     processCapturedPoints()
+                },
+                onCoverageUpdate: { ratio, angle in
+                    coverageRatio = ratio
+                    suggestedAngle = angle
                 }
             )
             .ignoresSafeArea()
@@ -157,7 +165,7 @@ struct ObjectScanView: View {
                 HStack(spacing: 10) {
                     Image(systemName: "point.3.connected.trianglepath.dotted")
                         .foregroundStyle(.white)
-                    Text("点云 \(pointCount)")
+                    Text("点云 \(pointCount) · 覆盖 \(Int(coverageRatio * 100))%")
                         .font(.subheadline.bold())
                         .foregroundStyle(.white)
                     Spacer()
@@ -174,24 +182,80 @@ struct ObjectScanView: View {
                 .padding(.horizontal, 16)
 
                 Spacer()
+
+                if coverageRatio < 0.15 && suggestedAngle == nil {
+                    Text("请围绕物体缓慢移动，让 LiDAR 扫到全部表面")
+                        .font(.caption.bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.black.opacity(0.55))
+                        .clipShape(Capsule())
+                        .padding(.bottom, 10)
+                }
+
+                HStack(spacing: 16) {
+                    CoverageRingView(ratio: Double(coverageRatio), suggestedAngle: suggestedAngle)
+                        .frame(width: 128, height: 128)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("已覆盖 \(Int(coverageRatio * 100))%")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                        Text(directionText)
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.white.opacity(0.95))
+                    }
+                }
+                .padding(12)
+                .background(.black.opacity(0.45))
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .padding(.bottom, 24)
             }
         }
     }
 
+    private var directionText: String {
+        guard let angle = suggestedAngle else {
+            return coverageRatio < 0.15 ? "请围绕物体缓慢移动" : "继续环绕扫描，补全未覆盖区域"
+        }
+        let normalized = ((Int(angle) % 360) + 360) % 360
+        let names = ["正前方", "右前方", "右侧", "右后方", "正后方", "左后方", "左侧", "左前方"]
+        let index = (normalized + 22) / 45 % 8
+        return "建议向\(names[index])移动"
+    }
+
     private func resultsView(_ result: ObjectScanProcessResult) -> some View {
         List {
+            Section("3D 预览") {
+                ObjectPointCloud3DView(points: result.points)
+                    .frame(height: 260)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+            }
+
             Section("对象") {
                 TextField("对象名称", text: $objectName)
                     .textFieldStyle(.roundedBorder)
                 LabeledContent("原始点数", value: "\(result.metrics.pointCount)")
                 LabeledContent("处理点数", value: "\(result.metrics.processedPointCount)")
+                LabeledContent("目标点数", value: "\(result.metrics.targetPointCount ?? result.metrics.processedPointCount)")
+                LabeledContent("点簇数量", value: "\(result.metrics.clusterCount ?? 1)")
                 LabeledContent(
-                    "外包围尺寸",
+                    "AABB 外包围尺寸",
                     value: String(
                         format: "%.2f × %.2f × %.2f m",
                         result.metrics.aabb.sizeX,
                         result.metrics.aabb.sizeY,
                         result.metrics.aabb.sizeZ
+                    )
+                )
+                LabeledContent(
+                    "OBB 长×宽×高",
+                    value: String(
+                        format: "%.2f × %.2f × %.2f m",
+                        result.metrics.obbLengthM ?? 0,
+                        result.metrics.obbWidthM ?? 0,
+                        result.metrics.obbHeightM ?? 0
                     )
                 )
             }
@@ -271,13 +335,19 @@ struct ObjectScanView: View {
             objectName: finalName,
             pointCount: result.metrics.pointCount,
             processedPointCount: result.metrics.processedPointCount,
+            targetPointCount: result.metrics.targetPointCount ?? result.metrics.processedPointCount,
+            clusterCount: result.metrics.clusterCount ?? 1,
+            obbLengthM: result.metrics.obbLengthM ?? 0,
+            obbWidthM: result.metrics.obbWidthM ?? 0,
+            obbHeightM: result.metrics.obbHeightM ?? 0,
             heightfieldVolumeM3: result.metrics.heightfieldVolumeM3,
             heightfieldSurfaceAreaM2: result.metrics.heightfieldSurfaceAreaM2,
             convexHullVolumeM3: result.metrics.convexHullVolumeM3,
             convexHullSurfaceAreaM2: result.metrics.convexHullSurfaceAreaM2,
             metricsJSON: result.metricsJSON,
             plyData: result.plyData,
-            usdzData: result.usdzData
+            usdzData: result.usdzData,
+            pointsJSON: (try? JSONEncoder().encode(result.points)) ?? Data()
         )
         modelContext.insert(record)
         try? modelContext.save()
@@ -307,19 +377,55 @@ struct ObjectScanView: View {
     }
 }
 
+private struct CoverageRingView: View {
+    let ratio: Double
+    let suggestedAngle: Float?
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.white.opacity(0.2), lineWidth: 10)
+            Circle()
+                .trim(from: 0, to: max(0.02, min(1, ratio)))
+                .stroke(Color.green, style: StrokeStyle(lineWidth: 10, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            if let suggestedAngle {
+                Image(systemName: "location.north.fill")
+                    .font(.title2)
+                    .foregroundColor(.orange)
+                    .rotationEffect(.degrees(Double(suggestedAngle)))
+            }
+            VStack(spacing: 2) {
+                Text("\(Int(ratio * 100))%")
+                    .font(.headline.monospacedDigit())
+                    .foregroundStyle(.white)
+                Text("覆盖率")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+        }
+        .padding(12)
+        .background(.black.opacity(0.5))
+        .clipShape(Circle())
+    }
+}
+
 private struct ObjectScanARView: UIViewControllerRepresentable {
     @Binding var isCapturing: Bool
     let onPointCount: (Int) -> Void
     let onPointsCaptured: ([ObjectPoint]) -> Void
+    let onCoverageUpdate: ((Float, Float?) -> Void)?
 
     func makeUIViewController(context: Context) -> ObjectScanARViewController {
         let controller = ObjectScanARViewController()
         controller.onPointCount = onPointCount
         controller.onPointsCaptured = onPointsCaptured
+        controller.onCoverageUpdate = onCoverageUpdate
         return controller
     }
 
     func updateUIViewController(_ uiViewController: ObjectScanARViewController, context: Context) {
+        uiViewController.onCoverageUpdate = onCoverageUpdate
         if isCapturing {
             uiViewController.startCapturing()
         } else {
@@ -331,6 +437,7 @@ private struct ObjectScanARView: UIViewControllerRepresentable {
 private final class ObjectScanARViewController: UIViewController, ARSessionDelegate {
     var onPointCount: ((Int) -> Void)?
     var onPointsCaptured: (([ObjectPoint]) -> Void)?
+    var onCoverageUpdate: ((Float, Float?) -> Void)?
 
     private let sceneView = ARSCNView()
     private var isCapturing = false
@@ -378,19 +485,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     private func deliverPoints() {
         guard !didDeliver else { return }
         didDeliver = true
-        let points = voxelMap.values.map { accumulator -> ObjectPoint in
-            let inv = 1 / max(accumulator.count, 1)
-            let position = accumulator.sum * inv
-            let color = accumulator.sumColor * inv
-            return ObjectPoint(
-                x: position.x,
-                y: position.y,
-                z: position.z,
-                r: color.x,
-                g: color.y,
-                b: color.z
-            )
-        }
+        let points = snapshotPoints()
         DispatchQueue.main.async {
             self.onPointCount?(points.count)
             self.onPointsCaptured?(points)
@@ -466,47 +561,101 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
 
         frameCount += 1
         if frameCount % 15 == 0 {
-            let snapshot = voxelMap.values.map { accumulator -> ObjectPoint in
-                let inv = 1 / max(accumulator.count, 1)
-                let position = accumulator.sum * inv
-                let color = accumulator.sumColor * inv
-                return ObjectPoint(
-                    x: position.x,
-                    y: position.y,
-                    z: position.z,
-                    r: color.x,
-                    g: color.y,
-                    b: color.z
-                )
-            }
+            let snapshot = snapshotPoints()
+            let coverage = coverageInfo(from: snapshot, cameraTransform: cameraTransform)
             DispatchQueue.main.async {
                 self.updatePointCloud(snapshot)
                 self.onPointCount?(snapshot.count)
+                self.onCoverageUpdate?(coverage.ratio, coverage.direction)
             }
         }
     }
 
+    private func snapshotPoints() -> [ObjectPoint] {
+        voxelMap.values.map { accumulator -> ObjectPoint in
+            let inv = 1 / max(accumulator.count, 1)
+            let position = accumulator.sum * inv
+            let color = accumulator.sumColor * inv
+            return ObjectPoint(
+                x: position.x,
+                y: position.y,
+                z: position.z,
+                r: color.x,
+                g: color.y,
+                b: color.z
+            )
+        }
+    }
+
+    private func coverageInfo(
+        from points: [ObjectPoint],
+        cameraTransform: simd_float4x4
+    ) -> (ratio: Float, direction: Float?) {
+        guard points.count > 20 else { return (0, nil) }
+        var sum = SIMD3<Float>.zero
+        for point in points {
+            sum += point.position
+        }
+        let centroid = sum / Float(points.count)
+        let sectorCount = 36
+        var occupied = Set<Int>()
+        for point in points {
+            let dx = point.x - centroid.x
+            let dz = point.z - centroid.z
+            let angle = atan2(dx, -dz)
+            var bin = Int(((angle + .pi) / (2 * .pi)) * Float(sectorCount))
+            bin = ((bin % sectorCount) + sectorCount) % sectorCount
+            occupied.insert(bin)
+        }
+        let ratio = Float(occupied.count) / Float(sectorCount)
+
+        var bestStart = 0
+        var bestLength = 0
+        var currentStart = -1
+        var currentLength = 0
+        for i in 0..<(sectorCount * 2) {
+            let bin = i % sectorCount
+            if occupied.contains(bin) {
+                currentStart = -1
+                currentLength = 0
+            } else {
+                if currentStart < 0 {
+                    currentStart = i
+                }
+                currentLength += 1
+                if currentLength > bestLength {
+                    bestLength = currentLength
+                    bestStart = currentStart
+                }
+            }
+        }
+        guard bestLength > 0 else { return (ratio, nil) }
+
+        let midIndex = bestStart + bestLength / 2
+        let midBin = midIndex % sectorCount
+        let worldAngle = -Float.pi + (Float(midBin) + 0.5) * (2 * Float.pi / Float(sectorCount))
+        let forward = SIMD3<Float>(
+            -cameraTransform.columns.2.x,
+            0,
+            -cameraTransform.columns.2.z
+        )
+        let cameraYaw = atan2(forward.x, -forward.z)
+        var relative = (worldAngle - cameraYaw) * 180 / .pi
+        relative = ((relative.truncatingRemainder(dividingBy: 360)) + 360).truncatingRemainder(dividingBy: 360)
+        return (ratio, relative)
+    }
+
     private func updatePointCloud(_ points: [ObjectPoint]) {
         guard !points.isEmpty else { return }
-        let vertices = points.map { SCNVector3($0.x, $0.y, $0.z) }
-        let source = SCNGeometrySource(vertices: vertices)
-        let indices = (0..<Int32(points.count)).map { $0 }
-        let element = SCNGeometryElement(indices: indices, primitiveType: .point)
-        let geometry = SCNGeometry(sources: [source], elements: [element])
-        let material = SCNMaterial()
-        material.shaderModifiers = [
-            .geometry: "#pragma body\n_geometry.pointSize = 6.0;"
-        ]
-        geometry.materials = [material]
-
+        let geometry = SCNGeometry.objectPointCloud(points: points, pointSize: 6)
         sceneView.scene.rootNode.childNodes.forEach { $0.removeFromParentNode() }
         sceneView.scene.rootNode.addChildNode(SCNNode(geometry: geometry))
     }
 
     private func voxelKey(_ position: SIMD3<Float>) -> Int64 {
-        let ix = Int64(floor(position.x / voxelSize)) + 0x80000
-        let iy = Int64(floor(position.y / voxelSize)) + 0x80000
-        let iz = Int64(floor(position.z / voxelSize)) + 0x80000
-        return (ix & 0xFFFFF) | ((iy & 0xFFFFF) << 20) | ((iz & 0xFFFFF) << 40)
+        let ix = Int64(floor(position.x / voxelSize))
+        let iy = Int64(floor(position.y / voxelSize))
+        let iz = Int64(floor(position.z / voxelSize))
+        return ((ix + 0x80000) & 0xFFFFF) | (((iy + 0x80000) & 0xFFFFF) << 20) | (((iz + 0x80000) & 0xFFFFF) << 40)
     }
 }

@@ -4,27 +4,46 @@ struct ObjectScanDetailView: View {
     let record: ObjectScanRecord
 
     @State private var metrics: ObjectScanMetrics?
+    @State private var points: [ObjectPoint] = []
     @State private var shareURLs: [URL] = []
     @State private var errorMessage: String?
 
     var body: some View {
         List {
+            if !points.isEmpty {
+                Section("3D 预览") {
+                    ObjectPointCloud3DView(points: points)
+                        .frame(height: 260)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                }
+            }
+
             Section("对象") {
                 LabeledContent("名称", value: record.objectName)
                 LabeledContent("扫描时间", value: record.capturedAt.formatted())
                 LabeledContent("原始点数", value: "\(record.pointCount)")
                 LabeledContent("处理点数", value: "\(record.processedPointCount)")
-                if let metrics {
-                    LabeledContent(
-                        "外包围尺寸",
-                        value: String(
-                            format: "%.2f × %.2f × %.2f m",
-                            metrics.aabb.sizeX,
-                            metrics.aabb.sizeY,
-                            metrics.aabb.sizeZ
-                        )
+                LabeledContent("目标点数", value: "\(record.targetPointCount)")
+                LabeledContent("点簇数量", value: "\(record.clusterCount)")
+                LabeledContent(
+                    "AABB 外包围尺寸",
+                    value: String(
+                        format: "%.2f × %.2f × %.2f m",
+                        metrics?.aabb.sizeX ?? 0,
+                        metrics?.aabb.sizeY ?? 0,
+                        metrics?.aabb.sizeZ ?? 0
                     )
-                }
+                )
+                LabeledContent(
+                    "OBB 长×宽×高",
+                    value: String(
+                        format: "%.2f × %.2f × %.2f m",
+                        record.obbLengthM,
+                        record.obbWidthM,
+                        record.obbHeightM
+                    )
+                )
             }
 
             Section("堆体/土方（高度场）") {
@@ -64,6 +83,7 @@ struct ObjectScanDetailView: View {
                 ObjectScanMetrics.self,
                 from: record.metricsJSON
             )
+            points = (try? JSONDecoder().decode([ObjectPoint].self, from: record.pointsJSON)) ?? []
         }
         .alert("导出失败", isPresented: .constant(errorMessage != nil)) {
             Button("好") { errorMessage = nil }

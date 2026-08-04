@@ -2,16 +2,17 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var selectedTab = 0
+    @State private var historyFilter: ScanHistoryFilter = .all
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            CaptureHomeView(selectedTab: $selectedTab)
+            CaptureHomeView(selectedTab: $selectedTab, historyFilter: $historyFilter)
                 .tabItem {
                     Label(AppStrings.Tabs.capture, systemImage: "camera.metering.spot")
                 }
                 .tag(0)
 
-            ScanHistoryView()
+            ScanHistoryView(filter: $historyFilter)
                 .tabItem {
                     Label(AppStrings.Tabs.history, systemImage: "archivebox")
                 }

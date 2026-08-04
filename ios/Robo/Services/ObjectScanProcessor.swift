@@ -54,8 +54,13 @@ struct ObjectScanMetrics: Codable, Sendable {
 
     var pointCount: Int
     var processedPointCount: Int
+    var targetPointCount: Int?
+    var clusterCount: Int?
     var groundY: Double
     var aabb: AABB
+    var obbLengthM: Double?
+    var obbWidthM: Double?
+    var obbHeightM: Double?
     var heightfieldVolumeM3: Double
     var heightfieldSurfaceAreaM2: Double
     var convexHullVolumeM3: Double
@@ -63,10 +68,17 @@ struct ObjectScanMetrics: Codable, Sendable {
 }
 
 struct ObjectScanProcessResult: Sendable {
+    var points: [ObjectPoint]
     var metrics: ObjectScanMetrics
     var metricsJSON: Data
     var plyData: Data
     var usdzData: Data?
+}
+
+struct OBBResult: Sendable {
+    var lengthM: Double
+    var widthM: Double
+    var heightM: Double
 }
 
 enum ObjectScanProcessor {
@@ -83,23 +95,39 @@ enum ObjectScanProcessor {
     ) throws -> ObjectScanProcessResult {
         let downsampled = voxelDownsample(points, voxelSize: voxelSize)
         let (keptPoints, groundY) = removeGround(downsampled)
-        let aabb = computeAABB(keptPoints)
-        let heightfield = computeHeightfield(keptPoints, groundY: groundY, gridSize: gridSize)
-        let hull = convexHull(keptPoints)
+        let clusters = connectedClusters(keptPoints, cellSize: 0.08)
+        let clusterCount = clusters.count
+        let targetPoints: [ObjectPoint]
+        if let best = clusters.max(by: { $0.count < $1.count }), best.count >= 20 {
+            targetPoints = best
+        } else {
+            targetPoints = keptPoints
+        }
+
+        let aabb = computeAABB(targetPoints)
+        let obb = computeOBB(targetPoints)
+        let heightfield = computeHeightfield(targetPoints, groundY: groundY, gridSize: gridSize)
+        let hull = convexHull(targetPoints)
 
         let metrics = ObjectScanMetrics(
             pointCount: points.count,
             processedPointCount: keptPoints.count,
+            targetPointCount: targetPoints.count,
+            clusterCount: clusterCount,
             groundY: Double(groundY),
             aabb: aabb,
+            obbLengthM: obb.lengthM,
+            obbWidthM: obb.widthM,
+            obbHeightM: obb.heightM,
             heightfieldVolumeM3: heightfield.volumeM3,
             heightfieldSurfaceAreaM2: heightfield.surfaceAreaM2,
             convexHullVolumeM3: hull.volumeM3,
             convexHullSurfaceAreaM2: hull.surfaceAreaM2
         )
         let metricsJSON = try JSONEncoder().encode(metrics)
-        let ply = plyData(points: downsampled)
+        let ply = plyData(points: targetPoints)
         return ObjectScanProcessResult(
+            points: targetPoints,
             metrics: metrics,
             metricsJSON: metricsJSON,
             plyData: ply,
@@ -142,6 +170,52 @@ enum ObjectScanProcessor {
         return (points.filter { $0.y >= threshold }, groundY)
     }
 
+    static func connectedClusters(_ points: [ObjectPoint], cellSize: Float = 0.08) -> [[ObjectPoint]] {
+        guard cellSize > 0, !points.isEmpty else { return [] }
+        var cells: [Int64: [ObjectPoint]] = [:]
+        for point in points {
+            let ix = Int64(floor(point.x / cellSize))
+            let iy = Int64(floor(point.y / cellSize))
+            let iz = Int64(floor(point.z / cellSize))
+            cells[voxelKey(ix, iy, iz), default: []].append(point)
+        }
+
+        var offsets: [SIMD3<Int64>] = []
+        for dx in -1...1 {
+            for dy in -1...1 {
+                for dz in -1...1 {
+                    if dx != 0 || dy != 0 || dz != 0 {
+                        offsets.append(SIMD3<Int64>(Int64(dx), Int64(dy), Int64(dz)))
+                    }
+                }
+            }
+        }
+
+        var visited = Set<Int64>()
+        var clusters: [[ObjectPoint]] = []
+        for key in cells.keys {
+            guard !visited.contains(key) else { continue }
+            visited.insert(key)
+            var stack = [key]
+            var cluster: [ObjectPoint] = []
+            while let current = stack.popLast() {
+                cluster.append(contentsOf: cells[current] ?? [])
+                let ix = (current & 0xFFFFF) - 0x80000
+                let iy = ((current >> 20) & 0xFFFFF) - 0x80000
+                let iz = ((current >> 40) & 0xFFFFF) - 0x80000
+                for offset in offsets {
+                    let neighborKey = voxelKey(ix + offset.x, iy + offset.y, iz + offset.z)
+                    if cells[neighborKey] != nil && !visited.contains(neighborKey) {
+                        visited.insert(neighborKey)
+                        stack.append(neighborKey)
+                    }
+                }
+            }
+            clusters.append(cluster)
+        }
+        return clusters
+    }
+
     static func computeAABB(_ points: [ObjectPoint]) -> ObjectScanMetrics.AABB {
         guard !points.isEmpty else {
             return ObjectScanMetrics.AABB(minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0)
@@ -156,6 +230,40 @@ enum ObjectScanProcessor {
             maxX: xs.max() ?? 0,
             maxY: ys.max() ?? 0,
             maxZ: zs.max() ?? 0
+        )
+    }
+
+    static func computeOBB(_ points: [ObjectPoint]) -> OBBResult {
+        guard points.count >= 3 else {
+            return OBBResult(lengthM: 0, widthM: 0, heightM: 0)
+        }
+        let mean = points.reduce(SIMD3<Float>.zero) { $0 + $1.position } / Float(points.count)
+        var covariance = [[Float]](repeating: [Float](repeating: 0, count: 3), count: 3)
+        for point in points {
+            let d = point.position - mean
+            for row in 0..<3 {
+                for column in 0..<3 {
+                    covariance[row][column] += d[row] * d[column]
+                }
+            }
+        }
+        let eigenvectors = jacobiEigenvectors(covariance)
+        var extents: [Float] = []
+        for axis in eigenvectors {
+            var minValue = Float.greatestFiniteMagnitude
+            var maxValue = -Float.greatestFiniteMagnitude
+            for point in points {
+                let projection = simd_dot(point.position - mean, axis)
+                minValue = min(minValue, projection)
+                maxValue = max(maxValue, projection)
+            }
+            extents.append(max(maxValue - minValue, 0))
+        }
+        let sorted = extents.sorted(by: >)
+        return OBBResult(
+            lengthM: Double(sorted[0]),
+            widthM: Double(sorted[1]),
+            heightM: Double(sorted[2])
         )
     }
 
@@ -178,7 +286,6 @@ enum ObjectScanProcessor {
         let cellArea = Double(gridSize * gridSize)
         var volume = 0.0
         var surfaceArea = 0.0
-        let g = Double(gridSize)
         let size = Float(gridSize)
 
         func heightAt(_ ix: Int64, _ iz: Int64) -> Float? {
@@ -275,6 +382,70 @@ enum ObjectScanProcessor {
         return try? Data(contentsOf: url)
     }
 
+    private static func jacobiEigenvectors(_ matrix: [[Float]]) -> [SIMD3<Float>] {
+        var a = matrix
+        var v = [[Float]](repeating: [Float](repeating: 0, count: 3), count: 3)
+        v[0][0] = 1
+        v[1][1] = 1
+        v[2][2] = 1
+
+        for _ in 0..<64 {
+            var p = 0
+            var q = 1
+            var largest = abs(a[0][1])
+            if abs(a[0][2]) > largest {
+                p = 0
+                q = 2
+                largest = abs(a[0][2])
+            }
+            if abs(a[1][2]) > largest {
+                p = 1
+                q = 2
+                largest = abs(a[1][2])
+            }
+            if largest < 1e-12 { break }
+
+            let app = a[p][p]
+            let aqq = a[q][q]
+            let apq = a[p][q]
+            let tau = (aqq - app) / (2 * apq)
+            let t = tau >= 0
+                ? 1 / (tau + sqrt(1 + tau * tau))
+                : -1 / (-tau + sqrt(1 + tau * tau))
+            let c = 1 / sqrt(1 + t * t)
+            let s = t * c
+
+            for k in 0..<3 where k != p && k != q {
+                let akp = a[k][p]
+                let akq = a[k][q]
+                a[k][p] = c * akp - s * akq
+                a[p][k] = a[k][p]
+                a[k][q] = s * akp + c * akq
+                a[q][k] = a[k][q]
+            }
+
+            let appNew = c * c * app - 2 * s * c * apq + s * s * aqq
+            let aqqNew = s * s * app + 2 * s * c * apq + c * c * aqq
+            a[p][p] = appNew
+            a[q][q] = aqqNew
+            a[p][q] = 0
+            a[q][p] = 0
+
+            for i in 0..<3 {
+                let vip = v[i][p]
+                let viq = v[i][q]
+                v[i][p] = c * vip - s * viq
+                v[i][q] = s * vip + c * viq
+            }
+        }
+
+        return [
+            SIMD3<Float>(v[0][0], v[1][0], v[2][0]),
+            SIMD3<Float>(v[0][1], v[1][1], v[2][1]),
+            SIMD3<Float>(v[0][2], v[1][2], v[2][2])
+        ]
+    }
+
     private static func triangleArea(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>) -> Double {
         let ab = b - a
         let ac = c - a
@@ -287,10 +458,14 @@ enum ObjectScanProcessor {
     }
 
     private static func voxelKey(_ p: SIMD3<Float>, voxelSize: Float) -> Int64 {
-        let ix = Int64(floor(p.x / voxelSize)) + 0x80000
-        let iy = Int64(floor(p.y / voxelSize)) + 0x80000
-        let iz = Int64(floor(p.z / voxelSize)) + 0x80000
-        return (ix & 0xFFFFF) | ((iy & 0xFFFFF) << 20) | ((iz & 0xFFFFF) << 40)
+        let ix = Int64(floor(p.x / voxelSize))
+        let iy = Int64(floor(p.y / voxelSize))
+        let iz = Int64(floor(p.z / voxelSize))
+        return voxelKey(ix, iy, iz)
+    }
+
+    private static func voxelKey(_ ix: Int64, _ iy: Int64, _ iz: Int64) -> Int64 {
+        ((ix + 0x80000) & 0xFFFFF) | (((iy + 0x80000) & 0xFFFFF) << 20) | (((iz + 0x80000) & 0xFFFFF) << 40)
     }
 
     private static func gridKey(_ p: SIMD3<Float>, gridSize: Float) -> Int64 {

@@ -72,6 +72,7 @@ targets:
       - path: Robo/Views/SettingsView.swift
       - path: Robo/Views/ObjectScanView.swift
       - path: Robo/Views/ObjectScanDetailView.swift
+      - path: Robo/Views/ObjectPointCloud3DView.swift
     dependencies:
       - package: Voxels
       - package: iTriangle
