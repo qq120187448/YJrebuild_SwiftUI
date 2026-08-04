@@ -46,6 +46,7 @@ targets:
       - path: Robo/Models/RoomScanRecord.swift
       - path: Robo/Models/ComponentAdjustment.swift
       - path: Robo/Models/ObjectScanRecord.swift
+      - path: Robo/Models/ObjectCropVolume.swift
       - path: Robo/Services/RoomDataProcessor.swift
       - path: Robo/Services/QuantityTakeoffExporter.swift
       - path: Robo/Services/PhotoStorage.swift
@@ -57,6 +58,7 @@ targets:
       - path: Robo/Services/ModelExportService.swift
       - path: Robo/Services/ObjectScanProcessor.swift
       - path: Robo/Services/ObjectScanSettings.swift
+      - path: Robo/Services/ObjectScanExporter.swift
       - path: Robo/Views/ActivityView.swift
       - path: Robo/Views/ContentView.swift
       - path: Robo/Views/CaptureHomeView.swift
@@ -74,6 +76,7 @@ targets:
       - path: Robo/Views/ObjectScanView.swift
       - path: Robo/Views/ObjectScanDetailView.swift
       - path: Robo/Views/ObjectPointCloud3DView.swift
+      - path: Robo/Views/ObjectCropBox3DView.swift
     dependencies:
       - package: Voxels
       - package: iTriangle

@@ -1,9 +1,45 @@
 import SwiftUI
+import UIKit
 import SceneKit
 import simd
 
 struct ObjectPointCloud3DView: UIViewRepresentable {
     let points: [ObjectPoint]
+
+    static func thumbnail(
+        points: [ObjectPoint],
+        size: CGSize = CGSize(width: 640, height: 480)
+    ) -> UIImage? {
+        guard !points.isEmpty else { return nil }
+        let scnView = SCNView(frame: CGRect(origin: .zero, size: size))
+        scnView.backgroundColor = UIColor(red: 0.06, green: 0.07, blue: 0.09, alpha: 1)
+        scnView.antialiasingMode = .multisampling4X
+        let scene = SCNScene()
+        scnView.scene = scene
+
+        let cameraNode = SCNNode()
+        cameraNode.camera = SCNCamera()
+        let diagonal = boundingDiagonal(points)
+        let distance = max(diagonal * 1.6, 0.9)
+        cameraNode.position = SCNVector3(0, diagonal * 0.45, distance)
+        cameraNode.look(at: SCNVector3(0, 0, 0))
+        scene.rootNode.addChildNode(cameraNode)
+        scnView.pointOfView = cameraNode
+
+        let lightNode = SCNNode()
+        lightNode.light = SCNLight()
+        lightNode.light?.type = .ambient
+        lightNode.light?.color = UIColor(white: 0.75, alpha: 1)
+        scene.rootNode.addChildNode(lightNode)
+
+        let geometry = SCNGeometry.objectPointCloud(points: points)
+        let node = SCNNode(geometry: geometry)
+        let centroid = points.reduce(SIMD3<Float>.zero) { $0 + $1.position } / Float(points.count)
+        node.position = SCNVector3(-centroid.x, -centroid.y, -centroid.z)
+        scene.rootNode.addChildNode(node)
+
+        return scnView.snapshot()
+    }
 
     func makeUIView(context: Context) -> SCNView {
         let scnView = SCNView()
@@ -18,8 +54,8 @@ struct ObjectPointCloud3DView: UIViewRepresentable {
         let cameraNode = SCNNode()
         cameraNode.camera = SCNCamera()
         cameraNode.name = "orbitCamera"
-        let distance = max(boundingDiagonal(points) * 1.6, 0.9)
-        cameraNode.position = SCNVector3(0, boundingDiagonal(points) * 0.45, distance)
+        let distance = max(Self.boundingDiagonal(points) * 1.6, 0.9)
+        cameraNode.position = SCNVector3(0, Self.boundingDiagonal(points) * 0.45, distance)
         cameraNode.look(at: SCNVector3(0, 0, 0))
         scene.rootNode.addChildNode(cameraNode)
         scnView.pointOfView = cameraNode
@@ -53,7 +89,7 @@ struct ObjectPointCloud3DView: UIViewRepresentable {
         scene.rootNode.addChildNode(node)
     }
 
-    private func boundingDiagonal(_ points: [ObjectPoint]) -> Float {
+    private static func boundingDiagonal(_ points: [ObjectPoint]) -> Float {
         guard !points.isEmpty else { return 1 }
         var minX = Float.greatestFiniteMagnitude
         var minY = Float.greatestFiniteMagnitude

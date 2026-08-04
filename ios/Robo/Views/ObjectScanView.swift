@@ -4,35 +4,6 @@ import ARKit
 import SceneKit
 import simd
 
-private enum CropBoxCommand: Equatable {
-    case none
-    case clear
-}
-
-private struct ObjectCropVolume {
-    let center: SIMD3<Float>
-    let extent: SIMD3<Float>
-    let transform: simd_float4x4
-
-    var halfExtent: SIMD3<Float> { extent * 0.5 }
-    var inverseTransform: simd_float4x4 { simd_inverse(transform) }
-
-    func contains(worldPoint: SIMD3<Float>) -> Bool {
-        let local4 = inverseTransform * SIMD4<Float>(
-            worldPoint.x,
-            worldPoint.y,
-            worldPoint.z,
-            1
-        )
-        let local = SIMD3<Float>(local4.x, local4.y, local4.z)
-        let half = halfExtent
-        return abs(local.x) <= half.x
-            && local.y >= (-half.y + 0.01)
-            && local.y <= half.y
-            && abs(local.z) <= half.z
-    }
-}
-
 struct ObjectScanView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
@@ -53,11 +24,12 @@ struct ObjectScanView: View {
     @State private var isProcessing = false
     @State private var errorMessage: String?
     @State private var shareURLs: [URL] = []
+    @State private var showDiscardConfirm = false
 
+    @State private var cropVolume: ObjectCropVolume?
     @State private var isPlacingCropBox = false
-    @State private var cropBoxPlaced = false
-    @State private var cropBoxSize: Float = 1.0
-    @State private var cropBoxCommand: CropBoxCommand = .none
+    @State private var boxMetrics: ObjectScanMetrics?
+    @State private var isComputingBoxMetrics = false
     @State private var pointSize: Double = ObjectScanSettings.pointSize
 
     var body: some View {
@@ -136,9 +108,9 @@ struct ObjectScanView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
             VStack(alignment: .leading, spacing: 12) {
-                tipRow(icon: "square.dashed", text: "点击“放置裁剪盒”，再点击物体中心框选目标")
-                tipRow(icon: "hand.draw", text: "单指旋转裁剪盒，双指拖动，捏合缩放")
-                tipRow(icon: "point.3.connected.trianglepath.dotted", text: "完成后自动剔除墙面地面，可在结果页选择目标点簇")
+                tipRow(icon: "point.3.connected.trianglepath.dotted", text: "围绕物体缓慢移动，让 ARKit 网格覆盖全部表面")
+                tipRow(icon: "square.dashed", text: "扫描完成后在结果页放置裁剪盒，可一次扫描多次计算")
+                tipRow(icon: "hand.tap", text: "拖动红色/绿色/蓝色箭头调整 X/Y/Z 三向尺寸")
             }
             .padding(.horizontal, 24)
             Spacer()
@@ -148,10 +120,9 @@ struct ObjectScanView: View {
                 pointCount = 0
                 selectedClusterIndex = 0
                 isProcessing = false
+                cropVolume = nil
                 isPlacingCropBox = false
-                cropBoxPlaced = false
-                cropBoxSize = 1.0
-                cropBoxCommand = .none
+                boxMetrics = nil
                 pointSize = ObjectScanSettings.pointSize
                 isCapturing = true
                 phase = .scanning
@@ -184,9 +155,6 @@ struct ObjectScanView: View {
         ZStack {
             ObjectScanARView(
                 isCapturing: $isCapturing,
-                isPlacingCropBox: $isPlacingCropBox,
-                cropBoxSize: $cropBoxSize,
-                cropBoxCommand: $cropBoxCommand,
                 pointSize: $pointSize,
                 onPointCount: { count in
                     pointCount = count
@@ -194,13 +162,6 @@ struct ObjectScanView: View {
                 onPointsCaptured: { points in
                     capturedPoints = points
                     processCapturedPoints()
-                },
-                onCropBoxPlaced: {
-                    cropBoxPlaced = true
-                    isPlacingCropBox = false
-                },
-                onCropBoxCleared: {
-                    cropBoxPlaced = false
                 }
             )
             .ignoresSafeArea()
@@ -227,85 +188,77 @@ struct ObjectScanView: View {
 
                 Spacer()
 
-                VStack(spacing: 10) {
-                    Text(cropBoxStatusText)
-                        .font(.caption.bold())
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(.black.opacity(0.55))
-                        .clipShape(Capsule())
-
-                    HStack(spacing: 10) {
-                        Button {
-                            isPlacingCropBox = true
-                        } label: {
-                            Label(
-                                isPlacingCropBox ? "点击物体中心" : "放置裁剪盒",
-                                systemImage: "square.dashed"
-                            )
-                            .font(.subheadline.bold())
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
-                            .background(isPlacingCropBox ? Color.orange : Color.accentColor)
-                            .clipShape(Capsule())
-                        }
-
-                        if cropBoxPlaced {
-                            VStack(spacing: 4) {
-                                Slider(value: $cropBoxSize, in: 0.2...10, step: 0.1)
-                                    .frame(width: 160)
-                                HStack {
-                                    Text("\(cropBoxSize, specifier: "%.1f") m")
-                                        .font(.caption.bold())
-                                        .foregroundStyle(.white)
-                                    Spacer()
-                                    Button {
-                                        cropBoxCommand = .clear
-                                    } label: {
-                                        Image(systemName: "trash")
-                                            .font(.subheadline)
-                                            .foregroundStyle(.white)
-                                    }
-                                }
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(.black.opacity(0.5))
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                        }
-                    }
-                }
-                .padding(12)
-                .background(.black.opacity(0.45))
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .padding(.bottom, 20)
+                Text("扫描完成后在结果页放置裁剪盒，一次扫描可多次计算")
+                    .font(.caption.bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.black.opacity(0.55))
+                    .clipShape(Capsule())
+                    .padding(.bottom, 24)
             }
         }
-    }
-
-    private var cropBoxStatusText: String {
-        if isPlacingCropBox {
-            return "请点击画面中的物体中心，放置裁剪盒"
-        }
-        if cropBoxPlaced {
-            return "单指旋转 · 双指拖动 · 捏合缩放 · 滑块调大小"
-        }
-        return "建议先放置裁剪盒，再围绕物体扫描"
     }
 
     private func resultsView(_ result: ObjectScanProcessResult) -> some View {
-        let selected = selectedOption(result)
+        let current = currentPointsAndMetrics(result)
         return List {
-            Section("3D 预览") {
-                ObjectPointCloud3DView(points: selected.points)
-                    .frame(height: 260)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+            Section("3D 预览与裁剪") {
+                ObjectCropBox3DView(
+                    points: sampled(result.allPoints, limit: 80_000),
+                    cropVolume: cropVolume,
+                    isPlacing: isPlacingCropBox,
+                    onCropVolumeChanged: { volume in
+                        cropVolume = volume
+                        if volume == nil {
+                            boxMetrics = nil
+                        }
+                    },
+                    onCropBoxEditEnded: { volume in
+                        recomputeBoxMetrics(for: volume)
+                    }
+                )
+                .frame(height: 320)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+
+                HStack(spacing: 10) {
+                    Button {
+                        isPlacingCropBox = true
+                    } label: {
+                        Label(
+                            isPlacingCropBox ? "点击地面放置" : "放置裁剪盒",
+                            systemImage: "square.dashed"
+                        )
+                        .font(.subheadline.bold())
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    if cropVolume != nil {
+                        Button {
+                            cropVolume = nil
+                            boxMetrics = nil
+                            isPlacingCropBox = false
+                        } label: {
+                            Label("清除裁剪盒", systemImage: "trash")
+                                .font(.subheadline)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    if isComputingBoxMetrics {
+                        ProgressView()
+                    }
+                }
+
+                if cropVolume != nil {
+                    Text("拖动红/绿/蓝色箭头调整 X/Y/Z 三向尺寸，只计算盒内点云。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
-            if result.clusters.count > 1 {
+            if result.clusters.count > 1 && cropVolume == nil {
                 Section("目标点簇") {
                     Picker("目标点簇", selection: $selectedClusterIndex) {
                         ForEach(result.clusters.indices, id: \.self) { index in
@@ -314,7 +267,7 @@ struct ObjectScanView: View {
                         }
                     }
                     .pickerStyle(.menu)
-                    Text("已自动剔除墙面、地面、天花板、门窗，选择要计算的目标点簇。")
+                    Text("未放置裁剪盒时使用所选点簇计算。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -323,49 +276,52 @@ struct ObjectScanView: View {
             Section("对象") {
                 TextField("对象名称", text: $objectName)
                     .textFieldStyle(.roundedBorder)
-                LabeledContent("原始点数", value: "\(selected.metrics.pointCount)")
-                LabeledContent("处理点数", value: "\(selected.metrics.processedPointCount)")
-                LabeledContent("目标点数", value: "\(selected.metrics.targetPointCount ?? selected.points.count)")
-                LabeledContent("点簇数量", value: "\(selected.metrics.clusterCount ?? 1)")
+                LabeledContent("原始点数", value: "\(current.metrics.pointCount)")
+                LabeledContent("目标点数", value: "\(current.metrics.targetPointCount ?? current.points.count)")
+                LabeledContent("点簇数量", value: "\(current.metrics.clusterCount ?? 1)")
                 LabeledContent(
                     "AABB 外包围尺寸",
                     value: String(
                         format: "%.2f × %.2f × %.2f m",
-                        selected.metrics.aabb.sizeX,
-                        selected.metrics.aabb.sizeY,
-                        selected.metrics.aabb.sizeZ
+                        current.metrics.aabb.sizeX,
+                        current.metrics.aabb.sizeY,
+                        current.metrics.aabb.sizeZ
                     )
                 )
                 LabeledContent(
                     "OBB 长×宽×高",
                     value: String(
                         format: "%.2f × %.2f × %.2f m",
-                        selected.metrics.obbLengthM ?? 0,
-                        selected.metrics.obbWidthM ?? 0,
-                        selected.metrics.obbHeightM ?? 0
+                        current.metrics.obbLengthM ?? 0,
+                        current.metrics.obbWidthM ?? 0,
+                        current.metrics.obbHeightM ?? 0
                     )
+                )
+                LabeledContent(
+                    "占地面积",
+                    value: String(format: "%.2f m²", current.metrics.footprintAreaM2 ?? 0)
                 )
             }
 
             Section("堆体/土方（高度场）") {
                 LabeledContent(
                     "体积",
-                    value: String(format: "%.3f m³", selected.metrics.heightfieldVolumeM3)
+                    value: String(format: "%.3f m³", current.metrics.heightfieldVolumeM3)
                 )
                 LabeledContent(
                     "表面积",
-                    value: String(format: "%.3f m²", selected.metrics.heightfieldSurfaceAreaM2)
+                    value: String(format: "%.3f m²", current.metrics.heightfieldSurfaceAreaM2)
                 )
             }
 
             Section("设备（凸包）") {
                 LabeledContent(
                     "体积",
-                    value: String(format: "%.3f m³", selected.metrics.convexHullVolumeM3)
+                    value: String(format: "%.3f m³", current.metrics.convexHullVolumeM3)
                 )
                 LabeledContent(
                     "表面积",
-                    value: String(format: "%.3f m²", selected.metrics.convexHullSurfaceAreaM2)
+                    value: String(format: "%.3f m²", current.metrics.convexHullSurfaceAreaM2)
                 )
             }
 
@@ -378,15 +334,67 @@ struct ObjectScanView: View {
                 Button {
                     exportFiles(result)
                 } label: {
-                    Label("导出 PLY / USDZ / JSON", systemImage: "square.and.arrow.up")
+                    Label("导出 Excel / PLY / USDZ / JSON", systemImage: "square.and.arrow.up")
+                }
+                Button("不保存退出", role: .destructive) {
+                    showDiscardConfirm = true
                 }
             }
         }
+        .confirmationDialog("放弃本次扫描？", isPresented: $showDiscardConfirm, titleVisibility: .visible) {
+            Button("不保存并退出", role: .destructive) {
+                dismiss()
+            }
+            Button("继续", role: .cancel) {}
+        } message: {
+            Text("当前扫描结果不会保存到历史记录。")
+        }
+    }
+
+    private func currentPointsAndMetrics(
+        _ result: ObjectScanProcessResult
+    ) -> (points: [ObjectPoint], metrics: ObjectScanMetrics) {
+        if let boxMetrics, let cropVolume {
+            let filtered = result.allPoints.filter {
+                cropVolume.contains(worldPoint: $0.position)
+            }
+            return (filtered, boxMetrics)
+        }
+        let option = selectedOption(result)
+        return (option.points, option.metrics)
     }
 
     private func selectedOption(_ result: ObjectScanProcessResult) -> ObjectScanClusterOption {
         let index = min(max(selectedClusterIndex, 0), result.clusters.count - 1)
         return result.clusters[index]
+    }
+
+    private func sampled(_ points: [ObjectPoint], limit: Int) -> [ObjectPoint] {
+        guard points.count > limit else { return points }
+        let stride = max(points.count / limit, 1)
+        var result: [ObjectPoint] = []
+        result.reserveCapacity(limit)
+        var index = 0
+        while index < points.count {
+            result.append(points[index])
+            index += stride
+        }
+        return result
+    }
+
+    private func recomputeBoxMetrics(for volume: ObjectCropVolume) {
+        guard let result else { return }
+        isComputingBoxMetrics = true
+        let filtered = result.allPoints.filter {
+            volume.contains(worldPoint: $0.position)
+        }
+        Task.detached(priority: .userInitiated) {
+            let metrics = ObjectScanProcessor.metrics(for: filtered)
+            await MainActor.run {
+                self.boxMetrics = metrics
+                self.isComputingBoxMetrics = false
+            }
+        }
     }
 
     private func processCapturedPoints() {
@@ -422,15 +430,15 @@ struct ObjectScanView: View {
     }
 
     private func saveRecord(_ result: ObjectScanProcessResult) {
-        let option = selectedOption(result)
-        let metrics = option.metrics
+        let current = currentPointsAndMetrics(result)
+        let metrics = current.metrics
         let name = objectName.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalName = name.isEmpty ? "物体 \(DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .short))" : name
         let record = ObjectScanRecord(
             objectName: finalName,
             pointCount: metrics.pointCount,
             processedPointCount: metrics.processedPointCount,
-            targetPointCount: metrics.targetPointCount ?? option.points.count,
+            targetPointCount: metrics.targetPointCount ?? current.points.count,
             clusterCount: metrics.clusterCount ?? 1,
             obbLengthM: metrics.obbLengthM ?? 0,
             obbWidthM: metrics.obbWidthM ?? 0,
@@ -440,9 +448,11 @@ struct ObjectScanView: View {
             convexHullVolumeM3: metrics.convexHullVolumeM3,
             convexHullSurfaceAreaM2: metrics.convexHullSurfaceAreaM2,
             metricsJSON: (try? JSONEncoder().encode(metrics)) ?? Data(),
-            plyData: ObjectScanProcessor.plyData(points: option.points),
-            usdzData: option.usdzData,
-            pointsJSON: (try? JSONEncoder().encode(option.points)) ?? Data()
+            plyData: ObjectScanProcessor.plyData(points: current.points),
+            usdzData: cropVolume == nil
+                ? selectedOption(result).usdzData
+                : ObjectScanProcessor.convexHull(current.points).usdzData,
+            pointsJSON: (try? JSONEncoder().encode(current.points)) ?? Data()
         )
         modelContext.insert(record)
         try? modelContext.save()
@@ -450,7 +460,7 @@ struct ObjectScanView: View {
     }
 
     private func exportFiles(_ result: ObjectScanProcessResult) {
-        let option = selectedOption(result)
+        let current = currentPointsAndMetrics(result)
         do {
             let directory = FileManager.default.temporaryDirectory
                 .appendingPathComponent("ObjectScan-\(UUID().uuidString)", isDirectory: true)
@@ -458,10 +468,25 @@ struct ObjectScanView: View {
             let base = directory.appendingPathComponent("object-scan")
             let plyURL = base.appendingPathExtension("ply")
             let jsonURL = base.appendingPathExtension("json")
-            try ObjectScanProcessor.plyData(points: option.points).write(to: plyURL)
-            try JSONEncoder().encode(option.metrics).write(to: jsonURL)
-            var urls = [plyURL, jsonURL]
-            if let usdzData = option.usdzData {
+            try ObjectScanProcessor.plyData(points: current.points).write(to: plyURL)
+            try JSONEncoder().encode(current.metrics).write(to: jsonURL)
+
+            let thumbnail = ObjectPointCloud3DView.thumbnail(points: current.points)
+            let excelURL = try ObjectScanExporter.makeExcelFile(
+                input: ObjectScanExporter.Input(
+                    objectName: objectName.isEmpty ? "物体扫描" : objectName,
+                    capturedAt: Date(),
+                    metrics: current.metrics,
+                    rawPointCount: current.metrics.pointCount,
+                    thumbnail: thumbnail
+                )
+            )
+
+            var urls = [excelURL, plyURL, jsonURL]
+            let usdzData = cropVolume == nil
+                ? selectedOption(result).usdzData
+                : ObjectScanProcessor.convexHull(current.points).usdzData
+            if let usdzData {
                 let usdzURL = base.appendingPathExtension("usdz")
                 try usdzData.write(to: usdzURL)
                 urls.append(usdzURL)
@@ -475,47 +500,23 @@ struct ObjectScanView: View {
 
 private struct ObjectScanARView: UIViewControllerRepresentable {
     @Binding var isCapturing: Bool
-    @Binding var isPlacingCropBox: Bool
-    @Binding var cropBoxSize: Float
-    @Binding var cropBoxCommand: CropBoxCommand
     @Binding var pointSize: Double
 
     let onPointCount: (Int) -> Void
     let onPointsCaptured: ([ObjectPoint]) -> Void
-    let onCropBoxPlaced: () -> Void
-    let onCropBoxCleared: () -> Void
 
     func makeUIViewController(context: Context) -> ObjectScanARViewController {
         let controller = ObjectScanARViewController()
         controller.onPointCount = onPointCount
         controller.onPointsCaptured = onPointsCaptured
-        controller.onCropBoxPlaced = onCropBoxPlaced
-        controller.onCropBoxCleared = onCropBoxCleared
         controller.pointSize = pointSize
         return controller
     }
 
     func updateUIViewController(_ uiViewController: ObjectScanARViewController, context: Context) {
-        uiViewController.isPlacingCropBox = isPlacingCropBox
         uiViewController.onPointCount = onPointCount
         uiViewController.onPointsCaptured = onPointsCaptured
-        uiViewController.onCropBoxPlaced = onCropBoxPlaced
-        uiViewController.onCropBoxCleared = onCropBoxCleared
         uiViewController.pointSize = pointSize
-        uiViewController.setCropBoxSize(cropBoxSize)
-
-        switch cropBoxCommand {
-        case .none:
-            break
-        case .clear:
-            uiViewController.clearCropBox()
-        }
-        if cropBoxCommand != .none {
-            DispatchQueue.main.async {
-                cropBoxCommand = .none
-            }
-        }
-
         if isCapturing {
             uiViewController.startCapturing()
         } else {
@@ -527,10 +528,6 @@ private struct ObjectScanARView: UIViewControllerRepresentable {
 private final class ObjectScanARViewController: UIViewController, ARSessionDelegate {
     var onPointCount: ((Int) -> Void)?
     var onPointsCaptured: (([ObjectPoint]) -> Void)?
-    var onCropBoxPlaced: (() -> Void)?
-    var onCropBoxCleared: (() -> Void)?
-
-    var isPlacingCropBox = false
     var pointSize: Double = 1.5
 
     private let sceneView = ARSCNView()
@@ -540,16 +537,6 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     private var voxelSize: Float = 0.02
     private let maxVoxels = 200_000
     private var voxelMap: [Int64: VoxelAccumulator] = [:]
-    private var cropBoxSize: Float = 1.0
-    private var cropVolume: ObjectCropVolume?
-    private var cropBoxNode: SCNNode?
-
-    private var rotateStartScreen: CGPoint?
-    private var rotateStartTransform: simd_float4x4?
-    private var moveStartScreen: CGPoint?
-    private var moveStartCenter: SIMD3<Float>?
-    private var moveStartDepth: Float = 0
-    private var scaleStartExtent: SIMD3<Float>?
 
     private struct VoxelAccumulator {
         var sum = SIMD3<Float>.zero
@@ -565,26 +552,6 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         sceneView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         sceneView.session.delegate = self
         sceneView.rendersContinuously = true
-
-        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
-        tap.cancelsTouchesInView = false
-        sceneView.addGestureRecognizer(tap)
-
-        let rotatePan = UIPanGestureRecognizer(target: self, action: #selector(handleRotatePan(_:)))
-        rotatePan.minimumNumberOfTouches = 1
-        rotatePan.maximumNumberOfTouches = 1
-        rotatePan.cancelsTouchesInView = false
-        sceneView.addGestureRecognizer(rotatePan)
-
-        let movePan = UIPanGestureRecognizer(target: self, action: #selector(handleMovePan(_:)))
-        movePan.minimumNumberOfTouches = 2
-        movePan.maximumNumberOfTouches = 2
-        movePan.cancelsTouchesInView = false
-        sceneView.addGestureRecognizer(movePan)
-
-        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
-        pinch.cancelsTouchesInView = false
-        sceneView.addGestureRecognizer(pinch)
 
         let configuration = ARWorldTrackingConfiguration()
         configuration.planeDetection = [.horizontal]
@@ -617,305 +584,6 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             self.onPointCount?(points.count)
             self.onPointsCaptured?(points)
         }
-    }
-
-    @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
-        guard isPlacingCropBox, recognizer.state == .ended else { return }
-        placeCropBox(at: recognizer.location(in: sceneView))
-    }
-
-    @objc private func handleRotatePan(_ recognizer: UIPanGestureRecognizer) {
-        guard cropVolume != nil, !isPlacingCropBox else { return }
-        let location = recognizer.location(in: sceneView)
-        switch recognizer.state {
-        case .began:
-            rotateStartScreen = location
-            rotateStartTransform = cropVolume?.transform
-        case .changed:
-            guard let start = rotateStartScreen,
-                  let startTransform = rotateStartTransform,
-                  let frame = sceneView.session.currentFrame else {
-                return
-            }
-            let dx = Float(location.x - start.x)
-            let dy = Float(location.y - start.y)
-            let yaw = dx * 0.006
-            let pitch = dy * 0.006
-            let yawQuat = simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0))
-            let cameraRight = SIMD3<Float>(
-                frame.camera.transform.columns.0.x,
-                frame.camera.transform.columns.0.y,
-                frame.camera.transform.columns.0.z
-            )
-            let pitchQuat = simd_quatf(angle: pitch, axis: cameraRight)
-            let rotation = simd_normalize(yawQuat * pitchQuat)
-            let newQuat = simd_normalize(rotation * simd_quatf(startTransform))
-            var newTransform = simd_float4x4(newQuat)
-            newTransform.columns.3 = startTransform.columns.3
-            updateVolumeTransform(newTransform)
-        case .ended, .cancelled:
-            rotateStartScreen = nil
-            rotateStartTransform = nil
-            filterVoxelMapToCropBox()
-        default:
-            break
-        }
-    }
-
-    @objc private func handleMovePan(_ recognizer: UIPanGestureRecognizer) {
-        guard cropVolume != nil, !isPlacingCropBox else { return }
-        let location = recognizer.location(in: sceneView)
-        switch recognizer.state {
-        case .began:
-            guard let center = cropVolume?.center,
-                  let frame = sceneView.session.currentFrame else {
-                return
-            }
-            moveStartScreen = location
-            moveStartCenter = center
-            let cameraPosition = SIMD3<Float>(
-                frame.camera.transform.columns.3.x,
-                frame.camera.transform.columns.3.y,
-                frame.camera.transform.columns.3.z
-            )
-            moveStartDepth = max(simd_length(center - cameraPosition), 0.1)
-        case .changed:
-            guard let start = moveStartScreen,
-                  let startCenter = moveStartCenter,
-                  let frame = sceneView.session.currentFrame else {
-                return
-            }
-            let viewport = sceneView.bounds.size
-            guard viewport.width > 0, viewport.height > 0 else { return }
-            let dx = Float(location.x - start.x)
-            let dy = Float(location.y - start.y)
-            let imageWidth = Float(frame.camera.imageResolution.width)
-            let imageHeight = Float(frame.camera.imageResolution.height)
-            let fx = frame.camera.intrinsics.columns.0.x * Float(viewport.width) / imageWidth
-            let fy = frame.camera.intrinsics.columns.1.y * Float(viewport.height) / imageHeight
-            let localDelta = SIMD3<Float>(
-                dx * moveStartDepth / fx,
-                -dy * moveStartDepth / fy,
-                0
-            )
-            let worldDelta4 = frame.camera.transform * SIMD4<Float>(
-                localDelta.x,
-                localDelta.y,
-                localDelta.z,
-                0
-            )
-            let worldDelta = SIMD3<Float>(worldDelta4.x, worldDelta4.y, worldDelta4.z)
-            updateVolumeCenter(startCenter + worldDelta)
-        case .ended, .cancelled:
-            moveStartScreen = nil
-            moveStartCenter = nil
-            filterVoxelMapToCropBox()
-        default:
-            break
-        }
-    }
-
-    @objc private func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
-        guard cropVolume != nil, !isPlacingCropBox else { return }
-        switch recognizer.state {
-        case .began:
-            scaleStartExtent = cropVolume?.extent
-        case .changed:
-            guard let startExtent = scaleStartExtent else { return }
-            let scale = Float(recognizer.scale)
-            let newExtent = SIMD3<Float>(
-                min(max(startExtent.x * scale, 0.2), 10),
-                min(max(startExtent.y * scale, 0.2), 10),
-                min(max(startExtent.z * scale, 0.2), 10)
-            )
-            updateVolumeExtent(newExtent)
-        case .ended, .cancelled:
-            scaleStartExtent = nil
-            filterVoxelMapToCropBox()
-        default:
-            break
-        }
-    }
-
-    func placeCropBox(at point: CGPoint) {
-        guard let query = sceneView.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal),
-              let result = sceneView.session.raycast(query).first else {
-            return
-        }
-        let worldTransform = result.worldTransform
-        let hit = SIMD3<Float>(
-            worldTransform.columns.3.x,
-            worldTransform.columns.3.y,
-            worldTransform.columns.3.z
-        )
-        let up = simd_normalize(SIMD3<Float>(
-            worldTransform.columns.1.x,
-            worldTransform.columns.1.y,
-            worldTransform.columns.1.z
-        ))
-        let extent = SIMD3<Float>(repeating: cropBoxSize)
-        let center = hit + up * (extent.y * 0.5)
-        var transform = worldTransform
-        transform.columns.3 = SIMD4<Float>(center.x, center.y, center.z, 1)
-        cropVolume = ObjectCropVolume(
-            center: center,
-            extent: extent,
-            transform: transform
-        )
-        voxelMap.removeAll()
-        frameCount = 0
-        updateCropBoxNode()
-        isPlacingCropBox = false
-        onCropBoxPlaced?()
-    }
-
-    func setCropBoxSize(_ size: Float) {
-        let clamped = min(max(size, 0.2), 10)
-        guard abs(clamped - cropBoxSize) > 0.001 else { return }
-        cropBoxSize = clamped
-        guard let volume = cropVolume else { return }
-        let extent = SIMD3<Float>(repeating: cropBoxSize)
-        cropVolume = ObjectCropVolume(
-            center: volume.center,
-            extent: extent,
-            transform: volume.transform
-        )
-        updateCropBoxNode()
-    }
-
-    func clearCropBox() {
-        cropVolume = nil
-        cropBoxNode?.removeFromParentNode()
-        cropBoxNode = nil
-        voxelMap.removeAll()
-        frameCount = 0
-        sceneView.scene.rootNode.childNodes
-            .filter { $0.name == "scanPoints" }
-            .forEach { $0.removeFromParentNode() }
-        onCropBoxCleared?()
-    }
-
-    private func updateVolumeTransform(_ transform: simd_float4x4) {
-        guard let volume = cropVolume else { return }
-        cropVolume = ObjectCropVolume(
-            center: volume.center,
-            extent: volume.extent,
-            transform: transform
-        )
-        updateCropBoxNode()
-    }
-
-    private func updateVolumeCenter(_ center: SIMD3<Float>) {
-        guard let volume = cropVolume else { return }
-        var transform = volume.transform
-        transform.columns.3 = SIMD4<Float>(center.x, center.y, center.z, 1)
-        cropVolume = ObjectCropVolume(
-            center: center,
-            extent: volume.extent,
-            transform: transform
-        )
-        updateCropBoxNode()
-    }
-
-    private func updateVolumeExtent(_ extent: SIMD3<Float>) {
-        guard let volume = cropVolume else { return }
-        cropVolume = ObjectCropVolume(
-            center: volume.center,
-            extent: extent,
-            transform: volume.transform
-        )
-        updateCropBoxNode()
-    }
-
-    private func updateCropBoxNode() {
-        cropBoxNode?.removeFromParentNode()
-        cropBoxNode = nil
-        guard let volume = cropVolume else { return }
-
-        let root = SCNNode()
-        root.name = "cropBox"
-        root.simdTransform = volume.transform
-
-        let fill = SCNBox(
-            width: CGFloat(volume.extent.x),
-            height: CGFloat(volume.extent.y),
-            length: CGFloat(volume.extent.z),
-            chamferRadius: 0
-        )
-        let fillMaterial = SCNMaterial()
-        fillMaterial.lightingModel = .constant
-        fillMaterial.diffuse.contents = UIColor.systemGreen.withAlphaComponent(0.14)
-        fillMaterial.emission.contents = UIColor.systemGreen.withAlphaComponent(0.18)
-        fillMaterial.isDoubleSided = true
-        fill.firstMaterial = fillMaterial
-        root.addChildNode(SCNNode(geometry: fill))
-
-        addEdges(to: root, extent: volume.extent)
-        sceneView.scene.rootNode.addChildNode(root)
-        cropBoxNode = root
-    }
-
-    private func addEdges(to root: SCNNode, extent: SIMD3<Float>) {
-        let half = extent * 0.5
-        let material = SCNMaterial()
-        material.lightingModel = .constant
-        material.diffuse.contents = UIColor.systemGreen
-        material.emission.contents = UIColor.systemGreen
-
-        func addLine(size: SIMD3<Float>, position: SIMD3<Float>) {
-            let box = SCNBox(
-                width: CGFloat(size.x),
-                height: CGFloat(size.y),
-                length: CGFloat(size.z),
-                chamferRadius: 0
-            )
-            box.firstMaterial = material
-            let node = SCNNode(geometry: box)
-            node.position = SCNVector3(position.x, position.y, position.z)
-            root.addChildNode(node)
-        }
-
-        for y in [-half.y, half.y] {
-            for z in [-half.z, half.z] {
-                addLine(
-                    size: SIMD3<Float>(extent.x, 0.02, 0.02),
-                    position: SIMD3<Float>(0, y, z)
-                )
-            }
-        }
-        for x in [-half.x, half.x] {
-            for z in [-half.z, half.z] {
-                addLine(
-                    size: SIMD3<Float>(0.02, extent.y, 0.02),
-                    position: SIMD3<Float>(x, 0, z)
-                )
-            }
-        }
-        for x in [-half.x, half.x] {
-            for y in [-half.y, half.y] {
-                addLine(
-                    size: SIMD3<Float>(0.02, 0.02, extent.z),
-                    position: SIMD3<Float>(x, y, 0)
-                )
-            }
-        }
-    }
-
-    private func pointInsideCropBox(_ world: SIMD3<Float>) -> Bool {
-        cropVolume?.contains(worldPoint: world) ?? true
-    }
-
-    private func filterVoxelMapToCropBox() {
-        guard let volume = cropVolume else { return }
-        var filtered: [Int64: VoxelAccumulator] = [:]
-        for (key, accumulator) in voxelMap {
-            let inv = 1 / max(accumulator.count, 1)
-            let position = accumulator.sum * inv
-            if volume.contains(worldPoint: position) {
-                filtered[key] = accumulator
-            }
-        }
-        voxelMap = filtered
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
@@ -978,8 +646,6 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                     .assumingMemoryBound(to: SIMD3<Float>.self).pointee
                 let world4 = mesh.transform * SIMD4<Float>(local.x, local.y, local.z, 1)
                 let world = SIMD3<Float>(world4.x, world4.y, world4.z)
-                guard pointInsideCropBox(world) else { continue }
-
                 let key = voxelKey(world)
                 if voxelMap[key] == nil && voxelMap.count >= maxVoxels { continue }
 

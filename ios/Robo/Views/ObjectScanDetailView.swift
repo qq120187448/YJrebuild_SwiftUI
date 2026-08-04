@@ -44,6 +44,13 @@ struct ObjectScanDetailView: View {
                         record.obbHeightM
                     )
                 )
+                LabeledContent(
+                    "占地面积",
+                    value: String(
+                        format: "%.2f m²",
+                        metrics?.footprintAreaM2 ?? 0
+                    )
+                )
             }
 
             Section("堆体/土方（高度场）") {
@@ -69,6 +76,11 @@ struct ObjectScanDetailView: View {
             }
 
             Section {
+                Button {
+                    exportExcel()
+                } label: {
+                    Label("导出 Excel", systemImage: "tablecells")
+                }
                 Button {
                     export()
                 } label: {
@@ -120,6 +132,28 @@ struct ObjectScanDetailView: View {
                 urls.append(usdzURL)
             }
             shareURLs = urls
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func exportExcel() {
+        guard let metrics else {
+            errorMessage = "测量数据缺失，无法导出"
+            return
+        }
+        let thumbnail = ObjectPointCloud3DView.thumbnail(points: points)
+        do {
+            let url = try ObjectScanExporter.makeExcelFile(
+                input: ObjectScanExporter.Input(
+                    objectName: record.objectName,
+                    capturedAt: record.capturedAt,
+                    metrics: metrics,
+                    rawPointCount: record.pointCount,
+                    thumbnail: thumbnail
+                )
+            )
+            shareURLs = [url]
         } catch {
             errorMessage = error.localizedDescription
         }

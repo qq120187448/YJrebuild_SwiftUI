@@ -75,10 +75,12 @@ struct ObjectScanMetrics: Codable, Sendable {
     var heightfieldSurfaceAreaM2: Double
     var convexHullVolumeM3: Double
     var convexHullSurfaceAreaM2: Double
+    var footprintAreaM2: Double?
 }
 
 struct ObjectScanProcessResult: Sendable {
     var clusters: [ObjectScanClusterOption]
+    var allPoints: [ObjectPoint]
     var points: [ObjectPoint]
     var metrics: ObjectScanMetrics
     var metricsJSON: Data
@@ -128,6 +130,7 @@ enum ObjectScanProcessor {
             let obb = computeOBB(cluster)
             let heightfield = computeHeightfield(cluster, groundY: groundY, gridSize: gridSize)
             let hull = convexHull(cluster)
+            let footprint = footprintArea(cluster)
             let metrics = ObjectScanMetrics(
                 pointCount: points.count,
                 processedPointCount: keptPoints.count,
@@ -141,7 +144,8 @@ enum ObjectScanProcessor {
                 heightfieldVolumeM3: heightfield.volumeM3,
                 heightfieldSurfaceAreaM2: heightfield.surfaceAreaM2,
                 convexHullVolumeM3: hull.volumeM3,
-                convexHullSurfaceAreaM2: hull.surfaceAreaM2
+                convexHullSurfaceAreaM2: hull.surfaceAreaM2,
+                footprintAreaM2: footprint
             )
             options.append(
                 ObjectScanClusterOption(
@@ -157,11 +161,58 @@ enum ObjectScanProcessor {
         let ply = plyData(points: primary.points)
         return ObjectScanProcessResult(
             clusters: options,
+            allPoints: planeCleaned,
             points: primary.points,
             metrics: primary.metrics,
             metricsJSON: metricsJSON,
             plyData: ply,
             usdzData: primary.usdzData
+        )
+    }
+
+    static func metrics(for points: [ObjectPoint]) -> ObjectScanMetrics {
+        guard !points.isEmpty else {
+            return ObjectScanMetrics(
+                pointCount: 0,
+                processedPointCount: 0,
+                targetPointCount: 0,
+                clusterCount: 0,
+                groundY: 0,
+                aabb: ObjectScanMetrics.AABB(
+                    minX: 0, minY: 0, minZ: 0,
+                    maxX: 0, maxY: 0, maxZ: 0
+                ),
+                obbLengthM: 0,
+                obbWidthM: 0,
+                obbHeightM: 0,
+                heightfieldVolumeM3: 0,
+                heightfieldSurfaceAreaM2: 0,
+                convexHullVolumeM3: 0,
+                convexHullSurfaceAreaM2: 0,
+                footprintAreaM2: 0
+            )
+        }
+        let groundY = points.map { $0.y }.min() ?? 0
+        let aabb = computeAABB(points)
+        let obb = computeOBB(points)
+        let heightfield = computeHeightfield(points, groundY: groundY, gridSize: 0.05)
+        let hull = convexHull(points)
+        let footprint = footprintArea(points)
+        return ObjectScanMetrics(
+            pointCount: points.count,
+            processedPointCount: points.count,
+            targetPointCount: points.count,
+            clusterCount: 1,
+            groundY: Double(groundY),
+            aabb: aabb,
+            obbLengthM: obb.lengthM,
+            obbWidthM: obb.widthM,
+            obbHeightM: obb.heightM,
+            heightfieldVolumeM3: heightfield.volumeM3,
+            heightfieldSurfaceAreaM2: heightfield.surfaceAreaM2,
+            convexHullVolumeM3: hull.volumeM3,
+            convexHullSurfaceAreaM2: hull.surfaceAreaM2,
+            footprintAreaM2: footprint
         )
     }
 
@@ -386,6 +437,49 @@ enum ObjectScanProcessor {
             widthM: Double(sorted[1]),
             heightM: Double(sorted[2])
         )
+    }
+
+    static func footprintArea(_ points: [ObjectPoint]) -> Double {
+        guard points.count >= 3 else { return 0 }
+        let projected = points.map { SIMD2<Float>($0.x, $0.z) }
+        let hull = convexHull2D(projected)
+        guard hull.count >= 3 else { return 0 }
+        var area: Double = 0
+        for index in 0..<hull.count {
+            let a = hull[index]
+            let b = hull[(index + 1) % hull.count]
+            area += Double(a.x * b.y - b.x * a.y)
+        }
+        return abs(area) * 0.5
+    }
+
+    private static func convexHull2D(_ points: [SIMD2<Float>]) -> [SIMD2<Float>] {
+        let sorted = points.sorted {
+            $0.x != $1.x ? $0.x < $1.x : $0.y < $1.y
+        }
+        guard sorted.count >= 3 else { return sorted }
+
+        func cross(_ o: SIMD2<Float>, _ a: SIMD2<Float>, _ b: SIMD2<Float>) -> Float {
+            (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+        }
+
+        var lower: [SIMD2<Float>] = []
+        for point in sorted {
+            while lower.count >= 2 && cross(lower[lower.count - 2], lower[lower.count - 1], point) <= 0 {
+                lower.removeLast()
+            }
+            lower.append(point)
+        }
+        var upper: [SIMD2<Float>] = []
+        for point in sorted.reversed() {
+            while upper.count >= 2 && cross(upper[upper.count - 2], upper[upper.count - 1], point) <= 0 {
+                upper.removeLast()
+            }
+            upper.append(point)
+        }
+        lower.removeLast()
+        upper.removeLast()
+        return lower + upper
     }
 
     static func computeHeightfield(
