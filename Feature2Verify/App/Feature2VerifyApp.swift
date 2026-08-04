@@ -21,7 +21,7 @@ struct Feature2VerifyApp: App {
             let y: Double
             let z: Double
         }
-        let solid = Manifold.cube(size: V(x: 1, y: 2, z: 3))
+        let solid: Manifold<V> = Manifold.cube(size: V(x: 1, y: 2, z: 3))
         _ = solid.meshGL()
     }
 
