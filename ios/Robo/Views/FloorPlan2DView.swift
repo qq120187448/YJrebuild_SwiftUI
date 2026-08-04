@@ -21,6 +21,10 @@ struct FloorPlan2DView: View {
     @State private var selectedHeightText = ""
     @State private var selectedDepthText = ""
     @State private var selectedThicknessText = ""
+    @State private var zoomScale: CGFloat = 1.0
+    @State private var panOffset: CGSize = .zero
+    @State private var lastZoomScale: CGFloat = 1.0
+    @State private var lastPanTranslation: CGSize?
 
     private struct PlanPoint {
         let x: Double
@@ -72,6 +76,48 @@ struct FloorPlan2DView: View {
         adjustments.roomDimensions?.width ?? measuredWidth
     }
 
+    private var planRotationAngle: Double {
+        let points = displayedPoints
+        guard points.count >= 2 else { return 0 }
+        var bestAngle = 0.0
+        var bestLength = -1.0
+        for index in points.indices {
+            let a = points[index]
+            let b = points[(index + 1) % points.count]
+            let dx = b.x - a.x
+            let dy = b.y - a.y
+            let length = (dx * dx + dy * dy).squareRoot()
+            if length > bestLength {
+                bestLength = length
+                bestAngle = atan2(dy, dx)
+            }
+        }
+        return -bestAngle
+    }
+
+    private var orientedPoints: [PlanPoint] {
+        let points = displayedPoints
+        guard !points.isEmpty else { return points }
+        let bounds = polygonBounds(points)
+        let centerX = bounds.minX + bounds.width / 2
+        let centerY = bounds.minY + bounds.height / 2
+        let angle = planRotationAngle
+        let cosA = cos(angle)
+        let sinA = sin(angle)
+        return points.map { point in
+            let dx = point.x - centerX
+            let dy = point.y - centerY
+            return PlanPoint(
+                x: centerX + dx * cosA - dy * sinA,
+                y: centerY + dx * sinA + dy * cosA
+            )
+        }
+    }
+
+    private var orientedBounds: (minX: Double, minY: Double, width: Double, height: Double) {
+        polygonBounds(orientedPoints)
+    }
+
     private var selectedWall: CapturedRoom.Surface? {
         walls.first { $0.identifier.uuidString == selectedComponentID }
     }
@@ -94,6 +140,32 @@ struct FloorPlan2DView: View {
                 .onTapGesture { location in
                     selectComponent(at: location, size: proxy.size)
                 }
+                .gesture(
+                    MagnificationGesture()
+                        .onChanged { value in
+                            let delta = value / lastZoomScale
+                            lastZoomScale = value
+                            zoomScale = min(max(0.2, zoomScale * delta), 6.0)
+                        }
+                        .onEnded { _ in
+                            lastZoomScale = 1.0
+                        }
+                )
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 8)
+                        .onChanged { value in
+                            if lastPanTranslation == nil {
+                                lastPanTranslation = value.translation
+                            }
+                            let last = lastPanTranslation ?? .zero
+                            panOffset.width += value.translation.width - last.width
+                            panOffset.height += value.translation.height - last.height
+                            lastPanTranslation = value.translation
+                        }
+                        .onEnded { _ in
+                            lastPanTranslation = nil
+                        }
+                )
             }
             .frame(maxWidth: .infinity, minHeight: 300)
             .background(Color(uiColor: .systemBackground))
@@ -226,7 +298,7 @@ struct FloorPlan2DView: View {
     }
 
     private func drawPlan(in context: inout GraphicsContext, size: CGSize) {
-        let points = displayedPoints
+        let points = orientedPoints
         guard points.count >= 3 else {
             context.draw(
                 Text("暂无 2D 平面数据，请重新扫描").font(.subheadline),
@@ -235,18 +307,9 @@ struct FloorPlan2DView: View {
             return
         }
 
-        let bounds = polygonBounds(points)
-        let padding = 46.0
-        let scale = min(
-            (size.width - padding * 2) / max(bounds.width, 0.01),
-            (size.height - padding * 2) / max(bounds.height, 0.01)
-        )
-        func project(_ x: Double, _ y: Double) -> CGPoint {
-            CGPoint(
-                x: padding + (x - bounds.minX) * scale,
-                y: padding + (bounds.minY + bounds.height - y) * scale
-            )
-        }
+        let bounds = orientedBounds
+        let project = projection(for: size)
+        let projectWorld = worldProjection(for: size)
 
         drawGrid(in: &context, size: size)
 
@@ -265,11 +328,11 @@ struct FloorPlan2DView: View {
                 wall,
                 index: index,
                 in: &context,
-                project: project
+                project: projectWorld
             )
         }
-        drawOpeningLines(in: &context, project: project)
-        drawObjects(in: &context, project: project)
+        drawOpeningLines(in: &context, project: projectWorld)
+        drawObjects(in: &context, project: projectWorld)
 
         drawDimensionLines(
             in: &context,
@@ -278,7 +341,10 @@ struct FloorPlan2DView: View {
             project: project
         )
 
-        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        let center = project(
+            bounds.minX + bounds.width / 2,
+            bounds.minY + bounds.height / 2
+        )
         context.draw(
             Text(room.roomName).font(.headline),
             at: CGPoint(x: center.x, y: center.y - 18)
@@ -514,18 +580,7 @@ struct FloorPlan2DView: View {
     private func selectComponent(at location: CGPoint, size: CGSize) {
         let points = displayedPoints
         guard points.count >= 3 else { return }
-        let bounds = polygonBounds(points)
-        let padding = 46.0
-        let scale = min(
-            (size.width - padding * 2) / max(bounds.width, 0.01),
-            (size.height - padding * 2) / max(bounds.height, 0.01)
-        )
-        func project(_ x: Double, _ y: Double) -> CGPoint {
-            CGPoint(
-                x: padding + (x - bounds.minX) * scale,
-                y: padding + (bounds.minY + bounds.height - y) * scale
-            )
-        }
+        let project = worldProjection(for: size)
 
         var best: (id: String, distance: CGFloat)?
         for wall in walls {
@@ -778,6 +833,44 @@ struct FloorPlan2DView: View {
             width: (xs.max() ?? 0) - minX,
             height: (ys.max() ?? 0) - minY
         )
+    }
+
+    private func projection(for size: CGSize) -> (Double, Double) -> CGPoint {
+        let bounds = orientedBounds
+        let padding = 46.0
+        let baseScale = min(
+            (size.width - padding * 2) / max(bounds.width, 0.01),
+            (size.height - padding * 2) / max(bounds.height, 0.01)
+        )
+        let scale = baseScale * max(0.2, min(6.0, Double(zoomScale)))
+        let centerX = bounds.minX + bounds.width / 2
+        let centerY = bounds.minY + bounds.height / 2
+        let offsetX = Double(panOffset.width)
+        let offsetY = Double(panOffset.height)
+        return { x, y in
+            CGPoint(
+                x: size.width / 2 + CGFloat(offsetX + (x - centerX) * scale),
+                y: size.height / 2 + CGFloat(offsetY - (y - centerY) * scale)
+            )
+        }
+    }
+
+    private func worldProjection(for size: CGSize) -> (Double, Double) -> CGPoint {
+        let points = displayedPoints
+        let bounds = polygonBounds(points)
+        let centerX = bounds.minX + bounds.width / 2
+        let centerY = bounds.minY + bounds.height / 2
+        let angle = planRotationAngle
+        let cosA = cos(angle)
+        let sinA = sin(angle)
+        let project = projection(for: size)
+        return { x, z in
+            let dx = x - centerX
+            let dy = z - centerY
+            let rotatedX = centerX + dx * cosA - dy * sinA
+            let rotatedZ = centerY + dx * sinA + dy * cosA
+            return project(rotatedX, rotatedZ)
+        }
     }
 
     private func distanceToSegment(_ point: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {

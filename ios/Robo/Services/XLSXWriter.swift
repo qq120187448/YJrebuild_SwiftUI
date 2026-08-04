@@ -239,7 +239,10 @@ enum XLSXWriter {
                 for (imageIndex, image) in sheet.images.enumerated() {
                     let imageNumber = mediaIndex
                     let fileName = "image\(imageNumber).\(image.fileExtension)"
-                    let startRow = image.anchorRow ?? (sheet.rows.count + 1 + imageIndex * 2)
+                    let startRow = max(
+                        0,
+                        (image.anchorRow ?? (sheet.rows.count + 1 + imageIndex * 2)) - 1
+                    )
                     let imageId = imageIndex + 1
                     let displayWidth = image.displayWidth ?? 240
                     let displayHeight = image.displayHeight ?? 180

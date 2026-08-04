@@ -12,6 +12,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
     let onCaptureError: (Error) -> Void
     var onComponentCaptured: (UIImage, String, String) -> Void = { _, _, _ in }
     var onStatusUpdate: (Int, Int) -> Void = { _, _ in }
+    var onPendingUpdate: ([String]) -> Void = { _ in }
 
     func makeUIView(context: Context) -> RoomCaptureView {
         let captureView = RoomCaptureView(frame: .zero)
@@ -39,7 +40,8 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
             onCaptureComplete: onCaptureComplete,
             onCaptureError: onCaptureError,
             onComponentCaptured: onComponentCaptured,
-            onStatusUpdate: onStatusUpdate
+            onStatusUpdate: onStatusUpdate,
+            onPendingUpdate: onPendingUpdate
         )
     }
 
@@ -49,22 +51,18 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
         let onCaptureError: (Error) -> Void
         let onComponentCaptured: (UIImage, String, String) -> Void
         let onStatusUpdate: (Int, Int) -> Void
+        let onPendingUpdate: ([String]) -> Void
         private var seenComponentIDs: Set<String> = []
         private var deliveredComponentIDs: Set<String> = []
         private var pendingComponents: [String: PendingComponent] = [:]
         private var liveComponents: [String: LiveComponentInfo] = [:]
-        private var capturedPhotosByLiveID: [String: (image: UIImage, label: String)] = [:]
+        private var capturedPhotosByLiveID: [String: CapturedPhoto] = [:]
+        private var pendingOrder: [String] = []
         private lazy var ciContext = CIContext()
 
         private let maxCandidates = 5
         private let goodScoreThreshold = 0.09
         private let matchDistanceThreshold: Float = 0.6
-
-        private struct PendingComponent {
-            let label: String
-            var candidates: [(image: UIImage, score: Double)] = []
-            var lastCaptureTime: TimeInterval?
-        }
 
         private enum ComponentKind: Hashable {
             case door
@@ -73,7 +71,29 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
             case object(String)
         }
 
+        private struct Candidate {
+            let image: UIImage
+            let score: Double
+            let center: SIMD3<Float>
+            let dimensions: SIMD3<Float>
+        }
+
+        private struct PendingComponent {
+            let label: String
+            let kind: ComponentKind
+            var candidates: [Candidate] = []
+            var lastCaptureTime: TimeInterval?
+        }
+
         private struct LiveComponentInfo {
+            let kind: ComponentKind
+            let center: SIMD3<Float>
+            let dimensions: SIMD3<Float>
+        }
+
+        private struct CapturedPhoto {
+            let image: UIImage
+            let label: String
             let kind: ComponentKind
             let center: SIMD3<Float>
             let dimensions: SIMD3<Float>
@@ -83,12 +103,14 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
             onCaptureComplete: @escaping (CapturedRoom) -> Void,
             onCaptureError: @escaping (Error) -> Void,
             onComponentCaptured: @escaping (UIImage, String, String) -> Void,
-            onStatusUpdate: @escaping (Int, Int) -> Void
+            onStatusUpdate: @escaping (Int, Int) -> Void,
+            onPendingUpdate: @escaping ([String]) -> Void = { _ in }
         ) {
             self.onCaptureComplete = onCaptureComplete
             self.onCaptureError = onCaptureError
             self.onComponentCaptured = onComponentCaptured
             self.onStatusUpdate = onStatusUpdate
+            self.onPendingUpdate = onPendingUpdate
             super.init()
         }
 
@@ -121,8 +143,10 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
             for (id, label) in found
             where !seenComponentIDs.contains(id) && !deliveredComponentIDs.contains(id) {
                 seenComponentIDs.insert(id)
-                if !hasZeroDimensions(in: room, id: id) {
-                    pendingComponents[id] = PendingComponent(label: label)
+                if !hasZeroDimensions(in: room, id: id),
+                   let kind = componentInfo(in: room, id: id)?.kind {
+                    pendingComponents[id] = PendingComponent(label: label, kind: kind)
+                    pendingOrder.append(id)
                 }
             }
             for (id, _) in found {
@@ -146,16 +170,26 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
                     pendingComponents.removeValue(forKey: id)
                     continue
                 }
-                guard let score = projectionScore(geometry: geometry, frame: frame) else { continue }
+                guard let projection = projectionInfo(geometry: geometry, frame: frame) else { continue }
                 if let lastTime = pending.lastCaptureTime,
                    frame.timestamp - lastTime < 0.3 {
                     continue
                 }
                 var updated = pending
-                updated.candidates.append((snapshot, score))
+                let cropped = croppedImage(
+                    from: snapshot,
+                    rect: projection.rect,
+                    viewport: projection.viewport
+                )
+                updated.candidates.append(Candidate(
+                    image: cropped,
+                    score: projection.score,
+                    center: center(of: geometry.0),
+                    dimensions: geometry.1
+                ))
                 updated.lastCaptureTime = frame.timestamp
                 pendingComponents[id] = updated
-                if updated.candidates.count >= maxCandidates || score >= goodScoreThreshold {
+                if updated.candidates.count >= maxCandidates || projection.score >= goodScoreThreshold {
                     deliverBest(id: id, pending: updated)
                     deliveredComponentIDs.insert(id)
                     pendingComponents.removeValue(forKey: id)
@@ -163,20 +197,39 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
             }
             DispatchQueue.main.async {
                 self.onStatusUpdate(self.deliveredComponentIDs.count, self.seenComponentIDs.count)
+                self.onPendingUpdate(self.pendingLabels)
             }
+        }
+
+        private var pendingLabels: [String] {
+            pendingOrder.compactMap { pendingComponents[$0]?.label }
         }
 
         private func deliverBest(id: String, pending: PendingComponent) {
             guard let best = pending.candidates.max(by: { $0.score < $1.score }) else { return }
+            let kind = liveComponents[id]?.kind ?? pending.kind
             let resized = ImageResizer.resized(best.image, maxDimension: 1024)
-            capturedPhotosByLiveID[id] = (resized, pending.label)
+            capturedPhotosByLiveID[id] = CapturedPhoto(
+                image: resized,
+                label: pending.label,
+                kind: kind,
+                center: best.center,
+                dimensions: best.dimensions
+            )
             deliveredComponentIDs.insert(id)
         }
 
         private func deliverFallback(id: String, pending: PendingComponent) {
             if let best = pending.candidates.max(by: { $0.score < $1.score }) {
+                let kind = liveComponents[id]?.kind ?? pending.kind
                 let resized = ImageResizer.resized(best.image, maxDimension: 1024)
-                capturedPhotosByLiveID[id] = (resized, pending.label)
+                capturedPhotosByLiveID[id] = CapturedPhoto(
+                    image: resized,
+                    label: pending.label,
+                    kind: kind,
+                    center: best.center,
+                    dimensions: best.dimensions
+                )
             }
             deliveredComponentIDs.insert(id)
         }
@@ -227,7 +280,16 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
             return nil
         }
 
-        private func projectionScore(geometry: (simd_float4x4, simd_float3), frame: ARFrame) -> Double? {
+        private struct ProjectionInfo {
+            let score: Double
+            let rect: CGRect
+            let viewport: CGSize
+        }
+
+        private func projectionInfo(
+            geometry: (simd_float4x4, simd_float3),
+            frame: ARFrame
+        ) -> ProjectionInfo? {
             let buffer = frame.capturedImage
             let viewport = CGSize(
                 width: CGFloat(CVPixelBufferGetHeight(buffer)),
@@ -274,21 +336,61 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
             let ys = points.map { $0.y }
             let width = max(0, (xs.max() ?? 0) - (xs.min() ?? 0))
             let height = max(0, (ys.max() ?? 0) - (ys.min() ?? 0))
+            guard width > 0, height > 0 else { return nil }
+            let rect = CGRect(
+                x: xs.min() ?? 0,
+                y: ys.min() ?? 0,
+                width: width,
+                height: height
+            )
             let visibleFraction = Double(insideCount) / Double(localCorners.count)
-            return visibleFraction * Double(width * height) / Double(viewport.width * viewport.height)
+            let score = visibleFraction * Double(width * height) / Double(viewport.width * viewport.height)
+            return ProjectionInfo(score: score, rect: rect, viewport: viewport)
+        }
+
+        private func croppedImage(
+            from image: UIImage,
+            rect: CGRect,
+            viewport: CGSize
+        ) -> UIImage {
+            let imageSize = image.size
+            guard imageSize.width > 0, imageSize.height > 0,
+                  rect.width > 4, rect.height > 4,
+                  viewport.width > 0, viewport.height > 0 else {
+                return image
+            }
+            let scaleX = imageSize.width / viewport.width
+            let scaleY = imageSize.height / viewport.height
+            var crop = CGRect(
+                x: rect.minX * scaleX,
+                y: rect.minY * scaleY,
+                width: rect.width * scaleX,
+                height: rect.height * scaleY
+            )
+            let padX = crop.width * 0.12
+            let padY = crop.height * 0.12
+            crop = crop
+                .insetBy(dx: -padX, dy: -padY)
+                .intersection(CGRect(origin: .zero, size: imageSize))
+            guard crop.width >= 4, crop.height >= 4,
+                  let cgImage = image.cgImage,
+                  let croppedCG = cgImage.cropping(to: crop) else {
+                return image
+            }
+            return UIImage(
+                cgImage: croppedCG,
+                scale: image.scale,
+                orientation: image.imageOrientation
+            )
         }
 
         private func snapshot(from frame: ARFrame) -> UIImage? {
             let ciImage = CIImage(cvPixelBuffer: frame.capturedImage)
-            guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else { return nil }
-
-            let raw = UIImage(cgImage: cgImage, scale: 1.0, orientation: .right)
-            let size = raw.size
-            UIGraphicsBeginImageContextWithOptions(size, false, 1.0)
-            raw.draw(in: CGRect(origin: .zero, size: size))
-            let normalized = UIGraphicsGetImageFromCurrentImageContext()
-            UIGraphicsEndImageContext()
-            return normalized ?? raw
+            let oriented = ciImage.oriented(.right)
+            guard let cgImage = ciContext.createCGImage(oriented, from: oriented.extent) else {
+                return nil
+            }
+            return UIImage(cgImage: cgImage)
         }
 
         func captureView(shouldPresent roomDataForProcessing: CapturedRoomData, error: (any Error)?) -> Bool {
@@ -341,13 +443,47 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
                 ))
             }
 
+            var usedFinalIndexes = Set<Int>()
+            var usedLiveIDs = Set<String>()
+            var assignment: [Int: String] = [:]
+
+            var pairs: [(distance: Float, finalIndex: Int, liveID: String)] = []
+            for (finalIndex, component) in finalComponents.enumerated() {
+                for (liveID, photo) in capturedPhotosByLiveID where photo.kind == component.kind {
+                    pairs.append((
+                        simd_distance(photo.center, component.center),
+                        finalIndex,
+                        liveID
+                    ))
+                }
+            }
+            pairs.sort { $0.distance < $1.distance }
+            for pair in pairs
+            where !usedFinalIndexes.contains(pair.finalIndex) && !usedLiveIDs.contains(pair.liveID) {
+                guard pair.distance <= matchDistanceThreshold else { continue }
+                assignment[pair.finalIndex] = pair.liveID
+                usedFinalIndexes.insert(pair.finalIndex)
+                usedLiveIDs.insert(pair.liveID)
+            }
+
+            for (finalIndex, component) in finalComponents.enumerated()
+            where !usedFinalIndexes.contains(finalIndex) {
+                for (liveID, photo) in capturedPhotosByLiveID
+                where !usedLiveIDs.contains(liveID)
+                    && photo.kind == component.kind
+                    && photo.label == component.label {
+                    assignment[finalIndex] = liveID
+                    usedFinalIndexes.insert(finalIndex)
+                    usedLiveIDs.insert(liveID)
+                    break
+                }
+            }
+
             var matchedCount = 0
-            for component in finalComponents {
+            for (index, component) in finalComponents.enumerated() {
                 let idString = component.id.uuidString
-                guard let liveID = bestLiveMatch(
-                    kind: component.kind,
-                    center: component.center
-                ), let photo = capturedPhotosByLiveID[liveID] else {
+                guard let liveID = assignment[index],
+                      let photo = capturedPhotosByLiveID[liveID] else {
                     continue
                 }
                 deliver(image: photo.image, label: component.label, id: idString)
@@ -356,20 +492,8 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
             }
             DispatchQueue.main.async {
                 self.onStatusUpdate(matchedCount, finalComponents.count)
+                self.onPendingUpdate([])
             }
-        }
-
-        private func bestLiveMatch(kind: ComponentKind, center: SIMD3<Float>) -> String? {
-            var bestID: String?
-            var bestDistance = matchDistanceThreshold
-            for (id, info) in liveComponents where info.kind == kind {
-                let distance = simd_distance(info.center, center)
-                if distance < bestDistance {
-                    bestDistance = distance
-                    bestID = id
-                }
-            }
-            return bestID
         }
 
         private func componentInfo(

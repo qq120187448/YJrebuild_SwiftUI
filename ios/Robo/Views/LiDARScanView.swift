@@ -19,6 +19,7 @@ struct LiDARScanView: View {
     @State private var suiteMode = false
     @State private var photographedCount = 0
     @State private var recognizedCount = 0
+    @State private var pendingLabels: [String] = []
 
     private enum ScanPhase {
         case instructions
@@ -174,6 +175,9 @@ struct LiDARScanView: View {
                 onStatusUpdate: { photographed, recognized in
                     photographedCount = photographed
                     recognizedCount = recognized
+                },
+                onPendingUpdate: { labels in
+                    pendingLabels = labels
                 }
             )
             .ignoresSafeArea()
@@ -199,9 +203,34 @@ struct LiDARScanView: View {
                 .padding(.top, 8)
                 .padding(.horizontal, 16)
 
+                if !pendingLabels.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("待拍摄：\(pendingText)")
+                            .font(.caption.bold())
+                            .foregroundStyle(.white)
+                        Text("请对准未拍摄构件，移动到画面中央再稍作停留")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(.black.opacity(0.55))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .padding(.horizontal, 16)
+                    .padding(.top, 6)
+                }
+
                 Spacer()
             }
         }
+    }
+
+    private var pendingText: String {
+        let shown = pendingLabels.prefix(4).joined(separator: "、")
+        if pendingLabels.count > 4 {
+            return "\(shown) 等 \(pendingLabels.count) 个"
+        }
+        return shown
     }
 
     private func updateScreenSleepPrevention() {

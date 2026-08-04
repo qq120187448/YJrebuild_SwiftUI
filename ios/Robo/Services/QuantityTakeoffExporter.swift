@@ -605,6 +605,7 @@ enum QuantityTakeoffExporter {
         var images: [XLSXWriter.ImageAttachment] = []
         var rowHeights: [Int: Double] = [:]
         var photoLinks: [String: String] = [:]
+        var maxImageWidth = 240.0
 
         for photo in photos {
             let labelRow = rows.count + 1
@@ -612,7 +613,8 @@ enum QuantityTakeoffExporter {
             let photoRow = labelRow
 
             let (displayWidth, displayHeight) = displaySize(for: photo.data)
-            rowHeights[photoRow] = max(40, displayHeight * 0.75 + 5)
+            maxImageWidth = max(maxImageWidth, displayWidth)
+            rowHeights[photoRow] = max(40, displayHeight * 0.75 + 8)
 
             images.append(XLSXWriter.ImageAttachment(
                 label: photo.label,
@@ -645,7 +647,10 @@ enum QuantityTakeoffExporter {
             name: sheetPrefix.isEmpty ? "构件照片" : "\(sheetPrefix)-构件照片",
             rows: rows,
             images: images,
-            columnWidths: [18, 32],
+            columnWidths: [
+                18,
+                max(18, (maxImageWidth / 6.5).rounded() + 1)
+            ],
             rowHeights: rowHeights
         )
         return (sheet, photoLinks)
@@ -677,9 +682,17 @@ enum QuantityTakeoffExporter {
     }
 
     private static func displaySize(for data: Data) -> (width: Double, height: Double) {
-        guard let image = UIImage(data: data) else { return (240, 180) }
-        let width = Double(image.size.width)
-        let height = Double(image.size.height)
+        guard let image = UIImage(data: data), let cgImage = image.cgImage else {
+            return (240, 180)
+        }
+        var width = Double(cgImage.width)
+        var height = Double(cgImage.height)
+        switch image.imageOrientation {
+        case .left, .right, .leftMirrored, .rightMirrored:
+            swap(&width, &height)
+        default:
+            break
+        }
         guard width > 0, height > 0 else { return (240, 180) }
         let maxWidth = 320.0
         let maxHeight = 300.0
