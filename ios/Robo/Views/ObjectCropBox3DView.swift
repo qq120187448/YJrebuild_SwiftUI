@@ -15,7 +15,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> SCNView {
         let scnView = SCNView()
-        scnView.allowsCameraControl = !parent.isPlacing
+        scnView.allowsCameraControl = !isPlacing
         scnView.antialiasingMode = .multisampling4X
         scnView.backgroundColor = UIColor(red: 0.06, green: 0.07, blue: 0.09, alpha: 1)
         scnView.scene = SCNScene()
