@@ -107,6 +107,8 @@ extension SCNGeometry {
         let element = SCNGeometryElement(indices: indices, primitiveType: .point)
         let geometry = SCNGeometry(sources: [vertexSource, colorSource], elements: [element])
         let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = UIColor.white
         material.shaderModifiers = [
             .geometry: "#pragma body\n_geometry.pointSize = \(pointSize);"
         ]

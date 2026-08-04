@@ -23,14 +23,24 @@ struct ObjectPoint: Codable, Sendable {
     var r: Float
     var g: Float
     var b: Float
+    var classification: Int?
 
-    init(x: Float, y: Float, z: Float, r: Float = 0.7, g: Float = 0.8, b: Float = 1.0) {
+    init(
+        x: Float,
+        y: Float,
+        z: Float,
+        r: Float = 0.7,
+        g: Float = 0.8,
+        b: Float = 1.0,
+        classification: Int? = nil
+    ) {
         self.x = x
         self.y = y
         self.z = z
         self.r = r
         self.g = g
         self.b = b
+        self.classification = classification
     }
 
     var position: SIMD3<Float> {
@@ -68,10 +78,17 @@ struct ObjectScanMetrics: Codable, Sendable {
 }
 
 struct ObjectScanProcessResult: Sendable {
+    var clusters: [ObjectScanClusterOption]
     var points: [ObjectPoint]
     var metrics: ObjectScanMetrics
     var metricsJSON: Data
     var plyData: Data
+    var usdzData: Data?
+}
+
+struct ObjectScanClusterOption: Sendable {
+    var points: [ObjectPoint]
+    var metrics: ObjectScanMetrics
     var usdzData: Data?
 }
 
@@ -93,46 +110,68 @@ enum ObjectScanProcessor {
         voxelSize: Float = 0.02,
         gridSize: Float = 0.05
     ) throws -> ObjectScanProcessResult {
-        let downsampled = voxelDownsample(points, voxelSize: voxelSize)
+        let nonBackground = points.filter { !isBackgroundClassification($0.classification) }
+        let source = nonBackground.isEmpty ? points : nonBackground
+        let downsampled = voxelDownsample(source, voxelSize: voxelSize)
         let (keptPoints, groundY) = removeGround(downsampled)
-        let clusters = connectedClusters(keptPoints, cellSize: 0.08)
-        let clusterCount = clusters.count
-        let targetPoints: [ObjectPoint]
-        if let best = clusters.max(by: { $0.count < $1.count }), best.count >= 20 {
-            targetPoints = best
-        } else {
-            targetPoints = keptPoints
+        let allClusters = connectedClusters(keptPoints, cellSize: 0.08)
+        let candidateClusters = allClusters
+            .filter { $0.count >= 20 }
+            .sorted { $0.count > $1.count }
+        let totalClusterCount = allClusters.count
+        let candidates = candidateClusters.isEmpty ? [keptPoints] : Array(candidateClusters.prefix(6))
+
+        var options: [ObjectScanClusterOption] = []
+        for cluster in candidates {
+            let aabb = computeAABB(cluster)
+            let obb = computeOBB(cluster)
+            let heightfield = computeHeightfield(cluster, groundY: groundY, gridSize: gridSize)
+            let hull = convexHull(cluster)
+            let metrics = ObjectScanMetrics(
+                pointCount: points.count,
+                processedPointCount: keptPoints.count,
+                targetPointCount: cluster.count,
+                clusterCount: totalClusterCount,
+                groundY: Double(groundY),
+                aabb: aabb,
+                obbLengthM: obb.lengthM,
+                obbWidthM: obb.widthM,
+                obbHeightM: obb.heightM,
+                heightfieldVolumeM3: heightfield.volumeM3,
+                heightfieldSurfaceAreaM2: heightfield.surfaceAreaM2,
+                convexHullVolumeM3: hull.volumeM3,
+                convexHullSurfaceAreaM2: hull.surfaceAreaM2
+            )
+            options.append(
+                ObjectScanClusterOption(
+                    points: cluster,
+                    metrics: metrics,
+                    usdzData: hull.usdzData
+                )
+            )
         }
 
-        let aabb = computeAABB(targetPoints)
-        let obb = computeOBB(targetPoints)
-        let heightfield = computeHeightfield(targetPoints, groundY: groundY, gridSize: gridSize)
-        let hull = convexHull(targetPoints)
-
-        let metrics = ObjectScanMetrics(
-            pointCount: points.count,
-            processedPointCount: keptPoints.count,
-            targetPointCount: targetPoints.count,
-            clusterCount: clusterCount,
-            groundY: Double(groundY),
-            aabb: aabb,
-            obbLengthM: obb.lengthM,
-            obbWidthM: obb.widthM,
-            obbHeightM: obb.heightM,
-            heightfieldVolumeM3: heightfield.volumeM3,
-            heightfieldSurfaceAreaM2: heightfield.surfaceAreaM2,
-            convexHullVolumeM3: hull.volumeM3,
-            convexHullSurfaceAreaM2: hull.surfaceAreaM2
-        )
-        let metricsJSON = try JSONEncoder().encode(metrics)
-        let ply = plyData(points: targetPoints)
+        let primary = options[0]
+        let metricsJSON = try JSONEncoder().encode(primary.metrics)
+        let ply = plyData(points: primary.points)
         return ObjectScanProcessResult(
-            points: targetPoints,
-            metrics: metrics,
+            clusters: options,
+            points: primary.points,
+            metrics: primary.metrics,
             metricsJSON: metricsJSON,
             plyData: ply,
-            usdzData: hull.usdzData
+            usdzData: primary.usdzData
         )
+    }
+
+    static func isBackgroundClassification(_ classification: Int?) -> Bool {
+        guard let classification else { return false }
+        // ARMeshClassification: 1 wall, 2 floor, 3 ceiling, 6 window, 7 door
+        return classification == 1
+            || classification == 2
+            || classification == 3
+            || classification == 6
+            || classification == 7
     }
 
     static func voxelDownsample(_ points: [ObjectPoint], voxelSize: Float) -> [ObjectPoint] {
