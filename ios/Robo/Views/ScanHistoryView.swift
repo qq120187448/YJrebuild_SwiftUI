@@ -6,6 +6,9 @@ struct ScanHistoryView: View {
     @Query(sort: \RoomScanRecord.capturedAt, order: .reverse)
     private var rooms: [RoomScanRecord]
 
+    @Query(sort: \ObjectScanRecord.capturedAt, order: .reverse)
+    private var objectScans: [ObjectScanRecord]
+
     @State private var showingLiDAR = false
     @State private var shareURLs: [URL] = []
 
@@ -35,7 +38,7 @@ struct ScanHistoryView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if rooms.isEmpty {
+                if rooms.isEmpty && objectScans.isEmpty {
                     ContentUnavailableView {
                         Label("暂无扫描记录", systemImage: "camera.metering.spot")
                     } description: {
@@ -88,12 +91,43 @@ struct ScanHistoryView: View {
                                 }
                             }
                         }
+
+                        if !objectScans.isEmpty {
+                            Section("物体工程扫描") {
+                                ForEach(objectScans) { record in
+                                    NavigationLink(value: record) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(record.objectName)
+                                                .font(.headline)
+                                            Text("点数 \(record.pointCount) · 体积 \(String(format: "%.3f m³", record.heightfieldVolumeM3))")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                            Text("表面积 \(String(format: "%.3f m²", record.heightfieldSurfaceAreaM2))")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        .padding(.vertical, 2)
+                                    }
+                                    .swipeActions(edge: .trailing) {
+                                        Button(role: .destructive) {
+                                            modelContext.delete(record)
+                                            try? modelContext.save()
+                                        } label: {
+                                            Label("删除", systemImage: "trash")
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
             .navigationTitle("历史记录")
             .navigationDestination(for: RoomScanRecord.self) { room in
                 RoomDetailView(room: room)
+            }
+            .navigationDestination(for: ObjectScanRecord.self) { record in
+                ObjectScanDetailView(record: record)
             }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {

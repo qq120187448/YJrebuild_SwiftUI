@@ -8,6 +8,7 @@ struct CaptureHomeView: View {
     private var rooms: [RoomScanRecord]
 
     @State private var showingLiDARScan = false
+    @State private var showingObjectScan = false
 
     var body: some View {
         NavigationStack {
@@ -60,12 +61,28 @@ struct CaptureHomeView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 .padding(.horizontal, 40)
+
+                Button {
+                    showingObjectScan = true
+                } label: {
+                    Label("物体工程扫描", systemImage: "cube.transparent")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(.secondary.opacity(0.15))
+                        .foregroundStyle(.accentColor)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .padding(.horizontal, 40)
                 .padding(.bottom, 32)
             }
             .navigationTitle(AppStrings.Tabs.capture)
         }
         .fullScreenCover(isPresented: $showingLiDARScan) {
             LiDARScanView()
+        }
+        .fullScreenCover(isPresented: $showingObjectScan) {
+            ObjectScanView()
         }
     }
 }

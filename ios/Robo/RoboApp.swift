@@ -7,7 +7,10 @@ struct RoboApp: App {
 
     init() {
         do {
-            modelContainer = try ModelContainer(for: RoomScanRecord.self)
+            modelContainer = try ModelContainer(
+                for: RoomScanRecord.self,
+                ObjectScanRecord.self
+            )
         } catch {
             fatalError("无法创建数据存储：\(error.localizedDescription)")
         }

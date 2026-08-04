@@ -6,6 +6,20 @@ options:
   developmentLanguage: zh-Hans
   xcodeVersion: "26.0"
 
+packages:
+  Voxels:
+    url: https://github.com/heckj/Voxels.git
+    from: 0.2.6
+  iTriangle:
+    url: https://github.com/iShape-Swift/iTriangle.git
+    from: 1.17.0
+  Euclid:
+    url: https://github.com/nicklockwood/Euclid.git
+    from: 0.8.20
+  Manifold:
+    url: https://github.com/tomasf/manifold-swift.git
+    from: 1.1.0
+
 settings:
   base:
     DEVELOPMENT_TEAM: R3Z5CY34Q5
@@ -16,6 +30,9 @@ settings:
     SWIFT_VERSION: 5.9
     IPHONEOS_DEPLOYMENT_TARGET: 17.0
     TARGETED_DEVICE_FAMILY: 1
+    SWIFT_OBJC_INTEROP_MODE: objcxx
+    CLANG_CXX_LANGUAGE_STANDARD: "c++17"
+    CLANG_CXX_LIBRARY: libc++
 
 targets:
   RoboScan:
@@ -28,6 +45,7 @@ targets:
       - path: Robo/Models/PhotoAttachment.swift
       - path: Robo/Models/RoomScanRecord.swift
       - path: Robo/Models/ComponentAdjustment.swift
+      - path: Robo/Models/ObjectScanRecord.swift
       - path: Robo/Services/RoomDataProcessor.swift
       - path: Robo/Services/QuantityTakeoffExporter.swift
       - path: Robo/Services/PhotoStorage.swift
@@ -37,6 +55,7 @@ targets:
       - path: Robo/Services/ExportService.swift
       - path: Robo/Services/FloorPlanSVGGenerator.swift
       - path: Robo/Services/ModelExportService.swift
+      - path: Robo/Services/ObjectScanProcessor.swift
       - path: Robo/Views/ActivityView.swift
       - path: Robo/Views/ContentView.swift
       - path: Robo/Views/CaptureHomeView.swift
@@ -51,6 +70,13 @@ targets:
       - path: Robo/Views/FloorPlan2DView.swift
       - path: Robo/Views/Room3DView.swift
       - path: Robo/Views/SettingsView.swift
+      - path: Robo/Views/ObjectScanView.swift
+      - path: Robo/Views/ObjectScanDetailView.swift
+    dependencies:
+      - package: Voxels
+      - package: iTriangle
+      - package: Euclid
+      - package: Manifold
     settings:
       base:
         INFOPLIST_FILE: Robo/Info.plist
