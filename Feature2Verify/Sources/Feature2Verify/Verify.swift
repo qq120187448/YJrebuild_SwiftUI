@@ -1,9 +1,11 @@
 import Foundation
-import SwiftIGL
+import Voxels
+import iTriangle
+import Euclid
 import Manifold
 
 enum Feature2Verify {
     static func check() {
-        print("SwiftIGL and Manifold imported for iOS verification")
+        print("Voxels, iTriangle, Euclid and Manifold imported for iOS verification")
     }
 }
