@@ -1,7 +1,6 @@
 import SwiftUI
 import SwiftData
 import ARKit
-import CoreVideo
 import SceneKit
 import simd
 
@@ -30,7 +29,7 @@ struct ObjectScanView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if !ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+                if !ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
                     ContentUnavailableView(
                         "需要 LiDAR",
                         systemImage: "camera.metering.unknown",
@@ -103,9 +102,9 @@ struct ObjectScanView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
             VStack(alignment: .leading, spacing: 12) {
-                tipRow(icon: "figure.walk", text: "围绕物体缓慢移动，让 LiDAR 扫到全部表面")
+                tipRow(icon: "figure.walk", text: "围绕物体缓慢移动，让 ARKit 网格覆盖全部表面")
                 tipRow(icon: "move.3d", text: "尽量保持物体完整出现在画面中")
-                tipRow(icon: "scope", text: "按提示移动到未覆盖方向，覆盖率会实时更新")
+                tipRow(icon: "scope", text: "按提示移动到未覆盖方向，环绕覆盖率会实时更新")
             }
             .padding(.horizontal, 24)
             Spacer()
@@ -184,7 +183,7 @@ struct ObjectScanView: View {
                 Spacer()
 
                 if coverageRatio < 0.15 && suggestedAngle == nil {
-                    Text("请围绕物体缓慢移动，让 LiDAR 扫到全部表面")
+                    Text("请围绕物体缓慢移动，让 ARKit 扫到全部表面")
                         .font(.caption.bold())
                         .foregroundStyle(.white)
                         .padding(.horizontal, 14)
@@ -444,7 +443,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     private var didDeliver = false
     private var frameCount = 0
     private let voxelSize: Float = 0.02
-    private let maxVoxels = 400_000
+    private let maxVoxels = 600_000
     private var voxelMap: [Int64: VoxelAccumulator] = [:]
 
     private struct VoxelAccumulator {
@@ -461,8 +460,8 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         sceneView.session.delegate = self
 
         let configuration = ARWorldTrackingConfiguration()
-        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
-            configuration.frameSemantics = [.sceneDepth, .smoothedSceneDepth]
+        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
+            configuration.sceneReconstruction = .meshWithClassification
         }
         sceneView.session.run(configuration)
     }
@@ -494,80 +493,76 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard isCapturing else { return }
-        guard let depthMap = frame.smoothedSceneDepth?.depthMap ?? frame.sceneDepth?.depthMap else {
-            return
+        frameCount += 1
+        guard frameCount % 10 == 0 else { return }
+
+        captureMeshPoints(from: frame)
+        let snapshot = snapshotPoints()
+        let coverage = coverageInfo(from: snapshot, cameraTransform: frame.camera.transform)
+        DispatchQueue.main.async {
+            self.updatePointCloud(snapshot)
+            self.onPointCount?(snapshot.count)
+            self.onCoverageUpdate?(coverage.ratio, coverage.direction)
         }
+    }
 
-        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
-        let depthWidth = CVPixelBufferGetWidth(depthMap)
-        let depthHeight = CVPixelBufferGetHeight(depthMap)
-        guard depthWidth > 0, depthHeight > 0,
-              let depthBase = CVPixelBufferGetBaseAddress(depthMap)?
-                .assumingMemoryBound(to: Float32.self) else {
-            return
-        }
-        let depthRow = CVPixelBufferGetBytesPerRow(depthMap) / MemoryLayout<Float32>.stride
+    private func captureMeshPoints(from frame: ARFrame) {
+        for anchor in frame.anchors {
+            guard let mesh = anchor as? ARMeshAnchor else { continue }
+            let geometry = mesh.geometry
+            let vertexSource = geometry.vertices
+            let vertexCount = vertexSource.count
+            guard vertexCount > 0 else { continue }
 
-        var colorBase: UnsafeMutablePointer<UInt8>?
-        var colorWidth = 0
-        var colorHeight = 0
-        var colorRow = 0
-        CVPixelBufferLockBaseAddress(frame.capturedImage, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(frame.capturedImage, .readOnly) }
-        if let base = CVPixelBufferGetBaseAddressOfPlane(frame.capturedImage, 0)?
-            .assumingMemoryBound(to: UInt8.self) {
-            colorBase = base
-            colorWidth = CVPixelBufferGetWidth(frame.capturedImage)
-            colorHeight = CVPixelBufferGetHeight(frame.capturedImage)
-            colorRow = CVPixelBufferGetBytesPerRowOfPlane(frame.capturedImage, 0)
-        }
+            let base = vertexSource.buffer.contents()
+            let stride = vertexSource.stride
+            let offset = vertexSource.offset
 
-        let intrinsics = frame.camera.intrinsics
-        let cameraTransform = frame.camera.transform
-        let fx = intrinsics.columns.0.x
-        let fy = intrinsics.columns.1.y
-        let cx = intrinsics.columns.2.x
-        let cy = intrinsics.columns.2.y
+            var classificationBuffer: UnsafeRawPointer?
+            var classificationStride = 0
+            var classificationOffset = 0
+            if let classificationSource = geometry.classification {
+                classificationBuffer = classificationSource.buffer.contents()
+                classificationStride = classificationSource.stride
+                classificationOffset = classificationSource.offset
+            }
 
-        let step = 2
-        for y in stride(from: 0, to: depthHeight, by: step) {
-            for x in stride(from: 0, to: depthWidth, by: step) {
-                let depth = depthBase[y * depthRow + x]
-                guard depth > 0.2, depth < 8 else { continue }
-                let local = SIMD3<Float>(
-                    (Float(x) - cx) / fx * depth,
-                    (Float(y) - cy) / fy * depth,
-                    -depth
-                )
-                let world = cameraTransform * SIMD4<Float>(local.x, local.y, local.z, 1)
-                let position = SIMD3<Float>(world.x, world.y, world.z)
-                let key = voxelKey(position)
+            for i in 0..<vertexCount {
+                let local = (base + offset + i * stride)
+                    .assumingMemoryBound(to: SIMD3<Float>.self).pointee
+                let world4 = mesh.transform * SIMD4<Float>(local.x, local.y, local.z, 1)
+                let world = SIMD3<Float>(world4.x, world4.y, world4.z)
+                let key = voxelKey(world)
                 if voxelMap[key] == nil && voxelMap.count >= maxVoxels { continue }
 
-                var accumulator = voxelMap[key] ?? VoxelAccumulator()
-                accumulator.sum += position
-                var gray: Float = 0.65
-                if let colorBase, colorWidth > 0, colorHeight > 0 {
-                    let sx = min(colorWidth - 1, Int((Double(x) * Double(colorWidth) / Double(depthWidth)).rounded()))
-                    let sy = min(colorHeight - 1, Int((Double(y) * Double(colorHeight) / Double(depthHeight)).rounded()))
-                    gray = Float(colorBase[sy * colorRow + sx]) / 255
+                var color = SIMD3<Float>(0.95, 0.55, 0.2)
+                if let classificationBuffer {
+                    let raw = classificationBuffer.load(
+                        fromByteOffset: classificationOffset + i * classificationStride,
+                        as: UInt8.self
+                    )
+                    color = classificationColor(ARMeshClassification(rawValue: raw))
                 }
-                accumulator.sumColor += SIMD3<Float>(gray * 0.7, gray * 0.8, 1.0)
+
+                var accumulator = voxelMap[key] ?? VoxelAccumulator()
+                accumulator.sum += world
+                accumulator.sumColor += color
                 accumulator.count += 1
                 voxelMap[key] = accumulator
             }
         }
+    }
 
-        frameCount += 1
-        if frameCount % 15 == 0 {
-            let snapshot = snapshotPoints()
-            let coverage = coverageInfo(from: snapshot, cameraTransform: cameraTransform)
-            DispatchQueue.main.async {
-                self.updatePointCloud(snapshot)
-                self.onPointCount?(snapshot.count)
-                self.onCoverageUpdate?(coverage.ratio, coverage.direction)
-            }
+    private func classificationColor(_ classification: ARMeshClassification?) -> SIMD3<Float> {
+        switch classification {
+        case .floor: return SIMD3<Float>(0.55, 0.55, 0.55)
+        case .wall: return SIMD3<Float>(0.35, 0.55, 0.85)
+        case .ceiling: return SIMD3<Float>(0.88, 0.9, 0.93)
+        case .table: return SIMD3<Float>(0.72, 0.5, 0.3)
+        case .seat: return SIMD3<Float>(0.3, 0.72, 0.48)
+        case .window: return SIMD3<Float>(0.35, 0.78, 0.9)
+        case .door: return SIMD3<Float>(0.8, 0.5, 0.25)
+        default: return SIMD3<Float>(0.95, 0.55, 0.2)
         }
     }
 
@@ -596,17 +591,27 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         for point in points {
             sum += point.position
         }
-        let centroid = sum / Float(points.count)
+        let center = sum / Float(points.count)
+        let cameraPosition = SIMD3<Float>(
+            cameraTransform.columns.3.x,
+            cameraTransform.columns.3.y,
+            cameraTransform.columns.3.z
+        )
         let sectorCount = 36
         var occupied = Set<Int>()
-        for point in points {
-            let dx = point.x - centroid.x
-            let dz = point.z - centroid.z
-            let angle = atan2(dx, -dz)
+
+        func binFor(dx: Float, dz: Float) -> Int {
+            let angle = atan2(dx, dz)
             var bin = Int(((angle + .pi) / (2 * .pi)) * Float(sectorCount))
             bin = ((bin % sectorCount) + sectorCount) % sectorCount
-            occupied.insert(bin)
+            return bin
         }
+
+        occupied.insert(binFor(dx: cameraPosition.x - center.x, dz: cameraPosition.z - center.z))
+        for point in points {
+            occupied.insert(binFor(dx: point.x - center.x, dz: point.z - center.z))
+        }
+
         let ratio = Float(occupied.count) / Float(sectorCount)
 
         var bestStart = 0
