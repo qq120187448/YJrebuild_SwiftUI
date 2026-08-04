@@ -92,7 +92,7 @@ struct ObjectScanView: View {
             Spacer()
             Image(systemName: "cube.transparent")
                 .font(.system(size: 64))
-                .foregroundStyle(.accentColor)
+                .foregroundColor(.accentColor)
             Text("物体工程扫描")
                 .font(.title.bold())
             Text("扫描堆体、土方、中大型设备，在本机计算体积、表面积和外包围尺寸。")

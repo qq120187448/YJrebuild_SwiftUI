@@ -70,7 +70,7 @@ struct CaptureHomeView: View {
                         .frame(maxWidth: .infinity)
                         .padding()
                         .background(.secondary.opacity(0.15))
-                        .foregroundStyle(.accentColor)
+                        .foregroundColor(.accentColor)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 .padding(.horizontal, 40)
