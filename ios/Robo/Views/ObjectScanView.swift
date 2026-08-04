@@ -41,6 +41,7 @@ struct ObjectScanView: View {
     @State private var placeCropBoxRequested = false
     @State private var axisMoveCommand: AxisMoveCommand = .none
     @State private var boxMetrics: ObjectScanMetrics?
+    @State private var boxUSDZData: Data?
     @State private var isComputingBoxMetrics = false
     @State private var pointSize: Double = ObjectScanSettings.pointSize
     @State private var scanPlaceRequested = false
@@ -327,6 +328,7 @@ struct ObjectScanView: View {
                         cropVolume = volume
                         if volume == nil {
                             boxMetrics = nil
+                            boxUSDZData = nil
                         }
                     },
                     onCropBoxEditEnded: { volume in
@@ -422,13 +424,56 @@ struct ObjectScanView: View {
                 )
             }
 
-            Section("堆体/土方（高度场）") {
+            Section("体素表面重建（Surface Nets）") {
+                LabeledContent(
+                    "体积（闭合封口）",
+                    value: String(
+                        format: "%.3f m³",
+                        current.metrics.voxelMeshVolumeM3 ?? current.metrics.heightfieldVolumeM3
+                    )
+                )
+                LabeledContent(
+                    "不规则物体表面积（不含地面/墙面接触）",
+                    value: String(
+                        format: "%.3f m²",
+                        current.metrics.voxelMeshSurfaceAreaM2 ?? current.metrics.heightfieldSurfaceAreaM2
+                    )
+                )
+                LabeledContent(
+                    "网格总表面积",
+                    value: String(
+                        format: "%.3f m²",
+                        current.metrics.voxelMeshTotalSurfaceAreaM2 ?? current.metrics.heightfieldSurfaceAreaM2
+                    )
+                )
+                if let voxelSize = current.metrics.voxelSizeM {
+                    LabeledContent(
+                        "体素尺寸",
+                        value: String(format: "%.4f m", voxelSize)
+                    )
+                }
+                if let coverage = current.metrics.voxelCoverageEstimate {
+                    LabeledContent(
+                        "点云覆盖率",
+                        value: String(format: "%.0f%%", coverage * 100)
+                    )
+                }
+                if let vertexCount = current.metrics.voxelMeshVertexCount,
+                   let triangleCount = current.metrics.voxelMeshTriangleCount {
+                    LabeledContent(
+                        "网格顶点/三角面",
+                        value: "\(vertexCount) / \(triangleCount)"
+                    )
+                }
+            }
+
+            Section("堆体/土方（高度场，参考）") {
                 LabeledContent(
                     "体积",
                     value: String(format: "%.3f m³", current.metrics.heightfieldVolumeM3)
                 )
                 LabeledContent(
-                    "不规则物体表面积（不含地面/墙面接触）",
+                    "高度场表面积（参考）",
                     value: String(format: "%.3f m²", current.metrics.heightfieldSurfaceAreaM2)
                 )
                 LabeledContent(
@@ -516,9 +561,10 @@ struct ObjectScanView: View {
             volume.contains(worldPoint: $0.position)
         }
         Task.detached(priority: .userInitiated) {
-            let metrics = ObjectScanProcessor.metrics(for: filtered)
+            let pair = ObjectScanProcessor.metricsAndUSDZ(for: filtered)
             await MainActor.run {
-                self.boxMetrics = metrics
+                self.boxMetrics = pair.metrics
+                self.boxUSDZData = pair.voxelUSDZData
                 self.isComputingBoxMetrics = false
             }
         }
@@ -578,7 +624,7 @@ struct ObjectScanView: View {
             plyData: ObjectScanProcessor.plyData(points: current.points),
             usdzData: cropVolume == nil
                 ? selectedOption(result).usdzData
-                : ObjectScanProcessor.convexHull(current.points).usdzData,
+                : (boxUSDZData ?? ObjectScanProcessor.voxelReconstruct(current.points).usdzData),
             pointsJSON: (try? JSONEncoder().encode(current.points)) ?? Data()
         )
         modelContext.insert(record)
@@ -612,7 +658,7 @@ struct ObjectScanView: View {
             var urls = [excelURL, plyURL, jsonURL]
             let usdzData = cropVolume == nil
                 ? selectedOption(result).usdzData
-                : ObjectScanProcessor.convexHull(current.points).usdzData
+                : (boxUSDZData ?? ObjectScanProcessor.voxelReconstruct(current.points).usdzData)
             if let usdzData {
                 let usdzURL = base.appendingPathExtension("usdz")
                 try usdzData.write(to: usdzURL)

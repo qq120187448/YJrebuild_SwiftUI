@@ -3,6 +3,7 @@ import UIKit
 import SceneKit
 import simd
 import Manifold3D
+import Voxels
 
 private struct HullVector: Manifold3D.Vector3 {
     var x: Double
@@ -78,6 +79,13 @@ struct ObjectScanMetrics: Codable, Sendable {
     var footprintAreaM2: Double?
     var groundContactAreaM2: Double?
     var wallContactAreaM2: Double?
+    var voxelSizeM: Double?
+    var voxelMeshVolumeM3: Double?
+    var voxelMeshTotalSurfaceAreaM2: Double?
+    var voxelMeshSurfaceAreaM2: Double?
+    var voxelCoverageEstimate: Double?
+    var voxelMeshVertexCount: Int?
+    var voxelMeshTriangleCount: Int?
 }
 
 struct ObjectScanProcessResult: Sendable {
@@ -100,6 +108,19 @@ struct OBBResult: Sendable {
     var lengthM: Double
     var widthM: Double
     var heightM: Double
+}
+
+struct VoxelReconstructionResult: Sendable {
+    var voxelSizeM: Double?
+    var volumeM3: Double?
+    var totalSurfaceAreaM2: Double?
+    var contactExcludedSurfaceAreaM2: Double?
+    var groundContactAreaM2: Double?
+    var wallContactAreaM2: Double?
+    var coverageEstimate: Double?
+    var vertexCount: Int?
+    var triangleCount: Int?
+    var usdzData: Data?
 }
 
 enum ObjectScanProcessor {
@@ -128,34 +149,20 @@ enum ObjectScanProcessor {
 
         var options: [ObjectScanClusterOption] = []
         for cluster in candidates {
-            let aabb = computeAABB(cluster)
-            let obb = computeOBB(cluster)
-            let heightfield = computeHeightfield(cluster, groundY: groundY, gridSize: gridSize)
-            let hull = convexHull(cluster)
-            let footprint = footprintArea(cluster)
-            let metrics = ObjectScanMetrics(
-                pointCount: points.count,
-                processedPointCount: keptPoints.count,
-                targetPointCount: cluster.count,
-                clusterCount: totalClusterCount,
-                groundY: Double(groundY),
-                aabb: aabb,
-                obbLengthM: obb.lengthM,
-                obbWidthM: obb.widthM,
-                obbHeightM: obb.heightM,
-                heightfieldVolumeM3: heightfield.volumeM3,
-                heightfieldSurfaceAreaM2: heightfield.surfaceAreaM2,
-                convexHullVolumeM3: hull.volumeM3,
-                convexHullSurfaceAreaM2: hull.surfaceAreaM2,
-                footprintAreaM2: footprint,
-                groundContactAreaM2: footprint,
-                wallContactAreaM2: 0
+            let pair = metricsAndUSDZ(
+                for: cluster,
+                groundY: groundY,
+                gridSize: gridSize
             )
+            var metrics = pair.metrics
+            metrics.pointCount = points.count
+            metrics.processedPointCount = keptPoints.count
+            metrics.clusterCount = totalClusterCount
             options.append(
                 ObjectScanClusterOption(
                     points: cluster,
                     metrics: metrics,
-                    usdzData: hull.usdzData
+                    usdzData: pair.voxelUSDZData
                 )
             )
         }
@@ -174,42 +181,50 @@ enum ObjectScanProcessor {
         )
     }
 
-    static func metrics(for points: [ObjectPoint]) -> ObjectScanMetrics {
+    static func metricsAndUSDZ(
+        for points: [ObjectPoint],
+        groundY: Float? = nil,
+        gridSize: Float = 0.05
+    ) -> (metrics: ObjectScanMetrics, voxelUSDZData: Data?) {
         guard !points.isEmpty else {
-            return ObjectScanMetrics(
-                pointCount: 0,
-                processedPointCount: 0,
-                targetPointCount: 0,
-                clusterCount: 0,
-                groundY: 0,
-                aabb: ObjectScanMetrics.AABB(
-                    minX: 0, minY: 0, minZ: 0,
-                    maxX: 0, maxY: 0, maxZ: 0
+            return (
+                ObjectScanMetrics(
+                    pointCount: 0,
+                    processedPointCount: 0,
+                    targetPointCount: 0,
+                    clusterCount: 0,
+                    groundY: 0,
+                    aabb: ObjectScanMetrics.AABB(
+                        minX: 0, minY: 0, minZ: 0,
+                        maxX: 0, maxY: 0, maxZ: 0
+                    ),
+                    obbLengthM: 0,
+                    obbWidthM: 0,
+                    obbHeightM: 0,
+                    heightfieldVolumeM3: 0,
+                    heightfieldSurfaceAreaM2: 0,
+                    convexHullVolumeM3: 0,
+                    convexHullSurfaceAreaM2: 0,
+                    footprintAreaM2: 0,
+                    groundContactAreaM2: 0,
+                    wallContactAreaM2: 0
                 ),
-                obbLengthM: 0,
-                obbWidthM: 0,
-                obbHeightM: 0,
-                heightfieldVolumeM3: 0,
-                heightfieldSurfaceAreaM2: 0,
-                convexHullVolumeM3: 0,
-                convexHullSurfaceAreaM2: 0,
-                footprintAreaM2: 0,
-                groundContactAreaM2: 0,
-                wallContactAreaM2: 0
+                nil
             )
         }
-        let groundY = points.map { $0.y }.min() ?? 0
+        let resolvedGroundY = groundY ?? (points.map { $0.y }.min() ?? 0)
         let aabb = computeAABB(points)
         let obb = computeOBB(points)
-        let heightfield = computeHeightfield(points, groundY: groundY, gridSize: 0.05)
+        let heightfield = computeHeightfield(points, groundY: resolvedGroundY, gridSize: gridSize)
         let hull = convexHull(points)
         let footprint = footprintArea(points)
-        return ObjectScanMetrics(
+        let voxel = voxelReconstruct(points)
+        let metrics = ObjectScanMetrics(
             pointCount: points.count,
             processedPointCount: points.count,
             targetPointCount: points.count,
             clusterCount: 1,
-            groundY: Double(groundY),
+            groundY: Double(resolvedGroundY),
             aabb: aabb,
             obbLengthM: obb.lengthM,
             obbWidthM: obb.widthM,
@@ -219,8 +234,268 @@ enum ObjectScanProcessor {
             convexHullVolumeM3: hull.volumeM3,
             convexHullSurfaceAreaM2: hull.surfaceAreaM2,
             footprintAreaM2: footprint,
-            groundContactAreaM2: footprint,
-            wallContactAreaM2: 0
+            groundContactAreaM2: voxel.groundContactAreaM2 ?? footprint,
+            wallContactAreaM2: voxel.wallContactAreaM2 ?? 0,
+            voxelSizeM: voxel.voxelSizeM,
+            voxelMeshVolumeM3: voxel.volumeM3,
+            voxelMeshTotalSurfaceAreaM2: voxel.totalSurfaceAreaM2,
+            voxelMeshSurfaceAreaM2: voxel.contactExcludedSurfaceAreaM2,
+            voxelCoverageEstimate: voxel.coverageEstimate,
+            voxelMeshVertexCount: voxel.vertexCount,
+            voxelMeshTriangleCount: voxel.triangleCount
+        )
+        return (metrics, voxel.usdzData ?? hull.usdzData)
+    }
+
+    static func metrics(for points: [ObjectPoint]) -> ObjectScanMetrics {
+        metricsAndUSDZ(for: points).metrics
+    }
+
+    static func voxelReconstruct(
+        _ points: [ObjectPoint],
+        targetVoxelsPerAxis: Int = 96
+    ) -> VoxelReconstructionResult {
+        guard points.count >= 8 else { return VoxelReconstructionResult() }
+        let aabb = computeAABB(points)
+        let maxDim = max(aabb.sizeX, aabb.sizeY, aabb.sizeZ)
+        guard maxDim > 1e-6 else { return VoxelReconstructionResult() }
+
+        let sqrtCount = sqrt(Double(points.count))
+        let target = min(max(Int((sqrtCount * 2).rounded()), 24), targetVoxelsPerAxis)
+        let voxelSize = max(Float(maxDim) / Float(target), 0.001)
+        let margin = voxelSize
+        let origin = SIMD3<Float>(
+            Float(aabb.minX) - margin,
+            Float(aabb.minY) - margin,
+            Float(aabb.minZ) - margin
+        )
+
+        var surfaceKeys = Set<Int64>()
+        var maxYByColumn: [Int64: Float] = [:]
+        var minIX = Int.max
+        var minIY = Int.max
+        var minIZ = Int.max
+        var maxIX = Int.min
+        var maxIY = Int.min
+        var maxIZ = Int.min
+
+        for point in points {
+            let ix = Int(floor((point.x - origin.x) / voxelSize))
+            let iy = Int(floor((point.y - origin.y) / voxelSize))
+            let iz = Int(floor((point.z - origin.z) / voxelSize))
+            surfaceKeys.insert(voxelKey(Int64(ix), Int64(iy), Int64(iz)))
+            let columnKey = gridKey(Int64(ix), Int64(iz))
+            maxYByColumn[columnKey] = max(maxYByColumn[columnKey] ?? point.y, point.y)
+            minIX = min(minIX, ix)
+            minIY = min(minIY, iy)
+            minIZ = min(minIZ, iz)
+            maxIX = max(maxIX, ix)
+            maxIY = max(maxIY, iy)
+            maxIZ = max(maxIZ, iz)
+        }
+
+        guard minIX != Int.max else { return VoxelReconstructionResult() }
+        let projected = points.map { SIMD2<Float>($0.x, $0.z) }
+        let footprint = convexHull2D(projected)
+        let floorIndex = Int(floor((Float(aabb.minY) - origin.y) / voxelSize))
+        var filledKeys = surfaceKeys
+        var filledColumnCount = 0
+
+        for (columnKey, topY) in maxYByColumn {
+            let ix = (columnKey & 0xFFFFF) - 0x80000
+            let iz = ((columnKey >> 20) & 0xFFFFF) - 0x80000
+            let topIndex = Int(floor((topY - origin.y) / voxelSize))
+            if floorIndex <= topIndex {
+                for iy in floorIndex...topIndex {
+                    filledKeys.insert(voxelKey(Int64(ix), Int64(iy), Int64(iz)))
+                }
+            }
+            filledColumnCount += 1
+        }
+
+        if footprint.count >= 3 {
+            for ix in minIX...maxIX {
+                for iz in minIZ...maxIZ {
+                    let columnKey = gridKey(Int64(ix), Int64(iz))
+                    if maxYByColumn[columnKey] != nil { continue }
+                    let center = SIMD2<Float>(
+                        origin.x + (Float(ix) + 0.5) * voxelSize,
+                        origin.z + (Float(iz) + 0.5) * voxelSize
+                    )
+                    guard pointInsideConvexHull(center, hull: footprint) else { continue }
+                    guard let topY = interpolatedColumnHeight(
+                        ix: ix,
+                        iz: iz,
+                        known: maxYByColumn
+                    ) else { continue }
+                    let topIndex = Int(floor((topY - origin.y) / voxelSize))
+                    if floorIndex <= topIndex {
+                        for iy in floorIndex...topIndex {
+                            filledKeys.insert(voxelKey(Int64(ix), Int64(iy), Int64(iz)))
+                        }
+                    }
+                    filledColumnCount += 1
+                }
+            }
+        }
+
+        var voxels = VoxelHash<Float>(defaultVoxel: 1.0)
+        for key in filledKeys {
+            let index = decodeVoxelKey(key)
+            voxels.set(VoxelIndex(index.0, index.1, index.2), newValue: -1.0)
+        }
+
+        let scale = VoxelScale(origin: origin, cubeSize: voxelSize)
+        let renderBounds = VoxelBounds(
+            min: VoxelIndex(minIX, minIY, minIZ),
+            max: VoxelIndex(maxIX, maxIY, maxIZ)
+        ).expand(1)
+        let buffer = SurfaceNetRenderer().render(
+            voxels,
+            scale: scale,
+            within: renderBounds
+        )
+        guard !buffer.positions.isEmpty, buffer.indices.count >= 3 else {
+            return VoxelReconstructionResult()
+        }
+
+        let vertices = buffer.positions.map {
+            HullVector(x: Double($0.x), y: Double($0.y), z: Double($0.z))
+        }
+        let triangles = stride(from: 0, to: buffer.indices.count, by: 3).map { i in
+            Triangle(
+                Int(buffer.indices[i]),
+                Int(buffer.indices[i + 1]),
+                Int(buffer.indices[i + 2])
+            )
+        }
+        let meshGL = MeshGL<HullVector>(vertices: vertices, triangles: triangles)
+        var manifold: Manifold<HullVector>?
+        do {
+            manifold = try Manifold<HullVector>(meshGL)
+        } catch {
+            manifold = try? Manifold<HullVector>(meshGL.merged())
+        }
+        guard let manifold else { return VoxelReconstructionResult() }
+
+        let closedMesh = manifold.meshGL()
+        let totalArea = max(0, manifold.surfaceArea)
+        let contacts = contactAreas(from: closedMesh, aabb: aabb, voxelSize: voxelSize)
+        let volume = max(0, manifold.volume)
+        let excludedArea = max(0, totalArea - contacts.ground - contacts.wall)
+        let knownColumns = Double(maxYByColumn.count)
+        let coverage = min(1, knownColumns / Double(max(filledColumnCount, 1)))
+
+        return VoxelReconstructionResult(
+            voxelSizeM: Double(voxelSize),
+            volumeM3: volume,
+            totalSurfaceAreaM2: totalArea,
+            contactExcludedSurfaceAreaM2: excludedArea,
+            groundContactAreaM2: contacts.ground,
+            wallContactAreaM2: contacts.wall,
+            coverageEstimate: coverage,
+            vertexCount: closedMesh.vertexCount,
+            triangleCount: closedMesh.triangleCount,
+            usdzData: makeUSDZ(from: closedMesh)
+        )
+    }
+
+    private static func pointInsideConvexHull(
+        _ point: SIMD2<Float>,
+        hull: [SIMD2<Float>]
+    ) -> Bool {
+        guard hull.count >= 3 else { return false }
+        var sign: Float = 0
+        for index in 0..<hull.count {
+            let a = hull[index]
+            let b = hull[(index + 1) % hull.count]
+            let cross = (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x)
+            if abs(cross) < 1e-6 { continue }
+            let currentSign: Float = cross > 0 ? 1 : -1
+            if sign == 0 {
+                sign = currentSign
+            } else if sign != currentSign {
+                return false
+            }
+        }
+        return true
+    }
+
+    private static func interpolatedColumnHeight(
+        ix: Int,
+        iz: Int,
+        known: [Int64: Float]
+    ) -> Float? {
+        for radius in 1...16 {
+            var bestKey: Int64?
+            var bestDistance = Float.greatestFiniteMagnitude
+            for dx in -radius...radius {
+                for dz in -radius...radius {
+                    guard abs(dx) == radius || abs(dz) == radius else { continue }
+                    let key = gridKey(Int64(ix + dx), Int64(iz + dz))
+                    guard known[key] != nil else { continue }
+                    let distance = Float(dx * dx + dz * dz)
+                    if distance < bestDistance {
+                        bestDistance = distance
+                        bestKey = key
+                    }
+                }
+            }
+            if let bestKey {
+                return known[bestKey]
+            }
+        }
+        return nil
+    }
+
+    private static func contactAreas(
+        from mesh: MeshGL<HullVector>,
+        aabb: ObjectScanMetrics.AABB,
+        voxelSize: Float
+    ) -> (ground: Double, wall: Double) {
+        let vertices = mesh.vertices
+        let tolerance = Double(voxelSize) * 0.75
+        let groundY = aabb.minY + Double(voxelSize) * 0.5
+        let minXPlane = aabb.minX + Double(voxelSize) * 0.5
+        let maxXPlane = aabb.maxX + Double(voxelSize) * 0.5
+        let minZPlane = aabb.minZ + Double(voxelSize) * 0.5
+        let maxZPlane = aabb.maxZ + Double(voxelSize) * 0.5
+        var groundArea = 0.0
+        var wallArea = 0.0
+
+        for triangle in mesh.triangles {
+            let a = SIMD3<Double>(vertices[triangle.a].x, vertices[triangle.a].y, vertices[triangle.a].z)
+            let b = SIMD3<Double>(vertices[triangle.b].x, vertices[triangle.b].y, vertices[triangle.b].z)
+            let c = SIMD3<Double>(vertices[triangle.c].x, vertices[triangle.c].y, vertices[triangle.c].z)
+            let u = b - a
+            let v = c - a
+            let normal = simd_normalize(simd_cross(u, v))
+            let area = simd_length(simd_cross(u, v)) * 0.5
+            let centroid = (a + b + c) / 3
+
+            if abs(centroid.y - groundY) <= tolerance && normal.y < -0.5 {
+                groundArea += area
+                continue
+            }
+            guard abs(normal.y) < 0.5 else { continue }
+            if abs(centroid.x - maxXPlane) <= tolerance && normal.x > 0.5 {
+                wallArea += area
+            } else if abs(centroid.x - minXPlane) <= tolerance && normal.x < -0.5 {
+                wallArea += area
+            } else if abs(centroid.z - maxZPlane) <= tolerance && normal.z > 0.5 {
+                wallArea += area
+            } else if abs(centroid.z - minZPlane) <= tolerance && normal.z < -0.5 {
+                wallArea += area
+            }
+        }
+        return (groundArea, wallArea)
+    }
+
+    private static func decodeVoxelKey(_ key: Int64) -> (Int, Int, Int) {
+        (
+            (key & 0xFFFFF) - 0x80000,
+            ((key >> 20) & 0xFFFFF) - 0x80000,
+            ((key >> 40) & 0xFFFFF) - 0x80000
         )
     }
 

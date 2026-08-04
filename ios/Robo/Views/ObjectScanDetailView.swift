@@ -60,13 +60,49 @@ struct ObjectScanDetailView: View {
                 )
             }
 
-            Section("堆体/土方（高度场）") {
+            Section("体素表面重建（Surface Nets）") {
+                LabeledContent(
+                    "体积（闭合封口）",
+                    value: String(
+                        format: "%.3f m³",
+                        metrics?.voxelMeshVolumeM3 ?? record.heightfieldVolumeM3
+                    )
+                )
+                LabeledContent(
+                    "不规则物体表面积（不含地面/墙面接触）",
+                    value: String(
+                        format: "%.3f m²",
+                        metrics?.voxelMeshSurfaceAreaM2 ?? record.heightfieldSurfaceAreaM2
+                    )
+                )
+                LabeledContent(
+                    "网格总表面积",
+                    value: String(
+                        format: "%.3f m²",
+                        metrics?.voxelMeshTotalSurfaceAreaM2 ?? record.heightfieldSurfaceAreaM2
+                    )
+                )
+                if let voxelSize = metrics?.voxelSizeM {
+                    LabeledContent(
+                        "体素尺寸",
+                        value: String(format: "%.4f m", voxelSize)
+                    )
+                }
+                if let coverage = metrics?.voxelCoverageEstimate {
+                    LabeledContent(
+                        "点云覆盖率",
+                        value: String(format: "%.0f%%", coverage * 100)
+                    )
+                }
+            }
+
+            Section("堆体/土方（高度场，参考）") {
                 LabeledContent(
                     "体积",
                     value: String(format: "%.3f m³", record.heightfieldVolumeM3)
                 )
                 LabeledContent(
-                    "表面积",
+                    "高度场表面积（参考）",
                     value: String(format: "%.3f m²", record.heightfieldSurfaceAreaM2)
                 )
             }
