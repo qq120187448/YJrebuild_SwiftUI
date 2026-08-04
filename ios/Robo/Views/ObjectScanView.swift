@@ -4,6 +4,13 @@ import ARKit
 import SceneKit
 import simd
 
+private enum CropBoxCommand: Equatable {
+    case none
+    case increase
+    case decrease
+    case clear
+}
+
 struct ObjectScanView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
@@ -24,6 +31,11 @@ struct ObjectScanView: View {
     @State private var isProcessing = false
     @State private var errorMessage: String?
     @State private var shareURLs: [URL] = []
+
+    @State private var isPlacingCropBox = false
+    @State private var cropBoxPlaced = false
+    @State private var cropBoxSize: Float = 1.0
+    @State private var cropBoxCommand: CropBoxCommand = .none
 
     var body: some View {
         NavigationStack {
@@ -101,9 +113,9 @@ struct ObjectScanView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
             VStack(alignment: .leading, spacing: 12) {
-                tipRow(icon: "figure.walk", text: "围绕物体缓慢移动，让 ARKit 网格覆盖全部表面")
+                tipRow(icon: "square.dashed", text: "先点击“放置裁剪盒”，再点击物体中心框选目标")
                 tipRow(icon: "point.3.connected.trianglepath.dotted", text: "扫描中红色点云为实时覆盖示意")
-                tipRow(icon: "hand.tap", text: "扫描完成后自动剔除墙面和地面，可在结果页选择目标点簇")
+                tipRow(icon: "hand.tap", text: "完成后自动剔除墙面地面，可在结果页选择目标点簇")
             }
             .padding(.horizontal, 24)
             Spacer()
@@ -113,6 +125,10 @@ struct ObjectScanView: View {
                 pointCount = 0
                 selectedClusterIndex = 0
                 isProcessing = false
+                isPlacingCropBox = false
+                cropBoxPlaced = false
+                cropBoxSize = 1.0
+                cropBoxCommand = .none
                 isCapturing = true
                 phase = .scanning
             } label: {
@@ -144,12 +160,24 @@ struct ObjectScanView: View {
         ZStack {
             ObjectScanARView(
                 isCapturing: $isCapturing,
+                isPlacingCropBox: $isPlacingCropBox,
+                cropBoxCommand: $cropBoxCommand,
                 onPointCount: { count in
                     pointCount = count
                 },
                 onPointsCaptured: { points in
                     capturedPoints = points
                     processCapturedPoints()
+                },
+                onCropBoxPlaced: {
+                    cropBoxPlaced = true
+                    isPlacingCropBox = false
+                },
+                onCropBoxSizeChanged: { size in
+                    cropBoxSize = size
+                },
+                onCropBoxCleared: {
+                    cropBoxPlaced = false
                 }
             )
             .ignoresSafeArea()
@@ -176,16 +204,87 @@ struct ObjectScanView: View {
 
                 Spacer()
 
-                Text("围绕物体缓慢移动，扫描完成后可在结果页选择目标点簇")
-                    .font(.caption.bold())
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.black.opacity(0.55))
-                    .clipShape(Capsule())
-                    .padding(.bottom, 24)
+                VStack(spacing: 10) {
+                    Text(cropBoxStatusText)
+                        .font(.caption.bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.black.opacity(0.55))
+                        .clipShape(Capsule())
+
+                    HStack(spacing: 10) {
+                        Button {
+                            isPlacingCropBox = true
+                        } label: {
+                            Label(
+                                isPlacingCropBox ? "点击物体中心" : "放置裁剪盒",
+                                systemImage: "square.dashed"
+                            )
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .background(isPlacingCropBox ? Color.orange : Color.accentColor)
+                            .clipShape(Capsule())
+                        }
+
+                        if cropBoxPlaced {
+                            Button {
+                                cropBoxCommand = .decrease
+                            } label: {
+                                Image(systemName: "minus")
+                                    .font(.headline)
+                                    .foregroundStyle(.white)
+                                    .frame(width: 36, height: 36)
+                                    .background(Color.accentColor)
+                                    .clipShape(Circle())
+                            }
+
+                            Text("\(cropBoxSize, specifier: "%.1f") m")
+                                .font(.subheadline.bold())
+                                .foregroundStyle(.white)
+
+                            Button {
+                                cropBoxCommand = .increase
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.headline)
+                                    .foregroundStyle(.white)
+                                    .frame(width: 36, height: 36)
+                                    .background(Color.accentColor)
+                                    .clipShape(Circle())
+                            }
+
+                            Button {
+                                cropBoxCommand = .clear
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.headline)
+                                    .foregroundStyle(.white)
+                                    .frame(width: 36, height: 36)
+                                    .background(Color.red)
+                                    .clipShape(Circle())
+                            }
+                        }
+                    }
+                }
+                .padding(12)
+                .background(.black.opacity(0.45))
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .padding(.bottom, 20)
             }
         }
+    }
+
+    private var cropBoxStatusText: String {
+        if isPlacingCropBox {
+            return "请点击画面中的物体中心，放置裁剪盒"
+        }
+        if cropBoxPlaced {
+            return "裁剪盒 \(cropBoxSize, specifier: "%.1f") m 已放置，只计算盒内点云"
+        }
+        return "建议先放置裁剪盒，再围绕物体扫描"
     }
 
     private func resultsView(_ result: ObjectScanProcessResult) -> some View {
@@ -368,17 +467,49 @@ struct ObjectScanView: View {
 
 private struct ObjectScanARView: UIViewControllerRepresentable {
     @Binding var isCapturing: Bool
+    @Binding var isPlacingCropBox: Bool
+    @Binding var cropBoxCommand: CropBoxCommand
+
     let onPointCount: (Int) -> Void
     let onPointsCaptured: ([ObjectPoint]) -> Void
+    let onCropBoxPlaced: () -> Void
+    let onCropBoxSizeChanged: (Float) -> Void
+    let onCropBoxCleared: () -> Void
 
     func makeUIViewController(context: Context) -> ObjectScanARViewController {
         let controller = ObjectScanARViewController()
         controller.onPointCount = onPointCount
         controller.onPointsCaptured = onPointsCaptured
+        controller.onCropBoxPlaced = onCropBoxPlaced
+        controller.onCropBoxSizeChanged = onCropBoxSizeChanged
+        controller.onCropBoxCleared = onCropBoxCleared
         return controller
     }
 
     func updateUIViewController(_ uiViewController: ObjectScanARViewController, context: Context) {
+        uiViewController.isPlacingCropBox = isPlacingCropBox
+        uiViewController.onPointCount = onPointCount
+        uiViewController.onPointsCaptured = onPointsCaptured
+        uiViewController.onCropBoxPlaced = onCropBoxPlaced
+        uiViewController.onCropBoxSizeChanged = onCropBoxSizeChanged
+        uiViewController.onCropBoxCleared = onCropBoxCleared
+
+        switch cropBoxCommand {
+        case .none:
+            break
+        case .increase:
+            uiViewController.adjustCropBoxSize(delta: 0.2)
+        case .decrease:
+            uiViewController.adjustCropBoxSize(delta: -0.2)
+        case .clear:
+            uiViewController.clearCropBox()
+        }
+        if cropBoxCommand != .none {
+            DispatchQueue.main.async {
+                cropBoxCommand = .none
+            }
+        }
+
         if isCapturing {
             uiViewController.startCapturing()
         } else {
@@ -390,6 +521,11 @@ private struct ObjectScanARView: UIViewControllerRepresentable {
 private final class ObjectScanARViewController: UIViewController, ARSessionDelegate {
     var onPointCount: ((Int) -> Void)?
     var onPointsCaptured: (([ObjectPoint]) -> Void)?
+    var onCropBoxPlaced: (() -> Void)?
+    var onCropBoxSizeChanged: ((Float) -> Void)?
+    var onCropBoxCleared: (() -> Void)?
+
+    var isPlacingCropBox = false
 
     private let sceneView = ARSCNView()
     private var isCapturing = false
@@ -398,6 +534,9 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     private let voxelSize: Float = 0.02
     private let maxVoxels = 600_000
     private var voxelMap: [Int64: VoxelAccumulator] = [:]
+    private var cropBoxSize: Float = 1.0
+    private var cropBoxCenter: SIMD3<Float>?
+    private var cropBoxNode: SCNNode?
 
     private struct VoxelAccumulator {
         var sum = SIMD3<Float>.zero
@@ -412,8 +551,14 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         sceneView.frame = view.bounds
         sceneView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         sceneView.session.delegate = self
+        sceneView.rendersContinuously = true
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        tap.cancelsTouchesInView = false
+        sceneView.addGestureRecognizer(tap)
 
         let configuration = ARWorldTrackingConfiguration()
+        configuration.planeDetection = [.horizontal]
         if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
             configuration.sceneReconstruction = .meshWithClassification
         }
@@ -443,6 +588,73 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             self.onPointCount?(points.count)
             self.onPointsCaptured?(points)
         }
+    }
+
+    @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
+        guard isPlacingCropBox, recognizer.state == .ended else { return }
+        placeCropBox(at: recognizer.location(in: sceneView))
+    }
+
+    func placeCropBox(at point: CGPoint) {
+        guard let query = sceneView.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal),
+              let result = sceneView.session.raycast(query).first else {
+            return
+        }
+        let transform = result.worldTransform
+        let hit = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
+        cropBoxCenter = hit + SIMD3<Float>(0, cropBoxSize * 0.5, 0)
+        voxelMap.removeAll()
+        frameCount = 0
+        updateCropBoxNode()
+        isPlacingCropBox = false
+        onCropBoxPlaced?()
+        onCropBoxSizeChanged?(cropBoxSize)
+    }
+
+    func adjustCropBoxSize(delta: Float) {
+        cropBoxSize = min(max(cropBoxSize + delta, 0.4), 5.0)
+        updateCropBoxNode()
+        onCropBoxSizeChanged?(cropBoxSize)
+    }
+
+    func clearCropBox() {
+        cropBoxCenter = nil
+        cropBoxNode?.removeFromParentNode()
+        cropBoxNode = nil
+        voxelMap.removeAll()
+        frameCount = 0
+        sceneView.scene.rootNode.childNodes
+            .filter { $0.name == "scanPoints" }
+            .forEach { $0.removeFromParentNode() }
+        onCropBoxCleared?()
+    }
+
+    private func updateCropBoxNode() {
+        cropBoxNode?.removeFromParentNode()
+        cropBoxNode = nil
+        guard let center = cropBoxCenter else { return }
+        let box = SCNBox(
+            width: CGFloat(cropBoxSize),
+            height: CGFloat(cropBoxSize),
+            length: CGFloat(cropBoxSize),
+            chamferRadius: 0
+        )
+        box.firstMaterial?.diffuse.contents = UIColor.systemGreen.withAlphaComponent(0.16)
+        box.firstMaterial?.emission.contents = UIColor.systemGreen.withAlphaComponent(0.7)
+        box.firstMaterial?.isDoubleSided = true
+        let node = SCNNode(geometry: box)
+        node.name = "cropBox"
+        node.position = SCNVector3(center.x, center.y, center.z)
+        sceneView.scene.rootNode.addChildNode(node)
+        cropBoxNode = node
+    }
+
+    private func pointInsideCropBox(_ world: SIMD3<Float>) -> Bool {
+        guard let center = cropBoxCenter else { return true }
+        let half = cropBoxSize * 0.5
+        return abs(world.x - center.x) <= half
+            && abs(world.y - center.y) <= half
+            && abs(world.z - center.z) <= half
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
@@ -484,6 +696,8 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                     .assumingMemoryBound(to: SIMD3<Float>.self).pointee
                 let world4 = mesh.transform * SIMD4<Float>(local.x, local.y, local.z, 1)
                 let world = SIMD3<Float>(world4.x, world4.y, world4.z)
+                guard pointInsideCropBox(world) else { continue }
+
                 let key = voxelKey(world)
                 if voxelMap[key] == nil && voxelMap.count >= maxVoxels { continue }
 
@@ -544,11 +758,21 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     private func updatePointCloud(_ points: [ObjectPoint]) {
         guard !points.isEmpty else { return }
         let displayPoints = points.map {
-            ObjectPoint(x: $0.x, y: $0.y, z: $0.z, r: 0.92, g: 0.08, b: 0.08)
+            ObjectPoint(x: $0.x, y: $0.y, z: $0.z, r: 1, g: 1, b: 1)
         }
-        let geometry = SCNGeometry.objectPointCloud(points: displayPoints, pointSize: 7)
-        sceneView.scene.rootNode.childNodes.forEach { $0.removeFromParentNode() }
-        sceneView.scene.rootNode.addChildNode(SCNNode(geometry: geometry))
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = UIColor(red: 1, green: 0.08, blue: 0.06, alpha: 1)
+        material.emission.contents = UIColor(red: 1, green: 0.08, blue: 0.06, alpha: 1)
+        material.blendMode = .add
+        material.writesToDepthBuffer = false
+        let geometry = SCNGeometry.objectPointCloud(points: displayPoints, pointSize: 10, material: material)
+        let node = SCNNode(geometry: geometry)
+        node.name = "scanPoints"
+        sceneView.scene.rootNode.childNodes
+            .filter { $0.name == "scanPoints" }
+            .forEach { $0.removeFromParentNode() }
+        sceneView.scene.rootNode.addChildNode(node)
     }
 
     private func voxelKey(_ position: SIMD3<Float>) -> Int64 {

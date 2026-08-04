@@ -114,7 +114,8 @@ enum ObjectScanProcessor {
         let source = nonBackground.isEmpty ? points : nonBackground
         let downsampled = voxelDownsample(source, voxelSize: voxelSize)
         let (keptPoints, groundY) = removeGround(downsampled)
-        let allClusters = connectedClusters(keptPoints, cellSize: 0.08)
+        let planeCleaned = removeDominantPlanes(keptPoints)
+        let allClusters = connectedClusters(planeCleaned, cellSize: 0.08)
         let candidateClusters = allClusters
             .filter { $0.count >= 20 }
             .sorted { $0.count > $1.count }
@@ -207,6 +208,87 @@ enum ObjectScanProcessor {
         let groundY = ys[index]
         let threshold = groundY + 0.01
         return (points.filter { $0.y >= threshold }, groundY)
+    }
+
+    static func removeDominantPlanes(
+        _ points: [ObjectPoint],
+        distanceThreshold: Float = 0.03
+    ) -> [ObjectPoint] {
+        guard points.count > 800 else { return points }
+        var working = points
+        for _ in 0..<3 {
+            let cleaned = removeLargestPlane(working, distanceThreshold: distanceThreshold)
+            if cleaned.count == working.count { break }
+            working = cleaned
+            if working.count < 200 { break }
+        }
+        return working
+    }
+
+    private static func removeLargestPlane(
+        _ points: [ObjectPoint],
+        distanceThreshold: Float
+    ) -> [ObjectPoint] {
+        let count = points.count
+        guard count >= 16 else { return points }
+        var rng = SystemRandomNumberGenerator()
+        let minInliers = max(400, count / 8)
+        var bestNormal = SIMD3<Float>(0, 1, 0)
+        var bestPoint = SIMD3<Float>.zero
+        var bestInliers = 0
+
+        for _ in 0..<80 {
+            var i = Int.random(in: 0..<count, using: &rng)
+            var j = Int.random(in: 0..<count, using: &rng)
+            var k = Int.random(in: 0..<count, using: &rng)
+            while j == i {
+                j = Int.random(in: 0..<count, using: &rng)
+            }
+            while k == i || k == j {
+                k = Int.random(in: 0..<count, using: &rng)
+            }
+            let a = points[i].position
+            let b = points[j].position
+            let c = points[k].position
+            var normal = simd_cross(b - a, c - a)
+            let length = simd_length(normal)
+            guard length > 1e-6 else { continue }
+            normal /= length
+
+            var inliers = 0
+            var index = 0
+            while index < count {
+                let point = points[index]
+                if abs(simd_dot(point.position - a, normal)) <= distanceThreshold {
+                    inliers += 1
+                }
+                index += 4
+            }
+            let estimated = inliers * 4
+            if estimated > bestInliers {
+                bestInliers = estimated
+                bestNormal = normal
+                bestPoint = a
+            }
+        }
+
+        var fullInliers = 0
+        for point in points {
+            if abs(simd_dot(point.position - bestPoint, bestNormal)) <= distanceThreshold {
+                fullInliers += 1
+            }
+        }
+        guard fullInliers >= minInliers else { return points }
+        let minY = points.map { $0.y }.min() ?? 0
+        let planeHeight = simd_dot(bestPoint, bestNormal)
+        let verticalness = abs(bestNormal.y)
+        let isFloor = verticalness > 0.85 && (planeHeight - minY) < 0.12
+        let isWall = verticalness < 0.3 && Float(fullInliers) >= Float(count) * 0.18
+        guard isFloor || isWall else { return points }
+
+        return points.filter {
+            abs(simd_dot($0.position - bestPoint, bestNormal)) > distanceThreshold
+        }
     }
 
     static func connectedClusters(_ points: [ObjectPoint], cellSize: Float = 0.08) -> [[ObjectPoint]] {
