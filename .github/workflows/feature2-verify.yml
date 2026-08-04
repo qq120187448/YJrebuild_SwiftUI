@@ -27,9 +27,7 @@ jobs:
             --triple arm64-apple-ios-simulator \
             --sdk "$SDK" \
             -Xswiftc -swift-version \
-            -Xswiftc 5 \
-            -Xswiftc -strict-concurrency \
-            -Xswiftc minimal
+            -Xswiftc 5
 
       - name: Report dependency size
         working-directory: Feature2Verify
