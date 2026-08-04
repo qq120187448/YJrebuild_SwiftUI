@@ -373,12 +373,7 @@ enum ObjectScanProcessor {
             triangleIndex += 3
         }
         let meshGL = MeshGL<HullVector>(vertices: vertices, triangles: triangles)
-        var manifold: Manifold<HullVector>?
-        do {
-            manifold = try Manifold<HullVector>(meshGL)
-        } catch {
-            manifold = try? Manifold<HullVector>(meshGL.merged())
-        }
+        let manifold = try? Manifold<HullVector>(meshGL)
         guard let manifold else { return VoxelReconstructionResult() }
 
         let closedMesh = manifold.meshGL()
