@@ -764,7 +764,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                     sceneView.session.currentFrame?.camera.transform.columns.3.z ?? 0
                 )
                 dragDepth = max(simd_length(volume.center - cameraPosition), 0.1)
-            } else if let hit = cropHit(at: location) {
+            } else {
                 dragMode = .rotate
                 rotateStartScreen = location
                 rotateStartTransform = volume.transform
@@ -1010,17 +1010,6 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         }
     }
 
-    private func isCropBoxHit(_ hit: SCNHitTestResult) -> Bool {
-        var node: SCNNode? = hit.node
-        while let current = node {
-            if current.name == "cropBox" || isAxisName(current.name ?? "") {
-                return true
-            }
-            node = current.parent
-        }
-        return false
-    }
-
     private func arrowHit(at location: CGPoint) -> SCNHitTestResult? {
         let results = sceneView.hitTest(location, options: nil)
         return results.first { hit in
@@ -1029,11 +1018,6 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             }
             return false
         }
-    }
-
-    private func cropHit(at location: CGPoint) -> SCNHitTestResult? {
-        let results = sceneView.hitTest(location, options: nil)
-        return results.first { isCropBoxHit($0) }
     }
 
     func placeCropBox(at point: CGPoint) {
@@ -1121,56 +1105,177 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         fill.firstMaterial = fillMaterial
         root.addChildNode(SCNNode(geometry: fill))
 
-        addEdges(to: root, extent: volume.extent)
+        let cameraPosition = cameraPositionOfScene
+        addEdges(
+            to: root,
+            extent: volume.extent,
+            cameraPosition: cameraPosition,
+            isOccupied: { [weak self] world in
+                self?.isOccupied(world) ?? false
+            }
+        )
         addArrows(to: root, extent: volume.extent)
         sceneView.scene.rootNode.addChildNode(root)
         cropBoxNode = root
     }
 
-    private func addEdges(to root: SCNNode, extent: SIMD3<Float>) {
+    private var cameraPositionOfScene: SIMD3<Float> {
+        guard let cameraNode = sceneView.pointOfView else { return .zero }
+        let transform = cameraNode.simdTransform
+        return SIMD3<Float>(
+            transform.columns.3.x,
+            transform.columns.3.y,
+            transform.columns.3.z
+        )
+    }
+
+    private func isOccupied(_ world: SIMD3<Float>) -> Bool {
+        voxelMap[voxelKey(world, size: voxelSize)] != nil
+    }
+
+    private func addEdges(
+        to root: SCNNode,
+        extent: SIMD3<Float>,
+        cameraPosition: SIMD3<Float>,
+        isOccupied: @escaping (SIMD3<Float>) -> Bool
+    ) {
         let half = extent * 0.5
-        let material = SCNMaterial()
-        material.lightingModel = .constant
-        material.diffuse.contents = UIColor.systemGreen
-        material.emission.contents = UIColor.systemGreen
+        let solidMaterial = SCNMaterial()
+        solidMaterial.lightingModel = .constant
+        solidMaterial.diffuse.contents = UIColor.systemGreen
+        solidMaterial.emission.contents = UIColor.systemGreen
 
-        func addLine(size: SIMD3<Float>, position: SIMD3<Float>) {
-            let box = SCNBox(
-                width: CGFloat(size.x),
-                height: CGFloat(size.y),
-                length: CGFloat(size.z),
-                chamferRadius: 0
+        let dashedMaterial = SCNMaterial()
+        dashedMaterial.lightingModel = .constant
+        dashedMaterial.diffuse.contents = UIColor.systemGreen.withAlphaComponent(0.55)
+        dashedMaterial.emission.contents = UIColor.systemGreen.withAlphaComponent(0.55)
+
+        func addLine(
+            axis: SIMD3<Float>,
+            length: Float,
+            offset: SIMD3<Float>,
+            dashed: Bool
+        ) {
+            let material = dashed ? dashedMaterial : solidMaterial
+            if !dashed {
+                let box = SCNBox(
+                    width: CGFloat(axis.x != 0 ? length : 0.01),
+                    height: CGFloat(axis.y != 0 ? length : 0.01),
+                    length: CGFloat(axis.z != 0 ? length : 0.01),
+                    chamferRadius: 0
+                )
+                box.firstMaterial = material
+                let node = SCNNode(geometry: box)
+                node.position = SCNVector3(offset.x, offset.y, offset.z)
+                root.addChildNode(node)
+                return
+            }
+
+            let dashLength: Float = 0.05
+            let gapLength: Float = 0.04
+            var cursor: Float = 0
+            while cursor < length {
+                let dash = min(dashLength, length - cursor)
+                let box = SCNBox(
+                    width: CGFloat(axis.x != 0 ? dash : 0.01),
+                    height: CGFloat(axis.y != 0 ? dash : 0.01),
+                    length: CGFloat(axis.z != 0 ? dash : 0.01),
+                    chamferRadius: 0
+                )
+                box.firstMaterial = material
+                let node = SCNNode(geometry: box)
+                let halfLength = length * 0.5
+                let centerAlongAxis = -halfLength + cursor + dash * 0.5
+                let position = offset + axis * centerAlongAxis
+                node.position = SCNVector3(position.x, position.y, position.z)
+                root.addChildNode(node)
+                cursor += dash + gapLength
+            }
+        }
+
+        var edges: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, Float)] = []
+        func edgeList(axis: SIMD3<Float>, length: Float, offsets: [SIMD3<Float>]) {
+            for offset in offsets {
+                edges.append((axis, length, offset, length))
+            }
+        }
+
+        edgeList(
+            axis: SIMD3<Float>(1, 0, 0),
+            length: extent.x,
+            offsets: [
+                SIMD3<Float>(0, -half.y, -half.z),
+                SIMD3<Float>(0, -half.y, half.z),
+                SIMD3<Float>(0, half.y, -half.z),
+                SIMD3<Float>(0, half.y, half.z)
+            ]
+        )
+        edgeList(
+            axis: SIMD3<Float>(0, 1, 0),
+            length: extent.y,
+            offsets: [
+                SIMD3<Float>(-half.x, 0, -half.z),
+                SIMD3<Float>(-half.x, 0, half.z),
+                SIMD3<Float>(half.x, 0, -half.z),
+                SIMD3<Float>(half.x, 0, half.z)
+            ]
+        )
+        edgeList(
+            axis: SIMD3<Float>(0, 0, 1),
+            length: extent.z,
+            offsets: [
+                SIMD3<Float>(-half.x, -half.y, 0),
+                SIMD3<Float>(-half.x, half.y, 0),
+                SIMD3<Float>(half.x, -half.y, 0),
+                SIMD3<Float>(half.x, half.y, 0)
+            ]
+        )
+
+        for edge in edges {
+            let axis = edge.0
+            let length = edge.1
+            let offset = edge.2
+            let start = offset - axis * length * 0.5
+            let end = offset + axis * length * 0.5
+            let dashed = edgeOccluded(
+                from: start,
+                to: end,
+                cameraPosition: cameraPosition,
+                isOccupied: isOccupied
             )
-            box.firstMaterial = material
-            let node = SCNNode(geometry: box)
-            node.position = SCNVector3(position.x, position.y, position.z)
-            root.addChildNode(node)
+            addLine(
+                axis: axis,
+                length: length,
+                offset: offset,
+                dashed: dashed
+            )
         }
+    }
 
-        for y in [-half.y, half.y] {
-            for z in [-half.z, half.z] {
-                addLine(
-                    size: SIMD3<Float>(extent.x, 0.01, 0.01),
-                    position: SIMD3<Float>(0, y, z)
-                )
+    private func edgeOccluded(
+        from start: SIMD3<Float>,
+        to end: SIMD3<Float>,
+        cameraPosition: SIMD3<Float>,
+        isOccupied: (SIMD3<Float>) -> Bool
+    ) -> Bool {
+        let samples = 8
+        for index in 0...samples {
+            let t = Float(index) / Float(samples)
+            let point = start + (end - start) * t
+            let toPoint = point - cameraPosition
+            let distance = simd_length(toPoint)
+            guard distance > 0.05 else { continue }
+            let direction = toPoint / distance
+            var step: Float = 0.04
+            while step < distance - 0.06 {
+                let sample = cameraPosition + direction * step
+                if isOccupied(sample) {
+                    return true
+                }
+                step += 0.04
             }
         }
-        for x in [-half.x, half.x] {
-            for z in [-half.z, half.z] {
-                addLine(
-                    size: SIMD3<Float>(0.01, extent.y, 0.01),
-                    position: SIMD3<Float>(x, 0, z)
-                )
-            }
-        }
-        for x in [-half.x, half.x] {
-            for y in [-half.y, half.y] {
-                addLine(
-                    size: SIMD3<Float>(0.01, 0.01, extent.z),
-                    position: SIMD3<Float>(x, y, 0)
-                )
-            }
-        }
+        return false
     }
 
     private func addArrows(to root: SCNNode, extent: SIMD3<Float>) {
@@ -1238,6 +1343,9 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         let snapshot = snapshotPoints()
         DispatchQueue.main.async {
             self.updatePointCloud(snapshot)
+            if self.cropVolume != nil {
+                self.updateCropBoxNode()
+            }
             self.onPointCount?(snapshot.count)
         }
     }

@@ -16,7 +16,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> SCNView {
         let scnView = SCNView()
-        scnView.allowsCameraControl = false
+        scnView.allowsCameraControl = true
         scnView.antialiasingMode = .multisampling4X
         scnView.backgroundColor = UIColor(red: 0.06, green: 0.07, blue: 0.09, alpha: 1)
         scnView.scene = SCNScene()
@@ -81,18 +81,15 @@ struct ObjectCropBox3DView: UIViewRepresentable {
         private enum DragMode {
             case boxResize
             case boxRotate
-            case sceneOrbit
             case boxMove
-            case sceneMove
             case boxScale
-            case sceneZoom
         }
 
         private var lastPointCount = -1
+        private var occupancy: Set<Int64> = []
+        private let occupancyCell: Float = 0.05
+
         private var dragMode: DragMode?
-
-        private var cameraTarget = SIMD3<Float>.zero
-
         private var dragAxis: SIMD3<Float>?
         private var dragStartScreen: CGPoint?
         private var dragStartCenter: SIMD3<Float>?
@@ -108,25 +105,12 @@ struct ObjectCropBox3DView: UIViewRepresentable {
 
         private var scaleStartExtent: SIMD3<Float>?
 
-        private var orbitStartScreen: CGPoint?
-        private var orbitStartOffset: SIMD3<Float>?
-
-        private var sceneMoveStartScreen: CGPoint?
-        private var sceneMoveStartTarget: SIMD3<Float>?
-
-        private var zoomStartDistance: Float = 0
-
-        private var isBoxSelected = false
-
         init(parent: ObjectCropBox3DView) {
             self.parent = parent
         }
 
         func rebuild(_ scnView: SCNView) {
             guard let scene = scnView.scene else { return }
-            if parent.cropVolume == nil {
-                isBoxSelected = false
-            }
             if parent.points.count != lastPointCount {
                 lastPointCount = parent.points.count
                 scene.rootNode.childNodes
@@ -138,8 +122,11 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                     node.name = "objectPoints"
                     scene.rootNode.addChildNode(node)
                 }
+                buildOccupancy()
                 positionCamera(scnView)
             }
+
+            scnView.allowsCameraControl = parent.cropVolume == nil
 
             scene.rootNode.childNodes
                 .filter { $0.name == "cropBox" }
@@ -149,7 +136,6 @@ struct ObjectCropBox3DView: UIViewRepresentable {
             let root = SCNNode()
             root.name = "cropBox"
             root.simdTransform = volume.transform
-            let boxColor = isBoxSelected ? UIColor.systemOrange : UIColor.systemGreen
 
             let fill = SCNBox(
                 width: CGFloat(volume.extent.x),
@@ -159,74 +145,69 @@ struct ObjectCropBox3DView: UIViewRepresentable {
             )
             let fillMaterial = SCNMaterial()
             fillMaterial.lightingModel = .constant
-            fillMaterial.diffuse.contents = boxColor.withAlphaComponent(0.12)
-            fillMaterial.emission.contents = boxColor.withAlphaComponent(0.16)
+            fillMaterial.diffuse.contents = UIColor.systemGreen.withAlphaComponent(0.10)
+            fillMaterial.emission.contents = UIColor.systemGreen.withAlphaComponent(0.14)
             fillMaterial.isDoubleSided = true
             fill.firstMaterial = fillMaterial
             root.addChildNode(SCNNode(geometry: fill))
 
-            addEdges(to: root, extent: volume.extent, color: boxColor)
+            let cameraPosition = cameraPosition(of: scnView)
+            addEdges(
+                to: root,
+                extent: volume.extent,
+                cameraPosition: cameraPosition,
+                isOccupied: { [weak self] world in
+                    self?.isOccupied(world) ?? false
+                }
+            )
             addArrows(to: root, extent: volume.extent)
             scene.rootNode.addChildNode(root)
         }
 
         @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
             guard recognizer.state == .ended,
+                  parent.isPlacing,
                   let scnView = recognizer.view as? SCNView else {
                 return
             }
-            let location = recognizer.location(in: scnView)
-            if parent.isPlacing {
-                placeCropBox(at: location, in: scnView)
-                return
-            }
-            if let hit = cropHit(in: scnView, at: location) {
-                isBoxSelected = true
-            } else {
-                isBoxSelected = false
-            }
-            rebuild(scnView)
+            placeCropBox(at: recognizer.location(in: scnView), in: scnView)
         }
 
         @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
-            guard let scnView = recognizer.view as? SCNView else { return }
+            guard let scnView = recognizer.view as? SCNView,
+                  !parent.isPlacing,
+                  parent.cropVolume != nil else {
+                return
+            }
             let location = recognizer.location(in: scnView)
             switch recognizer.state {
             case .began:
-                if parent.isPlacing { return }
-                if isBoxSelected, parent.cropVolume != nil {
-                    if let hit = arrowHit(in: scnView, at: location), let axis = axisName(from: hit).flatMap({ axis(for: $0) }), let volume = parent.cropVolume {
-                        dragMode = .boxResize
-                        dragAxis = axis
-                        dragStartScreen = location
-                        dragStartCenter = volume.center
-                        dragStartExtent = volume.extent
-                        if let cameraNode = scnView.pointOfView {
-                            dragDepth = max(simd_length(volume.center - cameraPosition(cameraNode)), 0.1)
-                        }
-                    } else if let hit = cropHit(in: scnView, at: location), let volume = parent.cropVolume {
-                        dragMode = .boxRotate
-                        rotateStartScreen = location
-                        rotateStartTransform = volume.transform
-                    }
-                } else {
-                    dragMode = .sceneOrbit
-                    orbitStartScreen = location
+                if let hit = arrowHit(in: scnView, at: location),
+                   let name = axisName(from: hit),
+                   let axis = axis(for: name),
+                   let volume = parent.cropVolume {
+                    dragMode = .boxResize
+                    dragAxis = axis
+                    dragStartScreen = location
+                    dragStartCenter = volume.center
+                    dragStartExtent = volume.extent
                     if let cameraNode = scnView.pointOfView {
-                        orbitStartOffset = cameraPosition(cameraNode) - cameraTarget
+                        dragDepth = max(
+                            simd_length(volume.center - cameraPosition(of: cameraNode)),
+                            0.1
+                        )
                     }
+                } else if let volume = parent.cropVolume {
+                    dragMode = .boxRotate
+                    rotateStartScreen = location
+                    rotateStartTransform = volume.transform
                 }
 
             case .changed:
-                switch dragMode {
-                case .boxResize:
+                if dragMode == .boxResize {
                     handleBoxResize(location: location, scnView: scnView)
-                case .boxRotate:
+                } else if dragMode == .boxRotate {
                     handleBoxRotate(location: location, scnView: scnView)
-                case .sceneOrbit:
-                    handleSceneOrbit(location: location, scnView: scnView)
-                default:
-                    break
                 }
 
             case .ended, .cancelled:
@@ -242,30 +223,28 @@ struct ObjectCropBox3DView: UIViewRepresentable {
         }
 
         @objc func handleMovePan(_ recognizer: UIPanGestureRecognizer) {
-            guard let scnView = recognizer.view as? SCNView else { return }
+            guard let scnView = recognizer.view as? SCNView,
+                  !parent.isPlacing,
+                  parent.cropVolume != nil else {
+                return
+            }
             let location = recognizer.location(in: scnView)
             switch recognizer.state {
             case .began:
-                if parent.isPlacing { return }
-                if isBoxSelected, parent.cropVolume != nil {
-                    dragMode = .boxMove
-                    guard let volume = parent.cropVolume else { return }
-                    moveStartScreen = location
-                    moveStartCenter = volume.center
-                    if let cameraNode = scnView.pointOfView {
-                        moveStartDepth = max(simd_length(volume.center - cameraPosition(cameraNode)), 0.1)
-                    }
-                } else {
-                    dragMode = .sceneMove
-                    sceneMoveStartScreen = location
-                    sceneMoveStartTarget = cameraTarget
+                guard let volume = parent.cropVolume else { return }
+                dragMode = .boxMove
+                moveStartScreen = location
+                moveStartCenter = volume.center
+                if let cameraNode = scnView.pointOfView {
+                    moveStartDepth = max(
+                        simd_length(volume.center - cameraPosition(of: cameraNode)),
+                        0.1
+                    )
                 }
 
             case .changed:
                 if dragMode == .boxMove {
                     handleBoxMove(location: location, scnView: scnView)
-                } else if dragMode == .sceneMove {
-                    handleSceneMove(location: location, scnView: scnView)
                 }
 
             case .ended, .cancelled:
@@ -281,34 +260,24 @@ struct ObjectCropBox3DView: UIViewRepresentable {
         }
 
         @objc func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
-            guard let scnView = recognizer.view as? SCNView else { return }
+            guard !parent.isPlacing,
+                  parent.cropVolume != nil else {
+                return
+            }
             switch recognizer.state {
             case .began:
-                if parent.isPlacing { return }
-                if isBoxSelected, parent.cropVolume != nil {
-                    dragMode = .boxScale
-                    scaleStartExtent = parent.cropVolume?.extent
-                } else {
-                    dragMode = .sceneZoom
-                    if let cameraNode = scnView.pointOfView {
-                        zoomStartDistance = simd_length(cameraPosition(cameraNode) - cameraTarget)
-                    }
-                }
-
+                dragMode = .boxScale
+                scaleStartExtent = parent.cropVolume?.extent
             case .changed:
                 if dragMode == .boxScale {
                     handleBoxScale(recognizer: recognizer)
-                } else if dragMode == .sceneZoom {
-                    handleSceneZoom(recognizer: recognizer, scnView: scnView)
                 }
-
             case .ended, .cancelled:
                 let wasBoxEdit = dragMode == .boxScale
                 resetDragState()
                 if wasBoxEdit, let volume = parent.cropVolume {
                     parent.onCropBoxEditEnded(volume)
                 }
-
             default:
                 break
             }
@@ -454,88 +423,6 @@ struct ObjectCropBox3DView: UIViewRepresentable {
             )
         }
 
-        // MARK: - Scene operations
-
-        private func handleSceneOrbit(location: CGPoint, scnView: SCNView) {
-            guard let start = orbitStartScreen,
-                  let startOffset = orbitStartOffset,
-                  let cameraNode = scnView.pointOfView else {
-                return
-            }
-            let dx = Float(location.x - start.x)
-            let dy = Float(location.y - start.y)
-            let yaw = dx * 0.008
-            let pitch = dy * 0.008
-            let yawQuat = simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0))
-            let cameraRight = SIMD3<Float>(
-                cameraNode.simdTransform.columns.0.x,
-                cameraNode.simdTransform.columns.0.y,
-                cameraNode.simdTransform.columns.0.z
-            )
-            let pitchQuat = simd_quatf(angle: pitch, axis: cameraRight)
-            let rotation = simd_normalize(yawQuat * pitchQuat)
-            let newOffset = simd_act(rotation, startOffset)
-            cameraNode.position = SCNVector3(
-                cameraTarget.x + newOffset.x,
-                cameraTarget.y + newOffset.y,
-                cameraTarget.z + newOffset.z
-            )
-            cameraNode.look(at: SCNVector3(
-                cameraTarget.x,
-                cameraTarget.y,
-                cameraTarget.z
-            ))
-        }
-
-        private func handleSceneMove(location: CGPoint, scnView: SCNView) {
-            guard let start = sceneMoveStartScreen,
-                  let startTarget = sceneMoveStartTarget,
-                  let cameraNode = scnView.pointOfView else {
-                return
-            }
-            let dx = Float(location.x - start.x)
-            let dy = Float(location.y - start.y)
-            let depth = max(simd_length(cameraPosition(cameraNode) - startTarget), 0.1)
-            let worldDelta = worldDeltaFromScreen(
-                dx: dx,
-                dy: dy,
-                cameraNode: cameraNode,
-                center: startTarget,
-                viewport: scnView.bounds.size,
-                depth: depth
-            )
-            cameraTarget = startTarget + worldDelta
-            let cameraPos = cameraPosition(cameraNode) + worldDelta
-            cameraNode.position = SCNVector3(cameraPos.x, cameraPos.y, cameraPos.z)
-            cameraNode.look(at: SCNVector3(
-                cameraTarget.x,
-                cameraTarget.y,
-                cameraTarget.z
-            ))
-        }
-
-        private func handleSceneZoom(recognizer: UIPinchGestureRecognizer, scnView: SCNView) {
-            guard let cameraNode = scnView.pointOfView,
-                  zoomStartDistance > 0 else {
-                return
-            }
-            let scale = Float(recognizer.scale)
-            let newDistance = min(max(zoomStartDistance / scale, 0.3), 50)
-            let cameraPos = cameraPosition(cameraNode)
-            let forward = simd_normalize(cameraTarget - cameraPos)
-            let newPosition = cameraTarget - forward * newDistance
-            cameraNode.position = SCNVector3(
-                newPosition.x,
-                newPosition.y,
-                newPosition.z
-            )
-            cameraNode.look(at: SCNVector3(
-                cameraTarget.x,
-                cameraTarget.y,
-                cameraTarget.z
-            ))
-        }
-
         // MARK: - Placement
 
         private func placeCropBox(at location: CGPoint, in scnView: SCNView) {
@@ -548,7 +435,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                 far.z - near.z
             ))
             guard abs(direction.y) > 0.0001 else { return }
-            let groundY = parent.points.map { $0.y }.min() ?? cameraTarget.y
+            let groundY = parent.points.map { $0.y }.min() ?? 0
             let t = (groundY - origin.y) / direction.y
             guard t > 0 else { return }
             let hit = origin + direction * t
@@ -563,195 +450,179 @@ struct ObjectCropBox3DView: UIViewRepresentable {
             )
             parent.onCropVolumeChanged(volume)
             parent.onCropBoxEditEnded(volume)
-            isBoxSelected = true
+            scnView.allowsCameraControl = false
             rebuild(scnView)
         }
 
-        // MARK: - Helpers
+        // MARK: - Occlusion
 
-        private func resetDragState() {
-            dragMode = nil
-            dragAxis = nil
-            dragStartScreen = nil
-            dragStartCenter = nil
-            dragStartExtent = nil
-            rotateStartScreen = nil
-            rotateStartTransform = nil
-            moveStartScreen = nil
-            moveStartCenter = nil
-            scaleStartExtent = nil
-            orbitStartScreen = nil
-            orbitStartOffset = nil
-            sceneMoveStartScreen = nil
-            sceneMoveStartTarget = nil
+        private func buildOccupancy() {
+            occupancy.removeAll()
+            for point in parent.points {
+                occupancy.insert(voxelKey(point.position, size: occupancyCell))
+            }
         }
 
-        private func cameraPosition(_ cameraNode: SCNNode) -> SIMD3<Float> {
-            let transform = cameraNode.simdTransform
-            return SIMD3<Float>(
-                transform.columns.3.x,
-                transform.columns.3.y,
-                transform.columns.3.z
-            )
+        private func isOccupied(_ world: SIMD3<Float>) -> Bool {
+            occupancy.contains(voxelKey(world, size: occupancyCell))
         }
 
-        private func arrowHit(in scnView: SCNView, at location: CGPoint) -> SCNHitTestResult? {
-            let results = scnView.hitTest(location, options: nil)
-            return results.first { hit in
-                if let name = axisName(from: hit) {
-                    return axis(for: name) != nil
+        private func voxelKey(_ position: SIMD3<Float>, size: Float) -> Int64 {
+            let ix = Int64(floor(position.x / size))
+            let iy = Int64(floor(position.y / size))
+            let iz = Int64(floor(position.z / size))
+            return ((ix + 0x80000) & 0xFFFFF)
+                | (((iy + 0x80000) & 0xFFFFF) << 20)
+                | (((iz + 0x80000) & 0xFFFFF) << 40)
+        }
+
+        private func edgeOccluded(
+            from start: SIMD3<Float>,
+            to end: SIMD3<Float>,
+            cameraPosition: SIMD3<Float>,
+            isOccupied: (SIMD3<Float>) -> Bool
+        ) -> Bool {
+            let samples = 8
+            for index in 0...samples {
+                let t = Float(index) / Float(samples)
+                let point = start + (end - start) * t
+                let toPoint = point - cameraPosition
+                let distance = simd_length(toPoint)
+                guard distance > 0.05 else { continue }
+                let direction = toPoint / distance
+                var step: Float = 0.04
+                while step < distance - 0.06 {
+                    let sample = cameraPosition + direction * step
+                    if isOccupied(sample) {
+                        return true
+                    }
+                    step += 0.04
                 }
-                return false
-            }
-        }
-
-        private func cropHit(in scnView: SCNView, at location: CGPoint) -> SCNHitTestResult? {
-            let results = scnView.hitTest(location, options: nil)
-            return results.first { isCropBoxHit($0) }
-        }
-
-        private func axisName(from hit: SCNHitTestResult) -> String? {
-            if let name = hit.node.name, isAxisName(name) {
-                return name
-            }
-            return hit.node.parent?.name
-        }
-
-        private func isAxisName(_ name: String) -> Bool {
-            name == "axisX" || name == "axisY" || name == "axisZ"
-        }
-
-        private func axis(for name: String) -> SIMD3<Float>? {
-            switch name {
-            case "axisX": return SIMD3<Float>(1, 0, 0)
-            case "axisY": return SIMD3<Float>(0, 1, 0)
-            case "axisZ": return SIMD3<Float>(0, 0, 1)
-            default: return nil
-            }
-        }
-
-        private func isCropBoxHit(_ hit: SCNHitTestResult) -> Bool {
-            var node: SCNNode? = hit.node
-            while let current = node {
-                if current.name == "cropBox" || isAxisName(current.name ?? "") {
-                    return true
-                }
-                node = current.parent
             }
             return false
         }
 
-        private func worldDeltaFromScreen(
-            dx: Float,
-            dy: Float,
-            cameraNode: SCNNode,
-            center: SIMD3<Float>,
-            viewport: CGSize,
-            depth: Float
-        ) -> SIMD3<Float> {
-            guard viewport.width > 0, viewport.height > 0,
-                  let camera = cameraNode.camera else {
-                return .zero
-            }
-            let transform = cameraNode.simdTransform
-            let cameraPosition = SIMD3<Float>(
-                transform.columns.3.x,
-                transform.columns.3.y,
-                transform.columns.3.z
-            )
-            let forward = simd_normalize(center - cameraPosition)
-            let right = simd_normalize(simd_cross(forward, SIMD3<Float>(0, 1, 0)))
-            let up = simd_cross(right, forward)
-            let distance = max(depth, 0.1)
-            let fovY = Float(camera.fieldOfView) * .pi / 180
-            let aspect = Float(viewport.width / max(viewport.height, 1))
-            let fovX = 2 * atan(tan(fovY / 2) * aspect)
-            let worldPerPixelX = 2 * distance * tan(fovX / 2) / Float(viewport.width)
-            let worldPerPixelY = 2 * distance * tan(fovY / 2) / Float(viewport.height)
-            return right * dx * worldPerPixelX + up * (-dy) * worldPerPixelY
-        }
-
-        private func positionCamera(_ scnView: SCNView) {
-            guard let cameraNode = scnView.pointOfView else { return }
-            let centroid = parent.points.reduce(SIMD3<Float>.zero) {
-                $0 + $1.position
-            } / Float(max(parent.points.count, 1))
-            cameraTarget = centroid
-            let diagonal = boundingDiagonal(parent.points)
-            let distance = max(diagonal * 1.6, 0.9)
-            cameraNode.position = SCNVector3(
-                centroid.x,
-                centroid.y + diagonal * 0.45,
-                centroid.z + distance
-            )
-            cameraNode.look(at: SCNVector3(centroid.x, centroid.y, centroid.z))
-        }
-
-        private func boundingDiagonal(_ points: [ObjectPoint]) -> Float {
-            guard !points.isEmpty else { return 1 }
-            var minX = Float.greatestFiniteMagnitude
-            var minY = Float.greatestFiniteMagnitude
-            var minZ = Float.greatestFiniteMagnitude
-            var maxX = -Float.greatestFiniteMagnitude
-            var maxY = -Float.greatestFiniteMagnitude
-            var maxZ = -Float.greatestFiniteMagnitude
-            for point in points {
-                minX = min(minX, point.x)
-                minY = min(minY, point.y)
-                minZ = min(minZ, point.z)
-                maxX = max(maxX, point.x)
-                maxY = max(maxY, point.y)
-                maxZ = max(maxZ, point.z)
-            }
-            let dx = maxX - minX
-            let dy = maxY - minY
-            let dz = maxZ - minZ
-            return max(sqrt(dx * dx + dy * dy + dz * dz), 0.3)
-        }
-
-        private func addEdges(to root: SCNNode, extent: SIMD3<Float>, color: UIColor) {
+        private func addEdges(
+            to root: SCNNode,
+            extent: SIMD3<Float>,
+            cameraPosition: SIMD3<Float>,
+            isOccupied: @escaping (SIMD3<Float>) -> Bool
+        ) {
             let half = extent * 0.5
-            let material = SCNMaterial()
-            material.lightingModel = .constant
-            material.diffuse.contents = color
-            material.emission.contents = color
+            let solidMaterial = SCNMaterial()
+            solidMaterial.lightingModel = .constant
+            solidMaterial.diffuse.contents = UIColor.systemGreen
+            solidMaterial.emission.contents = UIColor.systemGreen
 
-            func addLine(size: SIMD3<Float>, position: SIMD3<Float>) {
-                let box = SCNBox(
-                    width: CGFloat(size.x),
-                    height: CGFloat(size.y),
-                    length: CGFloat(size.z),
-                    chamferRadius: 0
+            let dashedMaterial = SCNMaterial()
+            dashedMaterial.lightingModel = .constant
+            dashedMaterial.diffuse.contents = UIColor.systemGreen.withAlphaComponent(0.55)
+            dashedMaterial.emission.contents = UIColor.systemGreen.withAlphaComponent(0.55)
+
+            func addLine(
+                axis: SIMD3<Float>,
+                length: Float,
+                offset: SIMD3<Float>,
+                dashed: Bool
+            ) {
+                let material = dashed ? dashedMaterial : solidMaterial
+                if !dashed {
+                    let box = SCNBox(
+                        width: CGFloat(axis.x != 0 ? length : 0.01),
+                        height: CGFloat(axis.y != 0 ? length : 0.01),
+                        length: CGFloat(axis.z != 0 ? length : 0.01),
+                        chamferRadius: 0
+                    )
+                    box.firstMaterial = material
+                    let node = SCNNode(geometry: box)
+                    node.position = SCNVector3(offset.x, offset.y, offset.z)
+                    root.addChildNode(node)
+                    return
+                }
+
+                let dashLength: Float = 0.05
+                let gapLength: Float = 0.04
+                var cursor: Float = 0
+                while cursor < length {
+                    let dash = min(dashLength, length - cursor)
+                    let box = SCNBox(
+                        width: CGFloat(axis.x != 0 ? dash : 0.01),
+                        height: CGFloat(axis.y != 0 ? dash : 0.01),
+                        length: CGFloat(axis.z != 0 ? dash : 0.01),
+                        chamferRadius: 0
+                    )
+                    box.firstMaterial = material
+                    let node = SCNNode(geometry: box)
+                    let halfLength = length * 0.5
+                    let centerAlongAxis = -halfLength + cursor + dash * 0.5
+                    let position = offset + axis * centerAlongAxis
+                    node.position = SCNVector3(position.x, position.y, position.z)
+                    root.addChildNode(node)
+                    cursor += dash + gapLength
+                }
+            }
+
+            var edges: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, Float)] = []
+
+            func edgeList(
+                axis: SIMD3<Float>,
+                length: Float,
+                offsets: [SIMD3<Float>]
+            ) {
+                for offset in offsets {
+                    edges.append((axis, length, offset, length))
+                }
+            }
+
+            edgeList(
+                axis: SIMD3<Float>(1, 0, 0),
+                length: extent.x,
+                offsets: [
+                    SIMD3<Float>(0, -half.y, -half.z),
+                    SIMD3<Float>(0, -half.y, half.z),
+                    SIMD3<Float>(0, half.y, -half.z),
+                    SIMD3<Float>(0, half.y, half.z)
+                ]
+            )
+            edgeList(
+                axis: SIMD3<Float>(0, 1, 0),
+                length: extent.y,
+                offsets: [
+                    SIMD3<Float>(-half.x, 0, -half.z),
+                    SIMD3<Float>(-half.x, 0, half.z),
+                    SIMD3<Float>(half.x, 0, -half.z),
+                    SIMD3<Float>(half.x, 0, half.z)
+                ]
+            )
+            edgeList(
+                axis: SIMD3<Float>(0, 0, 1),
+                length: extent.z,
+                offsets: [
+                    SIMD3<Float>(-half.x, -half.y, 0),
+                    SIMD3<Float>(-half.x, half.y, 0),
+                    SIMD3<Float>(half.x, -half.y, 0),
+                    SIMD3<Float>(half.x, half.y, 0)
+                ]
+            )
+
+            for edge in edges {
+                let axis = edge.0
+                let length = edge.1
+                let offset = edge.2
+                let start = offset - axis * length * 0.5
+                let end = offset + axis * length * 0.5
+                let dashed = edgeOccluded(
+                    from: start,
+                    to: end,
+                    cameraPosition: cameraPosition,
+                    isOccupied: isOccupied
                 )
-                box.firstMaterial = material
-                let node = SCNNode(geometry: box)
-                node.position = SCNVector3(position.x, position.y, position.z)
-                root.addChildNode(node)
-            }
-
-            for y in [-half.y, half.y] {
-                for z in [-half.z, half.z] {
-                    addLine(
-                        size: SIMD3<Float>(extent.x, 0.01, 0.01),
-                        position: SIMD3<Float>(0, y, z)
-                    )
-                }
-            }
-            for x in [-half.x, half.x] {
-                for z in [-half.z, half.z] {
-                    addLine(
-                        size: SIMD3<Float>(0.01, extent.y, 0.01),
-                        position: SIMD3<Float>(x, 0, z)
-                    )
-                }
-            }
-            for x in [-half.x, half.x] {
-                for y in [-half.y, half.y] {
-                    addLine(
-                        size: SIMD3<Float>(0.01, 0.01, extent.z),
-                        position: SIMD3<Float>(x, y, 0)
-                    )
-                }
+                addLine(
+                    axis: axis,
+                    length: length,
+                    offset: offset,
+                    dashed: dashed
+                )
             }
         }
 
@@ -806,6 +677,132 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                 group.addChildNode(coneNode)
                 root.addChildNode(group)
             }
+        }
+
+        // MARK: - Helpers
+
+        private func resetDragState() {
+            dragMode = nil
+            dragAxis = nil
+            dragStartScreen = nil
+            dragStartCenter = nil
+            dragStartExtent = nil
+            rotateStartScreen = nil
+            rotateStartTransform = nil
+            moveStartScreen = nil
+            moveStartCenter = nil
+            scaleStartExtent = nil
+        }
+
+        private func cameraPosition(of cameraNode: SCNNode) -> SIMD3<Float> {
+            let transform = cameraNode.simdTransform
+            return SIMD3<Float>(
+                transform.columns.3.x,
+                transform.columns.3.y,
+                transform.columns.3.z
+            )
+        }
+
+        private func cameraPosition(of scnView: SCNView) -> SIMD3<Float> {
+            guard let cameraNode = scnView.pointOfView else { return .zero }
+            return cameraPosition(of: cameraNode)
+        }
+
+        private func arrowHit(in scnView: SCNView, at location: CGPoint) -> SCNHitTestResult? {
+            let results = scnView.hitTest(location, options: nil)
+            return results.first { hit in
+                if let name = axisName(from: hit) {
+                    return axis(for: name) != nil
+                }
+                return false
+            }
+        }
+
+        private func axisName(from hit: SCNHitTestResult) -> String? {
+            if let name = hit.node.name, isAxisName(name) {
+                return name
+            }
+            return hit.node.parent?.name
+        }
+
+        private func isAxisName(_ name: String) -> Bool {
+            name == "axisX" || name == "axisY" || name == "axisZ"
+        }
+
+        private func axis(for name: String) -> SIMD3<Float>? {
+            switch name {
+            case "axisX": return SIMD3<Float>(1, 0, 0)
+            case "axisY": return SIMD3<Float>(0, 1, 0)
+            case "axisZ": return SIMD3<Float>(0, 0, 1)
+            default: return nil
+            }
+        }
+
+        private func worldDeltaFromScreen(
+            dx: Float,
+            dy: Float,
+            cameraNode: SCNNode,
+            center: SIMD3<Float>,
+            viewport: CGSize,
+            depth: Float
+        ) -> SIMD3<Float> {
+            guard viewport.width > 0, viewport.height > 0,
+                  let camera = cameraNode.camera else {
+                return .zero
+            }
+            let transform = cameraNode.simdTransform
+            let cameraPosition = SIMD3<Float>(
+                transform.columns.3.x,
+                transform.columns.3.y,
+                transform.columns.3.z
+            )
+            let forward = simd_normalize(center - cameraPosition)
+            let right = simd_normalize(simd_cross(forward, SIMD3<Float>(0, 1, 0)))
+            let up = simd_cross(right, forward)
+            let distance = max(depth, 0.1)
+            let fovY = Float(camera.fieldOfView) * .pi / 180
+            let aspect = Float(viewport.width / max(viewport.height, 1))
+            let fovX = 2 * atan(tan(fovY / 2) * aspect)
+            let worldPerPixelX = 2 * distance * tan(fovX / 2) / Float(viewport.width)
+            let worldPerPixelY = 2 * distance * tan(fovY / 2) / Float(viewport.height)
+            return right * dx * worldPerPixelX + up * (-dy) * worldPerPixelY
+        }
+
+        private func positionCamera(_ scnView: SCNView) {
+            guard let cameraNode = scnView.pointOfView else { return }
+            let centroid = parent.points.reduce(SIMD3<Float>.zero) {
+                $0 + $1.position
+            } / Float(max(parent.points.count, 1))
+            let diagonal = boundingDiagonal(parent.points)
+            let distance = max(diagonal * 1.6, 0.9)
+            cameraNode.position = SCNVector3(
+                centroid.x,
+                centroid.y + diagonal * 0.45,
+                centroid.z + distance
+            )
+            cameraNode.look(at: SCNVector3(centroid.x, centroid.y, centroid.z))
+        }
+
+        private func boundingDiagonal(_ points: [ObjectPoint]) -> Float {
+            guard !points.isEmpty else { return 1 }
+            var minX = Float.greatestFiniteMagnitude
+            var minY = Float.greatestFiniteMagnitude
+            var minZ = Float.greatestFiniteMagnitude
+            var maxX = -Float.greatestFiniteMagnitude
+            var maxY = -Float.greatestFiniteMagnitude
+            var maxZ = -Float.greatestFiniteMagnitude
+            for point in points {
+                minX = min(minX, point.x)
+                minY = min(minY, point.y)
+                minZ = min(minZ, point.z)
+                maxX = max(maxX, point.x)
+                maxY = max(maxY, point.y)
+                maxZ = max(maxZ, point.z)
+            }
+            let dx = maxX - minX
+            let dy = maxY - minY
+            let dz = maxZ - minZ
+            return max(sqrt(dx * dx + dy * dy + dz * dz), 0.3)
         }
     }
 }
