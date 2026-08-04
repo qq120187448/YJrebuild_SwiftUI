@@ -474,7 +474,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
             )
             let pitchQuat = simd_quatf(angle: pitch, axis: cameraRight)
             let rotation = simd_normalize(yawQuat * pitchQuat)
-            let newOffset = rotation * startOffset
+            let newOffset = simd_act(rotation, startOffset)
             cameraNode.position = SCNVector3(
                 cameraTarget.x + newOffset.x,
                 cameraTarget.y + newOffset.y,
