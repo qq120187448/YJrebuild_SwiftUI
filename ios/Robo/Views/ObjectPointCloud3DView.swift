@@ -79,7 +79,9 @@ struct ObjectPointCloud3DView: UIViewRepresentable {
 extension SCNGeometry {
     static func objectPointCloud(
         points: [ObjectPoint],
-        pointSize: CGFloat = 6,
+        worldPointSize: Float = 0.02,
+        minScreenRadius: CGFloat = 8,
+        maxScreenRadius: CGFloat = 32,
         material overrideMaterial: SCNMaterial? = nil
     ) -> SCNGeometry {
         let vertices = points.map { SCNVector3($0.x, $0.y, $0.z) }
@@ -109,15 +111,15 @@ extension SCNGeometry {
 
         let indices = (0..<Int32(points.count)).map { $0 }
         let element = SCNGeometryElement(indices: indices, primitiveType: .point)
+        element.pointSize = CGFloat(worldPointSize)
+        element.minimumPointScreenSpaceRadius = minScreenRadius
+        element.maximumPointScreenSpaceRadius = maxScreenRadius
         let geometry = SCNGeometry(sources: [vertexSource, colorSource], elements: [element])
         let material = overrideMaterial ?? SCNMaterial()
         material.lightingModel = .constant
         if overrideMaterial == nil {
             material.diffuse.contents = UIColor.white
         }
-        material.shaderModifiers = [
-            .geometry: "#pragma body\n_geometry.pointSize = \(pointSize);"
-        ]
         geometry.materials = [material]
         return geometry
     }
