@@ -282,7 +282,7 @@ struct ObjectScanView: View {
             return "请点击画面中的物体中心，放置裁剪盒"
         }
         if cropBoxPlaced {
-            return "裁剪盒 \(cropBoxSize, specifier: "%.1f") m 已放置，只计算盒内点云"
+            return "裁剪盒 \(String(format: "%.1f", cropBoxSize)) m 已放置，只计算盒内点云"
         }
         return "建议先放置裁剪盒，再围绕物体扫描"
     }
