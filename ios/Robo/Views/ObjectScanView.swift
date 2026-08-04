@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import ARKit
+import CoreVideo
 import SceneKit
 import simd
 
@@ -705,10 +706,12 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     private var voxelMap: [Int64: VoxelAccumulator] = [:]
     private var cropVolume: ObjectCropVolume?
     private var cropBoxNode: SCNNode?
+    private var meshOcclusionNodes: [UUID: SCNNode] = [:]
 
     private var moveStartScreen: CGPoint?
     private var moveStartCenter: SIMD3<Float>?
     private var moveStartDepth: Float = 0
+    private var rotateStartTransform: simd_float4x4?
     private var scaleStartExtent: SIMD3<Float>?
     private var isMoving = false
     private var isScaling = false
@@ -735,6 +738,12 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         pan.maximumNumberOfTouches = 1
         pan.cancelsTouchesInView = false
         sceneView.addGestureRecognizer(pan)
+
+        let movePan = UIPanGestureRecognizer(target: self, action: #selector(handleMovePan(_:)))
+        movePan.minimumNumberOfTouches = 2
+        movePan.maximumNumberOfTouches = 2
+        movePan.cancelsTouchesInView = false
+        sceneView.addGestureRecognizer(movePan)
 
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
         pinch.cancelsTouchesInView = false
@@ -785,12 +794,85 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             isMoving = true
             moveStartScreen = location
             moveStartCenter = volume.center
+            rotateStartTransform = volume.transform
             let cameraPosition = SIMD3<Float>(
                 frame.camera.transform.columns.3.x,
                 frame.camera.transform.columns.3.y,
                 frame.camera.transform.columns.3.z
             )
             moveStartDepth = max(simd_length(volume.center - cameraPosition), 0.1)
+
+        case .changed:
+            guard isMoving,
+                  let start = moveStartScreen,
+                  let startCenter = moveStartCenter,
+                  let cameraNode = sceneView.pointOfView,
+                  let startTransform = rotateStartTransform,
+                  let volume = cropVolume else {
+                return
+            }
+            let viewport = sceneView.bounds.size
+            guard viewport.width > 0, viewport.height > 0 else { return }
+            let dx = Float(location.x - start.x)
+            let dy = Float(location.y - start.y)
+            let yaw = dx * 0.006
+            let yawQuat = simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0))
+            let newQuat = simd_normalize(yawQuat * simd_quatf(startTransform))
+            var newTransform = simd_float4x4(newQuat)
+
+            let verticalDelta = worldDeltaFromScreen(
+                dx: 0,
+                dy: dy,
+                cameraNode: cameraNode,
+                center: startCenter,
+                viewport: viewport,
+                depth: moveStartDepth
+            )
+            let newCenter = SIMD3<Float>(
+                startCenter.x,
+                startCenter.y + verticalDelta.y,
+                startCenter.z
+            )
+            newTransform.columns.3 = SIMD4<Float>(
+                newCenter.x,
+                newCenter.y,
+                newCenter.z,
+                1
+            )
+            cropVolume = ObjectCropVolume(
+                center: newCenter,
+                extent: volume.extent,
+                transform: newTransform
+            )
+            updateCropBoxNode()
+
+        case .ended, .cancelled:
+            isMoving = false
+            moveStartScreen = nil
+            moveStartCenter = nil
+            rotateStartTransform = nil
+
+        default:
+            break
+        }
+    }
+
+    @objc private func handleMovePan(_ recognizer: UIPanGestureRecognizer) {
+        guard cropVolume != nil else { return }
+        let location = recognizer.location(in: sceneView)
+        switch recognizer.state {
+        case .began:
+            guard let volume = cropVolume,
+                  let cameraNode = sceneView.pointOfView else {
+                return
+            }
+            isMoving = true
+            moveStartScreen = location
+            moveStartCenter = volume.center
+            moveStartDepth = max(
+                simd_length(volume.center - cameraPosition(of: cameraNode)),
+                0.1
+            )
 
         case .changed:
             guard isMoving,
@@ -812,7 +894,8 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                 viewport: viewport,
                 depth: moveStartDepth
             )
-            let newCenter = startCenter + worldDelta
+            let horizontalDelta = SIMD3<Float>(worldDelta.x, 0, worldDelta.z)
+            let newCenter = startCenter + horizontalDelta
             var transform = volume.transform
             transform.columns.3 = SIMD4<Float>(
                 newCenter.x,
@@ -835,6 +918,15 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         default:
             break
         }
+    }
+
+    private func cameraPosition(of cameraNode: SCNNode) -> SIMD3<Float> {
+        let transform = cameraNode.simdTransform
+        return SIMD3<Float>(
+            transform.columns.3.x,
+            transform.columns.3.y,
+            transform.columns.3.z
+        )
     }
 
     private func worldDeltaFromScreen(
@@ -1015,7 +1107,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         root.simdTransform = volume.transform
 
         let cameraPosition = cameraPositionOfScene
-        addEdges(
+        ObjectBoxVisual.addEdgeGeometry(
             to: root,
             extent: volume.extent,
             cameraPosition: cameraPosition,
@@ -1023,8 +1115,8 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                 self?.isOccupied(world) ?? false
             }
         )
-        addCorners(to: root, extent: volume.extent)
-        animateFlow(on: root)
+        ObjectBoxVisual.addAxes(to: root, extent: volume.extent)
+        ObjectBoxVisual.addFlow(to: root, extent: volume.extent)
         sceneView.scene.rootNode.addChildNode(root)
         cropBoxNode = root
     }
@@ -1248,11 +1340,89 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         let snapshot = snapshotPoints()
         DispatchQueue.main.async {
             self.updatePointCloud(snapshot)
+            self.updateOcclusionMeshes(from: frame)
             if self.cropVolume != nil {
                 self.updateCropBoxNode()
             }
             self.onPointCount?(snapshot.count)
         }
+    }
+
+    private func updateOcclusionMeshes(from frame: ARFrame) {
+        let anchors = frame.anchors.compactMap { $0 as? ARMeshAnchor }
+        let currentIDs = Set(anchors.map(\.identifier))
+        for id in meshOcclusionNodes.keys where !currentIDs.contains(id) {
+            meshOcclusionNodes[id]?.removeFromParentNode()
+            meshOcclusionNodes.removeValue(forKey: id)
+        }
+        for anchor in anchors {
+            let node: SCNNode
+            if let existing = meshOcclusionNodes[anchor.identifier] {
+                node = existing
+            } else {
+                node = SCNNode()
+                node.name = "occlusionMesh"
+                node.renderingOrder = -20
+                sceneView.scene.rootNode.addChildNode(node)
+                meshOcclusionNodes[anchor.identifier] = node
+            }
+            node.simdTransform = anchor.transform
+            if let geometry = makeOcclusionGeometry(anchor) {
+                node.geometry = geometry
+            }
+        }
+    }
+
+    private func makeOcclusionGeometry(_ anchor: ARMeshAnchor) -> SCNGeometry? {
+        let geo = anchor.geometry
+        guard geo.vertices.count > 0, geo.faces.count > 0 else { return nil }
+
+        let base = geo.vertices.buffer.contents()
+        let stride = geo.vertices.stride
+        let offset = geo.vertices.offset
+        var vertices: [SCNVector3] = []
+        vertices.reserveCapacity(geo.vertices.count)
+        for i in 0..<geo.vertices.count {
+            let local = (base + offset + i * stride)
+                .assumingMemoryBound(to: SIMD3<Float>.self).pointee
+            vertices.append(SCNVector3(local.x, local.y, local.z))
+        }
+
+        let faceBuffer = geo.faces.buffer.contents()
+        let bytesPerIndex = geo.faces.bytesPerIndex
+        let faceCount = geo.faces.count
+        var indices: [Int32] = []
+        indices.reserveCapacity(faceCount * 3)
+        for faceIndex in 0..<faceCount {
+            let baseOffset = faceIndex * 3 * bytesPerIndex
+            func read(_ byteOffset: Int) -> Int {
+                if bytesPerIndex == 2 {
+                    return Int(faceBuffer.load(
+                        fromByteOffset: baseOffset + byteOffset,
+                        as: UInt16.self
+                    ))
+                }
+                return Int(faceBuffer.load(
+                    fromByteOffset: baseOffset + byteOffset,
+                    as: UInt32.self
+                ))
+            }
+            indices.append(Int32(read(0)))
+            indices.append(Int32(read(bytesPerIndex)))
+            indices.append(Int32(read(bytesPerIndex * 2)))
+        }
+
+        let source = SCNGeometrySource(vertices: vertices)
+        let element = SCNGeometryElement(indices: indices, primitiveType: .triangles)
+        let geometry = SCNGeometry(sources: [source], elements: [element])
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = UIColor.clear
+        material.colorBufferWriteMask = []
+        material.writesToDepthBuffer = true
+        material.isDoubleSided = true
+        geometry.materials = [material]
+        return geometry
     }
 
     private func compactVoxelMap() {
@@ -1304,7 +1474,9 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
 
                 var classification: Int?
                 var color = SIMD3<Float>(0.95, 0.55, 0.2)
-                if let classificationBuffer {
+                if voxelMap[key] == nil, let sampled = sampleCameraColor(frame: frame, world: world) {
+                    color = sampled
+                } else if let classificationBuffer {
                     let raw = classificationBuffer.load(
                         fromByteOffset: classificationOffset + i * classificationStride,
                         as: UInt8.self
@@ -1323,6 +1495,64 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                 voxelMap[key] = accumulator
             }
         }
+    }
+
+    private func sampleCameraColor(frame: ARFrame, world: SIMD3<Float>) -> SIMD3<Float>? {
+        let viewportSize = sceneView.bounds.size
+        guard viewportSize.width > 0, viewportSize.height > 0 else { return nil }
+        let projected = frame.camera.projectPoint(
+            world,
+            orientation: .portrait,
+            viewportSize: viewportSize
+        )
+        let displayTransform = frame.displayTransform(
+            for: .portrait,
+            viewportSize: viewportSize
+        )
+        let normalized = displayTransform.inverted().applying(
+            CGPoint(
+                x: projected.x / viewportSize.width,
+                y: projected.y / viewportSize.height
+            )
+        )
+        let imageWidth = Int(frame.camera.imageResolution.width)
+        let imageHeight = Int(frame.camera.imageResolution.height)
+        let pixelX = Int(normalized.x * CGFloat(imageWidth))
+        let pixelY = Int(normalized.y * CGFloat(imageHeight))
+
+        let image = frame.capturedImage
+        CVPixelBufferLockBaseAddress(image, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(image, .readOnly) }
+        guard CVPixelBufferGetPlaneCount(image) >= 2,
+              let yBase = CVPixelBufferGetBaseAddressOfPlane(image, 0)?
+                .assumingMemoryBound(to: UInt8.self),
+              let uvBase = CVPixelBufferGetBaseAddressOfPlane(image, 1)?
+                .assumingMemoryBound(to: UInt8.self) else {
+            return nil
+        }
+        let yWidth = CVPixelBufferGetWidthOfPlane(image, 0)
+        let yHeight = CVPixelBufferGetHeightOfPlane(image, 0)
+        let uvWidth = CVPixelBufferGetWidthOfPlane(image, 1)
+        let uvHeight = CVPixelBufferGetHeightOfPlane(image, 1)
+        let yRow = CVPixelBufferGetBytesPerRowOfPlane(image, 0)
+        let uvRow = CVPixelBufferGetBytesPerRowOfPlane(image, 1)
+        guard pixelX >= 0, pixelY >= 0,
+              pixelX < yWidth, pixelY < yHeight else {
+            return nil
+        }
+        let y = Float(yBase[pixelY * yRow + pixelX])
+        let uvX = min(uvWidth - 1, pixelX / 2)
+        let uvY = min(uvHeight - 1, pixelY / 2)
+        let uvIndex = uvY * uvRow + uvX * 2
+        let cb = Float(uvBase[uvIndex]) - 128
+        let cr = Float(uvBase[uvIndex + 1]) - 128
+        var r = (y + 1.402 * cr) / 255
+        var g = (y - 0.344136 * cb - 0.714136 * cr) / 255
+        var b = (y + 1.772 * cb) / 255
+        r = min(max(r, 0), 1)
+        g = min(max(g, 0), 1)
+        b = min(max(b, 0), 1)
+        return SIMD3<Float>(r, g, b)
     }
 
     private func classificationColor(_ classification: ARMeshClassification?) -> SIMD3<Float> {
@@ -1371,13 +1601,13 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
 
     private func updatePointCloud(_ points: [ObjectPoint]) {
         guard !points.isEmpty else { return }
-        let displayPoints = sampled(points, limit: 80_000).map {
+        let displayPoints = sampled(points, limit: 40_000).map {
             ObjectPoint(x: $0.x, y: $0.y, z: $0.z, r: 1, g: 1, b: 1)
         }
         let material = SCNMaterial()
         material.lightingModel = .constant
-        material.diffuse.contents = UIColor(red: 1, green: 0.08, blue: 0.06, alpha: 1)
-        material.emission.contents = UIColor(red: 1, green: 0.08, blue: 0.06, alpha: 1)
+        material.diffuse.contents = UIColor(white: 1, alpha: 1)
+        material.emission.contents = UIColor(white: 0.9, alpha: 1)
         material.blendMode = .add
         material.writesToDepthBuffer = false
         let radius = CGFloat(pointSize)

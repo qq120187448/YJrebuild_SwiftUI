@@ -53,6 +53,16 @@ struct ObjectCropBox3DView: UIViewRepresentable {
         scnView.addGestureRecognizer(pinch)
         context.coordinator.pinch = pinch
 
+        let movePan = UIPanGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleMovePan(_:))
+        )
+        movePan.minimumNumberOfTouches = 2
+        movePan.maximumNumberOfTouches = 2
+        movePan.cancelsTouchesInView = false
+        scnView.addGestureRecognizer(movePan)
+        context.coordinator.movePan = movePan
+
         context.coordinator.parent = self
         context.coordinator.rebuild(scnView)
         return scnView
@@ -95,12 +105,14 @@ struct ObjectCropBox3DView: UIViewRepresentable {
         private var lastPointCount = -1
         fileprivate var pan: UIPanGestureRecognizer?
         fileprivate var pinch: UIPinchGestureRecognizer?
+        fileprivate var movePan: UIPanGestureRecognizer?
         private var occupancy: Set<Int64> = []
         private let occupancyCell: Float = 0.05
 
         private var moveStartScreen: CGPoint?
         private var moveStartCenter: SIMD3<Float>?
         private var moveStartDepth: Float = 0
+        private var rotateStartTransform: simd_float4x4?
         private var scaleStartExtent: SIMD3<Float>?
 
         private var isMoving = false
@@ -130,6 +142,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
             scnView.allowsCameraControl = parent.cropVolume == nil
             pan?.isEnabled = parent.cropVolume != nil
             pinch?.isEnabled = parent.cropVolume != nil
+            movePan?.isEnabled = parent.cropVolume != nil
 
             scene.rootNode.childNodes
                 .filter { $0.name == "cropBox" }
@@ -141,7 +154,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
             root.simdTransform = volume.transform
 
             let cameraPosition = cameraPosition(of: scnView)
-            addEdges(
+            ObjectBoxVisual.addEdgeGeometry(
                 to: root,
                 extent: volume.extent,
                 cameraPosition: cameraPosition,
@@ -149,12 +162,90 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                     self?.isOccupied(world) ?? false
                 }
             )
-            addCorners(to: root, extent: volume.extent)
-            animateFlow(on: root)
+            ObjectBoxVisual.addAxes(to: root, extent: volume.extent)
+            ObjectBoxVisual.addFlow(to: root, extent: volume.extent)
             scene.rootNode.addChildNode(root)
         }
 
         @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
+            guard let scnView = recognizer.view as? SCNView,
+                  parent.cropVolume != nil else {
+                return
+            }
+            let location = recognizer.location(in: scnView)
+            switch recognizer.state {
+            case .began:
+                guard let volume = parent.cropVolume,
+                      let cameraNode = scnView.pointOfView else {
+                    return
+                }
+                isMoving = true
+                moveStartScreen = location
+                moveStartCenter = volume.center
+                moveStartDepth = max(
+                    simd_length(volume.center - cameraPosition(of: cameraNode)),
+                    0.1
+                )
+                rotateStartTransform = volume.transform
+
+            case .changed:
+                guard isMoving,
+                      let start = moveStartScreen,
+                      let startCenter = moveStartCenter,
+                      let cameraNode = scnView.pointOfView,
+                      let startTransform = rotateStartTransform,
+                      let volume = parent.cropVolume else {
+                    return
+                }
+                let dx = Float(location.x - start.x)
+                let dy = Float(location.y - start.y)
+                let yaw = dx * 0.006
+                let yawQuat = simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0))
+                let newQuat = simd_normalize(yawQuat * simd_quatf(startTransform))
+                var newTransform = simd_float4x4(newQuat)
+
+                let verticalDelta = worldDeltaFromScreen(
+                    dx: 0,
+                    dy: dy,
+                    cameraNode: cameraNode,
+                    center: startCenter,
+                    viewport: scnView.bounds.size,
+                    depth: moveStartDepth
+                )
+                let newCenter = SIMD3<Float>(
+                    startCenter.x,
+                    startCenter.y + verticalDelta.y,
+                    startCenter.z
+                )
+                newTransform.columns.3 = SIMD4<Float>(
+                    newCenter.x,
+                    newCenter.y,
+                    newCenter.z,
+                    1
+                )
+                parent.onCropVolumeChanged(
+                    ObjectCropVolume(
+                        center: newCenter,
+                        extent: volume.extent,
+                        transform: newTransform
+                    )
+                )
+
+            case .ended, .cancelled:
+                isMoving = false
+                moveStartScreen = nil
+                moveStartCenter = nil
+                rotateStartTransform = nil
+                if let volume = parent.cropVolume {
+                    parent.onCropBoxEditEnded(volume)
+                }
+
+            default:
+                break
+            }
+        }
+
+        @objc func handleMovePan(_ recognizer: UIPanGestureRecognizer) {
             guard let scnView = recognizer.view as? SCNView,
                   parent.cropVolume != nil else {
                 return
@@ -192,7 +283,8 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                     viewport: scnView.bounds.size,
                     depth: moveStartDepth
                 )
-                let newCenter = startCenter + worldDelta
+                let horizontalDelta = SIMD3<Float>(worldDelta.x, 0, worldDelta.z)
+                let newCenter = startCenter + horizontalDelta
                 var transform = volume.transform
                 transform.columns.3 = SIMD4<Float>(
                     newCenter.x,
