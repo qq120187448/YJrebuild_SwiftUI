@@ -263,12 +263,65 @@ struct FloorPlan2DView: View {
                     }
                 )
             } else {
-                Text("在平面图上点选墙、门、窗或物体后可修改其尺寸")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("点选构件，或从下面快速选择：")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(walls, id: \.identifier) { wall in
+                                quickSelectButton(
+                                    label: "墙\(wallIndexLabel(wall))",
+                                    id: wall.identifier.uuidString
+                                )
+                            }
+                            ForEach(doors, id: \.identifier) { surface in
+                                quickSelectButton(
+                                    label: openingLabel(surface),
+                                    id: surface.identifier.uuidString
+                                )
+                            }
+                            ForEach(windows, id: \.identifier) { surface in
+                                quickSelectButton(
+                                    label: openingLabel(surface),
+                                    id: surface.identifier.uuidString
+                                )
+                            }
+                            ForEach(openings, id: \.identifier) { surface in
+                                quickSelectButton(
+                                    label: openingLabel(surface),
+                                    id: surface.identifier.uuidString
+                                )
+                            }
+                            ForEach(objects, id: \.identifier) { object in
+                                quickSelectButton(
+                                    label: objectLabel(object),
+                                    id: object.identifier.uuidString
+                                )
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
                     .frame(maxWidth: .infinity)
+                }
+                .frame(maxWidth: .infinity)
             }
         }
+    }
+
+    private func quickSelectButton(label: String, id: String) -> some View {
+        Button {
+            selectedComponentID = id
+            populateSelectedFields()
+        } label: {
+            Text(label)
+                .font(.caption)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.accentColor.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
     }
 
     private func selectedComponentEditor(
@@ -582,16 +635,30 @@ struct FloorPlan2DView: View {
         guard points.count >= 3 else { return }
         let project = worldProjection(for: size)
 
-        var best: (id: String, distance: CGFloat)?
+        var best: (id: String, distance: CGFloat, kind: HitKind)?
+
+        func consider(_ id: String, _ distance: CGFloat, _ kind: HitKind) {
+            let threshold: CGFloat = kind == .opening ? 40 : 30
+            guard distance <= threshold else { return }
+            guard let current = best else {
+                best = (id, distance, kind)
+                return
+            }
+            let currentPriority = priority(of: current.kind)
+            let newPriority = priority(of: kind)
+            if newPriority > currentPriority
+                || (newPriority == currentPriority && distance < current.distance) {
+                best = (id, distance, kind)
+            }
+        }
+
         for wall in walls {
             let corners = wallCorners(wall, thickness: wallThickness(wall)).map {
                 project(Double($0.x), Double($0.z))
             }
             for i in 0..<corners.count {
                 let distance = distanceToSegment(location, corners[i], corners[(i + 1) % corners.count])
-                if distance < 24, best == nil || distance < best!.distance {
-                    best = (wall.identifier.uuidString, distance)
-                }
+                consider(wall.identifier.uuidString, distance, .wall)
             }
         }
         for surface in doors + windows + openings {
@@ -611,9 +678,19 @@ struct FloorPlan2DView: View {
                 Double((center + normalized * Float(width / 2)).z)
             )
             let distance = distanceToSegment(location, start, end)
-            if distance < 24, best == nil || distance < best!.distance {
-                best = (surface.identifier.uuidString, distance)
-            }
+            consider(surface.identifier.uuidString, distance, .opening)
+        }
+        for object in objects {
+            let width = Double(object.dimensions.x)
+            let depth = Double(object.dimensions.y)
+            guard width > 0.05, depth > 0.05 else { continue }
+            let center = object.transform.columns.3
+            let p = project(Double(center.x), Double(center.z))
+            let w = max(8, min(36, width * 30))
+            let h = max(8, min(36, depth * 30))
+            let rect = CGRect(x: p.x - w / 2, y: p.y - h / 2, width: w, height: h)
+            let distance = distanceToRect(location, rect)
+            consider(object.identifier.uuidString, distance, .object)
         }
 
         if let selected = best {
@@ -622,6 +699,29 @@ struct FloorPlan2DView: View {
         } else {
             selectedComponentID = nil
         }
+    }
+
+    private enum HitKind {
+        case wall
+        case opening
+        case object
+    }
+
+    private func priority(of kind: HitKind) -> Int {
+        switch kind {
+        case .opening:
+            return 2
+        case .object:
+            return 1
+        case .wall:
+            return 0
+        }
+    }
+
+    private func distanceToRect(_ point: CGPoint, _ rect: CGRect) -> CGFloat {
+        let dx = max(rect.minX - point.x, 0, point.x - rect.maxX)
+        let dy = max(rect.minY - point.y, 0, point.y - rect.maxY)
+        return (dx * dx + dy * dy).squareRoot()
     }
 
     private func populateSelectedFields() {
