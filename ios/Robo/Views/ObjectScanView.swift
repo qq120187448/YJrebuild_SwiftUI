@@ -522,7 +522,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             var classificationStride = 0
             var classificationOffset = 0
             if let classificationSource = geometry.classification {
-                classificationBuffer = classificationSource.buffer.contents()
+                classificationBuffer = UnsafeRawPointer(classificationSource.buffer.contents())
                 classificationStride = classificationSource.stride
                 classificationOffset = classificationSource.offset
             }
@@ -541,7 +541,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                         fromByteOffset: classificationOffset + i * classificationStride,
                         as: UInt8.self
                     )
-                    color = classificationColor(ARMeshClassification(rawValue: raw))
+                    color = classificationColor(ARMeshClassification(rawValue: Int(raw)))
                 }
 
                 var accumulator = voxelMap[key] ?? VoxelAccumulator()
