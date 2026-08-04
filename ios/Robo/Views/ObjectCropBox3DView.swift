@@ -15,7 +15,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> SCNView {
         let scnView = SCNView()
-        scnView.allowsCameraControl = false
+        scnView.allowsCameraControl = !parent.isPlacing
         scnView.antialiasingMode = .multisampling4X
         scnView.backgroundColor = UIColor(red: 0.06, green: 0.07, blue: 0.09, alpha: 1)
         scnView.scene = SCNScene()
@@ -48,6 +48,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
 
         context.coordinator.parent = self
         context.coordinator.rebuild(scnView)
+        context.coordinator.updateSelection(scnView)
         return scnView
     }
 
@@ -65,6 +66,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
         private var dragStartCenter: SIMD3<Float>?
         private var dragStartExtent: SIMD3<Float>?
         private var dragDepth: Float = 0
+        private var isBoxSelected = false
 
         init(parent: ObjectCropBox3DView) {
             self.parent = parent
@@ -72,6 +74,9 @@ struct ObjectCropBox3DView: UIViewRepresentable {
 
         func rebuild(_ scnView: SCNView) {
             guard let scene = scnView.scene else { return }
+            if parent.cropVolume == nil {
+                isBoxSelected = false
+            }
             if parent.points.count != lastPointCount {
                 lastPointCount = parent.points.count
                 scene.rootNode.childNodes
@@ -94,6 +99,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
             let root = SCNNode()
             root.name = "cropBox"
             root.simdTransform = volume.transform
+            let boxColor = isBoxSelected ? UIColor.systemOrange : UIColor.systemGreen
 
             let fill = SCNBox(
                 width: CGFloat(volume.extent.x),
@@ -103,24 +109,32 @@ struct ObjectCropBox3DView: UIViewRepresentable {
             )
             let fillMaterial = SCNMaterial()
             fillMaterial.lightingModel = .constant
-            fillMaterial.diffuse.contents = UIColor.systemGreen.withAlphaComponent(0.14)
-            fillMaterial.emission.contents = UIColor.systemGreen.withAlphaComponent(0.18)
+            fillMaterial.diffuse.contents = boxColor.withAlphaComponent(0.14)
+            fillMaterial.emission.contents = boxColor.withAlphaComponent(0.18)
             fillMaterial.isDoubleSided = true
             fill.firstMaterial = fillMaterial
             root.addChildNode(SCNNode(geometry: fill))
 
-            addEdges(to: root, extent: volume.extent)
+            addEdges(to: root, extent: volume.extent, color: boxColor)
             addArrows(to: root, extent: volume.extent)
             scene.rootNode.addChildNode(root)
         }
 
         @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
-            guard parent.isPlacing,
-                  recognizer.state == .ended,
+            guard recognizer.state == .ended,
                   let scnView = recognizer.view as? SCNView else {
                 return
             }
             let location = recognizer.location(in: scnView)
+            if !parent.isPlacing {
+                if let hit = scnView.hitTest(location).first, isCropBoxHit(hit) {
+                    isBoxSelected = true
+                } else {
+                    isBoxSelected = false
+                }
+                updateSelection(scnView)
+                return
+            }
             let near = scnView.unprojectPoint(SCNVector3(location.x, location.y, 0))
             let far = scnView.unprojectPoint(SCNVector3(location.x, location.y, 1))
             let origin = SIMD3<Float>(near.x, near.y, near.z)
@@ -147,7 +161,8 @@ struct ObjectCropBox3DView: UIViewRepresentable {
         }
 
         @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
-            guard parent.cropVolume != nil,
+            guard isBoxSelected,
+                  parent.cropVolume != nil,
                   let scnView = recognizer.view as? SCNView else {
                 return
             }
@@ -232,6 +247,27 @@ struct ObjectCropBox3DView: UIViewRepresentable {
             default:
                 break
             }
+        }
+
+        func updateSelection(_ scnView: SCNView) {
+            scnView.allowsCameraControl = !parent.isPlacing && !isBoxSelected
+            if let scene = scnView.scene {
+                scene.rootNode.childNodes
+                    .filter { $0.name == "cropBox" }
+                    .forEach { $0.removeFromParentNode() }
+            }
+            rebuild(scnView)
+        }
+
+        private func isCropBoxHit(_ hit: SCNHitTestResult) -> Bool {
+            var node: SCNNode? = hit.node
+            while let current = node {
+                if current.name == "cropBox" || isAxisName(current.name ?? "") {
+                    return true
+                }
+                node = current.parent
+            }
+            return false
         }
 
         private func axisName(from hit: SCNHitTestResult) -> String? {
@@ -320,12 +356,12 @@ struct ObjectCropBox3DView: UIViewRepresentable {
             return max(sqrt(dx * dx + dy * dy + dz * dz), 0.3)
         }
 
-        private func addEdges(to root: SCNNode, extent: SIMD3<Float>) {
+        private func addEdges(to root: SCNNode, extent: SIMD3<Float>, color: UIColor) {
             let half = extent * 0.5
             let material = SCNMaterial()
             material.lightingModel = .constant
-            material.diffuse.contents = UIColor.systemGreen
-            material.emission.contents = UIColor.systemGreen
+            material.diffuse.contents = color
+            material.emission.contents = color
 
             func addLine(size: SIMD3<Float>, position: SIMD3<Float>) {
                 let box = SCNBox(

@@ -210,6 +210,9 @@ struct ObjectScanView: View {
                     isPlacing: isPlacingCropBox,
                     onCropVolumeChanged: { volume in
                         cropVolume = volume
+                        if volume != nil {
+                            isPlacingCropBox = false
+                        }
                         if volume == nil {
                             boxMetrics = nil
                         }
@@ -227,7 +230,9 @@ struct ObjectScanView: View {
                         isPlacingCropBox = true
                     } label: {
                         Label(
-                            isPlacingCropBox ? "点击地面放置" : "放置裁剪盒",
+                            isPlacingCropBox
+                                ? "点击地面放置"
+                                : (cropVolume == nil ? "放置裁剪盒" : "重新放置裁剪盒"),
                             systemImage: "square.dashed"
                         )
                         .font(.subheadline.bold())
@@ -252,7 +257,9 @@ struct ObjectScanView: View {
                 }
 
                 if cropVolume != nil {
-                    Text("拖动红/绿/蓝色箭头调整 X/Y/Z 三向尺寸，只计算盒内点云。")
+                    Text(isPlacingCropBox
+                        ? "点击地面重新放置裁剪盒。"
+                        : "点选裁剪盒后拖动红/绿/蓝色箭头调整 X/Y/Z 尺寸；未选中时手势控制整个模型。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
