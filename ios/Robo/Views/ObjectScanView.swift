@@ -747,14 +747,12 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         let location = recognizer.location(in: sceneView)
         switch recognizer.state {
         case .began:
-            guard let hit = sceneView.hitTest(
-                location,
-                options: [.searchMode: SCNHitTestSearchMode.closest.rawValue]
-            ).first,
-            let volume = cropVolume else {
+            guard let volume = cropVolume else {
                 return
             }
-            if let name = axisName(from: hit), let axis = axis(for: name) {
+            if let hit = arrowHit(at: location),
+               let name = axisName(from: hit),
+               let axis = axis(for: name) {
                 dragMode = .resize
                 dragAxis = axis
                 dragStartScreen = location
@@ -766,7 +764,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                     sceneView.session.currentFrame?.camera.transform.columns.3.z ?? 0
                 )
                 dragDepth = max(simd_length(volume.center - cameraPosition), 0.1)
-            } else if isCropBoxHit(hit) {
+            } else if let hit = cropHit(at: location) {
                 dragMode = .rotate
                 rotateStartScreen = location
                 rotateStartTransform = volume.transform
@@ -1023,6 +1021,21 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         return false
     }
 
+    private func arrowHit(at location: CGPoint) -> SCNHitTestResult? {
+        let results = sceneView.hitTest(location, options: nil)
+        return results.first { hit in
+            if let name = axisName(from: hit) {
+                return axis(for: name) != nil
+            }
+            return false
+        }
+    }
+
+    private func cropHit(at location: CGPoint) -> SCNHitTestResult? {
+        let results = sceneView.hitTest(location, options: nil)
+        return results.first { isCropBoxHit($0) }
+    }
+
     func placeCropBox(at point: CGPoint) {
         guard let query = sceneView.raycastQuery(
             from: point,
@@ -1137,7 +1150,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         for y in [-half.y, half.y] {
             for z in [-half.z, half.z] {
                 addLine(
-                    size: SIMD3<Float>(extent.x, 0.02, 0.02),
+                    size: SIMD3<Float>(extent.x, 0.01, 0.01),
                     position: SIMD3<Float>(0, y, z)
                 )
             }
@@ -1145,7 +1158,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         for x in [-half.x, half.x] {
             for z in [-half.z, half.z] {
                 addLine(
-                    size: SIMD3<Float>(0.02, extent.y, 0.02),
+                    size: SIMD3<Float>(0.01, extent.y, 0.01),
                     position: SIMD3<Float>(x, 0, z)
                 )
             }
@@ -1153,7 +1166,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         for x in [-half.x, half.x] {
             for y in [-half.y, half.y] {
                 addLine(
-                    size: SIMD3<Float>(0.02, 0.02, extent.z),
+                    size: SIMD3<Float>(0.01, 0.01, extent.z),
                     position: SIMD3<Float>(x, y, 0)
                 )
             }

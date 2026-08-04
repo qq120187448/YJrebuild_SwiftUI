@@ -10,8 +10,15 @@ struct ObjectScanDetailView: View {
 
     var body: some View {
         List {
-            if !points.isEmpty {
-                Section("3D 预览") {
+            Section("3D 预览") {
+                if points.isEmpty {
+                    ContentUnavailableView(
+                        "暂无 3D 点云",
+                        systemImage: "cube.transparent",
+                        description: Text("该历史记录没有保存点云数据。")
+                    )
+                    .frame(height: 200)
+                } else {
                     ObjectPointCloud3DView(points: points)
                         .frame(height: 260)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
