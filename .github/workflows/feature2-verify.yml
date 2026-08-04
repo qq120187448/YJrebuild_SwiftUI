@@ -1,4 +1,4 @@
-name: Feature 2 Dependency Verification
+name: Feature 2 Verification
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
 
 jobs:
   verify:
-    name: Build SwiftIGL and Manifold for iOS
+    name: Build lightweight geometry libs and measure Release IPA
     runs-on: macos-latest
 
     steps:
@@ -19,19 +19,35 @@ jobs:
           swift --version
           xcodebuild -version
 
-      - name: Build for iOS Simulator
-        working-directory: Feature2Verify
-        run: |
-          SDK=$(xcrun --sdk iphonesimulator --show-sdk-path)
-          swift build \
-            --triple arm64-apple-ios-simulator \
-            --sdk "$SDK" \
-            -Xswiftc -swift-version \
-            -Xswiftc 5
+      - name: Install XcodeGen
+        run: brew install xcodegen
 
-      - name: Report dependency size
+      - name: Generate verification app
+        working-directory: Feature2Verify
+        run: xcodegen generate --spec app-project.yml
+
+      - name: Build Release app
         working-directory: Feature2Verify
         run: |
-          du -sh .build 2>/dev/null || true
-          du -sh .build/checkouts/* 2>/dev/null || true
-          du -sh .build/artifacts/* 2>/dev/null || true
+          xcodebuild \
+            -project Feature2VerifyApp.xcodeproj \
+            -scheme Feature2VerifyApp \
+            -configuration Release \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Measure app and IPA size
+        run: |
+          APP_PATH=$(find "$HOME/Library/Developer/Xcode/DerivedData" -type d -name "Feature2VerifyApp.app" -path "*Release-iphoneos*" | head -n 1)
+          echo "APP_PATH=$APP_PATH"
+          du -sh "$APP_PATH"
+          du -h "$APP_PATH/Feature2VerifyApp"
+
+          STAGING="$RUNNER_TEMP/ipa-staging"
+          rm -rf "$STAGING"
+          mkdir -p "$STAGING/Payload"
+          cp -R "$APP_PATH" "$STAGING/Payload/"
+          cd "$STAGING"
+          zip -qry "$RUNNER_TEMP/Feature2VerifyApp.ipa" Payload
+          ls -lh "$RUNNER_TEMP/Feature2VerifyApp.ipa"

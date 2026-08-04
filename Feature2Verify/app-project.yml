@@ -1,0 +1,39 @@
+name: Feature2VerifyApp
+options:
+  bundleIdPrefix: com.silv
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+packages:
+  Voxels:
+    url: https://github.com/heckj/Voxels.git
+    from: 0.2.6
+  iTriangle:
+    url: https://github.com/iShape-Swift/iTriangle.git
+    from: 1.17.0
+  Euclid:
+    url: https://github.com/nicklockwood/Euclid.git
+    from: 0.8.20
+  Manifold:
+    url: https://github.com/tomasf/manifold-swift.git
+    from: 1.1.0
+
+targets:
+  Feature2VerifyApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+    dependencies:
+      - package: Voxels
+      - package: iTriangle
+      - package: Euclid
+      - package: Manifold
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.silv.Feature2VerifyApp
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.9"
+        CODE_SIGNING_ALLOWED: NO
+        SWIFT_OBJC_INTEROP_MODE: "-enable-cxx-interop"
