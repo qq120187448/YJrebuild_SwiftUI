@@ -93,8 +93,8 @@ struct ObjectCropBox3DView: UIViewRepresentable {
         var parent: ObjectCropBox3DView
 
         private var lastPointCount = -1
-        private var pan: UIPanGestureRecognizer?
-        private var pinch: UIPinchGestureRecognizer?
+        fileprivate var pan: UIPanGestureRecognizer?
+        fileprivate var pinch: UIPinchGestureRecognizer?
         private var occupancy: Set<Int64> = []
         private let occupancyCell: Float = 0.05
 
