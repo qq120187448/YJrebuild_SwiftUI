@@ -36,4 +36,6 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "5.9"
         CODE_SIGNING_ALLOWED: NO
-        SWIFT_OBJC_INTEROP_MODE: "-enable-cxx-interop"
+        SWIFT_OBJC_INTEROP_MODE: objcxx
+        CLANG_CXX_LANGUAGE_STANDARD: "c++17"
+        CLANG_CXX_LIBRARY: libc++
