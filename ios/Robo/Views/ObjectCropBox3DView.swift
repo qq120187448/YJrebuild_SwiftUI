@@ -562,7 +562,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                 }
             }
 
-            var edges: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, Float)] = []
+            var edges: [(SIMD3<Float>, Float, SIMD3<Float>, Float)] = []
 
             func edgeList(
                 axis: SIMD3<Float>,

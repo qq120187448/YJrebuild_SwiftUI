@@ -1193,7 +1193,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             }
         }
 
-        var edges: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, Float)] = []
+        var edges: [(SIMD3<Float>, Float, SIMD3<Float>, Float)] = []
         func edgeList(axis: SIMD3<Float>, length: Float, offsets: [SIMD3<Float>]) {
             for offset in offsets {
                 edges.append((axis, length, offset, length))
