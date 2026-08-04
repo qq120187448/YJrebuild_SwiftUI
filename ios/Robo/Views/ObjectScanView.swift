@@ -58,6 +58,7 @@ struct ObjectScanView: View {
     @State private var cropBoxPlaced = false
     @State private var cropBoxSize: Float = 1.0
     @State private var cropBoxCommand: CropBoxCommand = .none
+    @State private var pointSize: Double = ObjectScanSettings.pointSize
 
     var body: some View {
         NavigationStack {
@@ -136,8 +137,8 @@ struct ObjectScanView: View {
                 .padding(.horizontal, 32)
             VStack(alignment: .leading, spacing: 12) {
                 tipRow(icon: "square.dashed", text: "点击“放置裁剪盒”，再点击物体中心框选目标")
-                tipRow(icon: "point.3.connected.trianglepath.dotted", text: "扫描中红色点云为实时覆盖示意")
-                tipRow(icon: "hand.tap", text: "完成后自动剔除墙面地面，可在结果页选择目标点簇")
+                tipRow(icon: "hand.draw", text: "单指旋转裁剪盒，双指拖动，捏合缩放")
+                tipRow(icon: "point.3.connected.trianglepath.dotted", text: "完成后自动剔除墙面地面，可在结果页选择目标点簇")
             }
             .padding(.horizontal, 24)
             Spacer()
@@ -151,6 +152,7 @@ struct ObjectScanView: View {
                 cropBoxPlaced = false
                 cropBoxSize = 1.0
                 cropBoxCommand = .none
+                pointSize = ObjectScanSettings.pointSize
                 isCapturing = true
                 phase = .scanning
             } label: {
@@ -185,6 +187,7 @@ struct ObjectScanView: View {
                 isPlacingCropBox: $isPlacingCropBox,
                 cropBoxSize: $cropBoxSize,
                 cropBoxCommand: $cropBoxCommand,
+                pointSize: $pointSize,
                 onPointCount: { count in
                     pointCount = count
                 },
@@ -287,7 +290,7 @@ struct ObjectScanView: View {
             return "请点击画面中的物体中心，放置裁剪盒"
         }
         if cropBoxPlaced {
-            return "裁剪盒 \(String(format: "%.1f", cropBoxSize)) m，用下方滑块调整大小"
+            return "单指旋转 · 双指拖动 · 捏合缩放 · 滑块调大小"
         }
         return "建议先放置裁剪盒，再围绕物体扫描"
     }
@@ -475,6 +478,7 @@ private struct ObjectScanARView: UIViewControllerRepresentable {
     @Binding var isPlacingCropBox: Bool
     @Binding var cropBoxSize: Float
     @Binding var cropBoxCommand: CropBoxCommand
+    @Binding var pointSize: Double
 
     let onPointCount: (Int) -> Void
     let onPointsCaptured: ([ObjectPoint]) -> Void
@@ -487,6 +491,7 @@ private struct ObjectScanARView: UIViewControllerRepresentable {
         controller.onPointsCaptured = onPointsCaptured
         controller.onCropBoxPlaced = onCropBoxPlaced
         controller.onCropBoxCleared = onCropBoxCleared
+        controller.pointSize = pointSize
         return controller
     }
 
@@ -496,6 +501,7 @@ private struct ObjectScanARView: UIViewControllerRepresentable {
         uiViewController.onPointsCaptured = onPointsCaptured
         uiViewController.onCropBoxPlaced = onCropBoxPlaced
         uiViewController.onCropBoxCleared = onCropBoxCleared
+        uiViewController.pointSize = pointSize
         uiViewController.setCropBoxSize(cropBoxSize)
 
         switch cropBoxCommand {
@@ -525,17 +531,25 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     var onCropBoxCleared: (() -> Void)?
 
     var isPlacingCropBox = false
+    var pointSize: Double = 1.5
 
     private let sceneView = ARSCNView()
     private var isCapturing = false
     private var didDeliver = false
     private var frameCount = 0
-    private let voxelSize: Float = 0.02
-    private let maxVoxels = 600_000
+    private var voxelSize: Float = 0.02
+    private let maxVoxels = 200_000
     private var voxelMap: [Int64: VoxelAccumulator] = [:]
     private var cropBoxSize: Float = 1.0
     private var cropVolume: ObjectCropVolume?
     private var cropBoxNode: SCNNode?
+
+    private var rotateStartScreen: CGPoint?
+    private var rotateStartTransform: simd_float4x4?
+    private var moveStartScreen: CGPoint?
+    private var moveStartCenter: SIMD3<Float>?
+    private var moveStartDepth: Float = 0
+    private var scaleStartExtent: SIMD3<Float>?
 
     private struct VoxelAccumulator {
         var sum = SIMD3<Float>.zero
@@ -555,6 +569,22 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         tap.cancelsTouchesInView = false
         sceneView.addGestureRecognizer(tap)
+
+        let rotatePan = UIPanGestureRecognizer(target: self, action: #selector(handleRotatePan(_:)))
+        rotatePan.minimumNumberOfTouches = 1
+        rotatePan.maximumNumberOfTouches = 1
+        rotatePan.cancelsTouchesInView = false
+        sceneView.addGestureRecognizer(rotatePan)
+
+        let movePan = UIPanGestureRecognizer(target: self, action: #selector(handleMovePan(_:)))
+        movePan.minimumNumberOfTouches = 2
+        movePan.maximumNumberOfTouches = 2
+        movePan.cancelsTouchesInView = false
+        sceneView.addGestureRecognizer(movePan)
+
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+        pinch.cancelsTouchesInView = false
+        sceneView.addGestureRecognizer(pinch)
 
         let configuration = ARWorldTrackingConfiguration()
         configuration.planeDetection = [.horizontal]
@@ -592,6 +622,116 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
         guard isPlacingCropBox, recognizer.state == .ended else { return }
         placeCropBox(at: recognizer.location(in: sceneView))
+    }
+
+    @objc private func handleRotatePan(_ recognizer: UIPanGestureRecognizer) {
+        guard cropVolume != nil, !isPlacingCropBox else { return }
+        let location = recognizer.location(in: sceneView)
+        switch recognizer.state {
+        case .began:
+            rotateStartScreen = location
+            rotateStartTransform = cropVolume?.transform
+        case .changed:
+            guard let start = rotateStartScreen,
+                  let startTransform = rotateStartTransform,
+                  let frame = sceneView.session.currentFrame else {
+                return
+            }
+            let dx = Float(location.x - start.x)
+            let dy = Float(location.y - start.y)
+            let yaw = dx * 0.006
+            let pitch = dy * 0.006
+            let yawQuat = simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0))
+            let cameraRight = SIMD3<Float>(
+                frame.camera.transform.columns.0.x,
+                frame.camera.transform.columns.0.y,
+                frame.camera.transform.columns.0.z
+            )
+            let pitchQuat = simd_quatf(angle: pitch, axis: cameraRight)
+            let rotation = simd_normalize(yawQuat * pitchQuat)
+            let newQuat = simd_normalize(rotation * simd_quatf(startTransform))
+            var newTransform = simd_float4x4(newQuat)
+            newTransform.columns.3 = startTransform.columns.3
+            updateVolumeTransform(newTransform)
+        case .ended, .cancelled:
+            rotateStartScreen = nil
+            rotateStartTransform = nil
+        default:
+            break
+        }
+    }
+
+    @objc private func handleMovePan(_ recognizer: UIPanGestureRecognizer) {
+        guard cropVolume != nil, !isPlacingCropBox else { return }
+        let location = recognizer.location(in: sceneView)
+        switch recognizer.state {
+        case .began:
+            guard let center = cropVolume?.center,
+                  let frame = sceneView.session.currentFrame else {
+                return
+            }
+            moveStartScreen = location
+            moveStartCenter = center
+            let cameraPosition = SIMD3<Float>(
+                frame.camera.transform.columns.3.x,
+                frame.camera.transform.columns.3.y,
+                frame.camera.transform.columns.3.z
+            )
+            moveStartDepth = max(simd_length(center - cameraPosition), 0.1)
+        case .changed:
+            guard let start = moveStartScreen,
+                  let startCenter = moveStartCenter,
+                  let frame = sceneView.session.currentFrame else {
+                return
+            }
+            let viewport = sceneView.bounds.size
+            guard viewport.width > 0, viewport.height > 0 else { return }
+            let dx = Float(location.x - start.x)
+            let dy = Float(location.y - start.y)
+            let imageWidth = Float(frame.camera.imageResolution.width)
+            let imageHeight = Float(frame.camera.imageResolution.height)
+            let fx = frame.camera.intrinsics.columns.0.x * Float(viewport.width) / imageWidth
+            let fy = frame.camera.intrinsics.columns.1.y * Float(viewport.height) / imageHeight
+            let localDelta = SIMD3<Float>(
+                dx * moveStartDepth / fx,
+                -dy * moveStartDepth / fy,
+                0
+            )
+            let worldDelta4 = frame.camera.transform * SIMD4<Float>(
+                localDelta.x,
+                localDelta.y,
+                localDelta.z,
+                0
+            )
+            let worldDelta = SIMD3<Float>(worldDelta4.x, worldDelta4.y, worldDelta4.z)
+            updateVolumeCenter(startCenter + worldDelta)
+        case .ended, .cancelled:
+            moveStartScreen = nil
+            moveStartCenter = nil
+        default:
+            break
+        }
+    }
+
+    @objc private func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
+        guard cropVolume != nil, !isPlacingCropBox else { return }
+        switch recognizer.state {
+        case .began:
+            scaleStartExtent = cropVolume?.extent
+        case .changed:
+            guard let startExtent = scaleStartExtent else { return }
+            let scale = Float(recognizer.scale)
+            let newExtent = SIMD3<Float>(
+                min(max(startExtent.x * scale, 0.2), 10),
+                min(max(startExtent.y * scale, 0.2), 10),
+                min(max(startExtent.z * scale, 0.2), 10)
+            )
+            updateVolumeExtent(newExtent)
+        case .ended, .cancelled:
+            scaleStartExtent = nil
+        default:
+            break
+        }
     }
 
     func placeCropBox(at point: CGPoint) {
@@ -652,6 +792,38 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         onCropBoxCleared?()
     }
 
+    private func updateVolumeTransform(_ transform: simd_float4x4) {
+        guard let volume = cropVolume else { return }
+        cropVolume = ObjectCropVolume(
+            center: volume.center,
+            extent: volume.extent,
+            transform: transform
+        )
+        updateCropBoxNode()
+    }
+
+    private func updateVolumeCenter(_ center: SIMD3<Float>) {
+        guard let volume = cropVolume else { return }
+        var transform = volume.transform
+        transform.columns.3 = SIMD4<Float>(center.x, center.y, center.z, 1)
+        cropVolume = ObjectCropVolume(
+            center: center,
+            extent: volume.extent,
+            transform: transform
+        )
+        updateCropBoxNode()
+    }
+
+    private func updateVolumeExtent(_ extent: SIMD3<Float>) {
+        guard let volume = cropVolume else { return }
+        cropVolume = ObjectCropVolume(
+            center: volume.center,
+            extent: extent,
+            transform: volume.transform
+        )
+        updateCropBoxNode()
+    }
+
     private func updateCropBoxNode() {
         cropBoxNode?.removeFromParentNode()
         cropBoxNode = nil
@@ -669,28 +841,61 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         )
         let fillMaterial = SCNMaterial()
         fillMaterial.lightingModel = .constant
-        fillMaterial.diffuse.contents = UIColor.systemGreen.withAlphaComponent(0.18)
-        fillMaterial.emission.contents = UIColor.systemGreen.withAlphaComponent(0.24)
+        fillMaterial.diffuse.contents = UIColor.systemGreen.withAlphaComponent(0.14)
+        fillMaterial.emission.contents = UIColor.systemGreen.withAlphaComponent(0.18)
         fillMaterial.isDoubleSided = true
         fill.firstMaterial = fillMaterial
         root.addChildNode(SCNNode(geometry: fill))
 
-        let wire = SCNBox(
-            width: CGFloat(volume.extent.x),
-            height: CGFloat(volume.extent.y),
-            length: CGFloat(volume.extent.z),
-            chamferRadius: 0
-        )
-        let wireMaterial = SCNMaterial()
-        wireMaterial.lightingModel = .constant
-        wireMaterial.diffuse.contents = UIColor.systemGreen
-        wireMaterial.emission.contents = UIColor.systemGreen
-        wireMaterial.fillMode = .lines
-        wire.firstMaterial = wireMaterial
-        root.addChildNode(SCNNode(geometry: wire))
-
+        addEdges(to: root, extent: volume.extent)
         sceneView.scene.rootNode.addChildNode(root)
         cropBoxNode = root
+    }
+
+    private func addEdges(to root: SCNNode, extent: SIMD3<Float>) {
+        let half = extent * 0.5
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = UIColor.systemGreen
+        material.emission.contents = UIColor.systemGreen
+
+        func addLine(size: SIMD3<Float>, position: SIMD3<Float>) {
+            let box = SCNBox(
+                width: CGFloat(size.x),
+                height: CGFloat(size.y),
+                length: CGFloat(size.z),
+                chamferRadius: 0
+            )
+            box.firstMaterial = material
+            let node = SCNNode(geometry: box)
+            node.position = SCNVector3(position.x, position.y, position.z)
+            root.addChildNode(node)
+        }
+
+        for y in [-half.y, half.y] {
+            for z in [-half.z, half.z] {
+                addLine(
+                    size: SIMD3<Float>(extent.x, 0.02, 0.02),
+                    position: SIMD3<Float>(0, y, z)
+                )
+            }
+        }
+        for x in [-half.x, half.x] {
+            for z in [-half.z, half.z] {
+                addLine(
+                    size: SIMD3<Float>(0.02, extent.y, 0.02),
+                    position: SIMD3<Float>(x, 0, z)
+                )
+            }
+        }
+        for x in [-half.x, half.x] {
+            for y in [-half.y, half.y] {
+                addLine(
+                    size: SIMD3<Float>(0.02, 0.02, extent.z),
+                    position: SIMD3<Float>(x, y, 0)
+                )
+            }
+        }
     }
 
     private func pointInsideCropBox(_ world: SIMD3<Float>) -> Bool {
@@ -703,11 +908,32 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         guard frameCount % 10 == 0 else { return }
 
         captureMeshPoints(from: frame)
+        if voxelMap.count >= maxVoxels {
+            compactVoxelMap()
+        }
         let snapshot = snapshotPoints()
         DispatchQueue.main.async {
             self.updatePointCloud(snapshot)
             self.onPointCount?(snapshot.count)
         }
+    }
+
+    private func compactVoxelMap() {
+        let newSize = voxelSize * 1.5
+        var merged: [Int64: VoxelAccumulator] = [:]
+        for (_, accumulator) in voxelMap {
+            let inv = 1 / max(accumulator.count, 1)
+            let position = accumulator.sum * inv
+            let key = voxelKey(position, size: newSize)
+            var acc = merged[key] ?? VoxelAccumulator()
+            acc.sum += accumulator.sum
+            acc.sumColor += accumulator.sumColor
+            acc.count += accumulator.count
+            acc.backgroundCount += accumulator.backgroundCount
+            merged[key] = acc
+        }
+        voxelMap = merged
+        voxelSize = newSize
     }
 
     private func captureMeshPoints(from frame: ARFrame) {
@@ -795,9 +1021,22 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         }
     }
 
+    private func sampled(_ points: [ObjectPoint], limit: Int) -> [ObjectPoint] {
+        guard points.count > limit else { return points }
+        let stride = max(points.count / limit, 1)
+        var result: [ObjectPoint] = []
+        result.reserveCapacity(limit)
+        var index = 0
+        while index < points.count {
+            result.append(points[index])
+            index += stride
+        }
+        return result
+    }
+
     private func updatePointCloud(_ points: [ObjectPoint]) {
         guard !points.isEmpty else { return }
-        let displayPoints = points.map {
+        let displayPoints = sampled(points, limit: 80_000).map {
             ObjectPoint(x: $0.x, y: $0.y, z: $0.z, r: 1, g: 1, b: 1)
         }
         let material = SCNMaterial()
@@ -806,11 +1045,12 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         material.emission.contents = UIColor(red: 1, green: 0.08, blue: 0.06, alpha: 1)
         material.blendMode = .add
         material.writesToDepthBuffer = false
+        let radius = CGFloat(pointSize)
         let geometry = SCNGeometry.objectPointCloud(
             points: displayPoints,
             worldPointSize: 0.02,
-            minScreenRadius: 2,
-            maxScreenRadius: 6,
+            minScreenRadius: radius,
+            maxScreenRadius: radius,
             material: material
         )
         let node = SCNNode(geometry: geometry)
@@ -822,9 +1062,13 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     }
 
     private func voxelKey(_ position: SIMD3<Float>) -> Int64 {
-        let ix = Int64(floor(position.x / voxelSize))
-        let iy = Int64(floor(position.y / voxelSize))
-        let iz = Int64(floor(position.z / voxelSize))
+        voxelKey(position, size: voxelSize)
+    }
+
+    private func voxelKey(_ position: SIMD3<Float>, size: Float) -> Int64 {
+        let ix = Int64(floor(position.x / size))
+        let iy = Int64(floor(position.y / size))
+        let iz = Int64(floor(position.z / size))
         return ((ix + 0x80000) & 0xFFFFF) | (((iy + 0x80000) & 0xFFFFF) << 20) | (((iz + 0x80000) & 0xFFFFF) << 40)
     }
 }

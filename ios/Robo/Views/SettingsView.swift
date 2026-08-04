@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var showClearConfirm = false
     @State private var showPriceImporter = false
     @State private var priceMessage = ""
+    @State private var scanPointSize: Double = ObjectScanSettings.pointSize
 
     var body: some View {
         NavigationStack {
@@ -27,6 +28,21 @@ struct SettingsView: View {
                         showClearConfirm = true
                     }
                     .disabled(rooms.isEmpty)
+                }
+
+                Section("物体工程扫描") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("扫描点云大小")
+                            Spacer()
+                            Text(String(format: "%.1f", scanPointSize))
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $scanPointSize, in: 0.5...6, step: 0.1)
+                    }
+                    Text("扫描过程中红色点云的大小，默认 1.5。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("单价表") {
@@ -50,6 +66,9 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle(AppStrings.Tabs.settings)
+            .onChange(of: scanPointSize) { _, newValue in
+                ObjectScanSettings.pointSize = newValue
+            }
             .fileImporter(
                 isPresented: $showPriceImporter,
                 allowedContentTypes: [.commaSeparatedText, .plainText, .text]

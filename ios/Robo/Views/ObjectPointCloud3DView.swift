@@ -80,8 +80,8 @@ extension SCNGeometry {
     static func objectPointCloud(
         points: [ObjectPoint],
         worldPointSize: Float = 0.02,
-        minScreenRadius: CGFloat = 8,
-        maxScreenRadius: CGFloat = 32,
+        minScreenRadius: CGFloat = 1,
+        maxScreenRadius: CGFloat = 1,
         material overrideMaterial: SCNMaterial? = nil
     ) -> SCNGeometry {
         let vertices = points.map { SCNVector3($0.x, $0.y, $0.z) }
