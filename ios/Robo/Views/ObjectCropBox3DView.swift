@@ -168,10 +168,10 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                 positionCamera(scnView)
             }
 
-            scnView.allowsCameraControl = parent.cropVolume == nil
-            pan?.isEnabled = parent.cropVolume != nil
-            pinch?.isEnabled = parent.cropVolume != nil
-            movePan?.isEnabled = parent.cropVolume != nil
+            scnView.allowsCameraControl = true
+            pan?.isEnabled = false
+            pinch?.isEnabled = false
+            movePan?.isEnabled = false
 
             scene.rootNode.childNodes
                 .filter { $0.name == "cropBox" }

@@ -19,9 +19,8 @@ enum AxisMoveCommand: Equatable {
     case sizeYPlus
     case sizeZMinus
     case sizeZPlus
-    case rotateX
-    case rotateY
-    case rotateZ
+    case rotateZMinus
+    case rotateZPlus
 }
 
 enum ObjectPreviewMode: String, CaseIterable, Identifiable {
@@ -64,6 +63,7 @@ struct ObjectScanView: View {
     @State private var showDiscardConfirm = false
 
     @State private var cropVolume: ObjectCropVolume?
+    @State private var capturedCropVolume: ObjectCropVolume?
     @State private var placeCropBoxRequested = false
     @State private var axisMoveCommand: AxisMoveCommand = .none
     @State private var boxMetrics: ObjectScanMetrics?
@@ -167,6 +167,7 @@ struct ObjectScanView: View {
                 selectedClusterIndex = 0
                 isProcessing = false
                 cropVolume = nil
+                capturedCropVolume = nil
                 placeCropBoxRequested = false
                 axisMoveCommand = .none
                 boxMetrics = nil
@@ -219,6 +220,14 @@ struct ObjectScanView: View {
                     capturedPoints = points
                     capturedPlanes = planes
                     processCapturedPoints()
+                },
+                onCropVolumeCaptured: { volume in
+                    cropVolume = volume
+                    capturedCropVolume = volume
+                    if volume == nil {
+                        boxMetrics = nil
+                        boxUSDZData = nil
+                    }
                 },
                 onCropBoxPlaced: {
                     scanCropBoxPlaced = true
@@ -357,9 +366,8 @@ struct ObjectScanView: View {
                     .font(.caption2.bold())
                     .foregroundStyle(.white)
                     .frame(width: 28)
-                axisColorButton("X1°", .rotateX, .red, command)
-                axisColorButton("Y1°", .rotateY, .green, command)
-                axisColorButton("Z1°", .rotateZ, .blue, command)
+                axisColorButton("Z-1°", .rotateZMinus, .blue, command)
+                axisColorButton("Z+1°", .rotateZPlus, .blue, command)
             }
         }
     }
@@ -374,9 +382,9 @@ struct ObjectScanView: View {
             command.wrappedValue = commandValue
         } label: {
             Text(label)
-                .font(.caption2.bold())
+                .font(.subheadline.bold())
                 .foregroundStyle(.white)
-                .frame(width: 30, height: 24)
+                .frame(width: 44, height: 38)
                 .background(color.opacity(0.85))
                 .clipShape(RoundedRectangle(cornerRadius: 5))
         }
@@ -578,6 +586,15 @@ struct ObjectScanView: View {
                 )
             }
 
+            Section("指标说明") {
+                Text("AABB：沿世界坐标 X/Y/Z 方向的外包围盒。")
+                Text("OBB：按物体自身方向拟合的最优外包围盒。")
+                Text("凸包：包裹所有点云的最小凸多面体。")
+                Text("体素：用小立方体填充点云后计算体积和表面积。")
+                Text("高度场：从上方按网格高度估算体积和表面积。")
+                Text("裁剪盒：勾选范围内的点才参与工程量计算。")
+            }
+
             Section {
                 Button {
                     saveRecord(result)
@@ -671,6 +688,9 @@ struct ObjectScanView: View {
                     self.result = processed
                     self.isProcessing = false
                     self.phase = .results
+                    if let volume = self.cropVolume {
+                        self.recomputeBoxMetrics(for: volume)
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -766,6 +786,7 @@ private struct ObjectScanARView: UIViewControllerRepresentable {
 
     let onPointCount: (Int) -> Void
     let onPointsCaptured: ([ObjectPoint], [ScanPlaneInfo]) -> Void
+    let onCropVolumeCaptured: (ObjectCropVolume?) -> Void
     let onCropBoxPlaced: () -> Void
     let onCropBoxCleared: () -> Void
     let onCommandHandled: () -> Void
@@ -774,6 +795,7 @@ private struct ObjectScanARView: UIViewControllerRepresentable {
         let controller = ObjectScanARViewController()
         controller.onPointCount = onPointCount
         controller.onPointsCaptured = onPointsCaptured
+        controller.onCropVolumeCaptured = onCropVolumeCaptured
         controller.pointSize = pointSize
         controller.cropBoxSize = cropBoxSize
         controller.onCropBoxPlaced = onCropBoxPlaced
@@ -784,6 +806,7 @@ private struct ObjectScanARView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: ObjectScanARViewController, context: Context) {
         uiViewController.onPointCount = onPointCount
         uiViewController.onPointsCaptured = onPointsCaptured
+        uiViewController.onCropVolumeCaptured = onCropVolumeCaptured
         uiViewController.pointSize = pointSize
         uiViewController.setCropBoxSize(cropBoxSize)
         uiViewController.onCropBoxPlaced = onCropBoxPlaced
@@ -830,14 +853,11 @@ private struct ObjectScanARView: UIViewControllerRepresentable {
         case .sizeZPlus:
             uiViewController.resizeCropBox(index: 1, delta: 0.05)
             onCommandHandled()
-        case .rotateX:
-            uiViewController.rotateCropBox(axis: SIMD3<Float>(1, 0, 0))
+        case .rotateZMinus:
+            uiViewController.rotateCropBox(axis: SIMD3<Float>(0, 1, 0), degrees: -1)
             onCommandHandled()
-        case .rotateY:
-            uiViewController.rotateCropBox(axis: SIMD3<Float>(0, 0, 1))
-            onCommandHandled()
-        case .rotateZ:
-            uiViewController.rotateCropBox(axis: SIMD3<Float>(0, 1, 0))
+        case .rotateZPlus:
+            uiViewController.rotateCropBox(axis: SIMD3<Float>(0, 1, 0), degrees: 1)
             onCommandHandled()
         }
         if clearRequested {
@@ -857,6 +877,7 @@ private struct ObjectScanARView: UIViewControllerRepresentable {
 private final class ObjectScanARViewController: UIViewController, ARSessionDelegate {
     var onPointCount: ((Int) -> Void)?
     var onPointsCaptured: (([ObjectPoint], [ScanPlaneInfo]) -> Void)?
+    var onCropVolumeCaptured: ((ObjectCropVolume?) -> Void)?
     var onCropBoxPlaced: (() -> Void)?
     var onCropBoxCleared: (() -> Void)?
     var pointSize: Double = 1.5
@@ -877,6 +898,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
 
     private var moveStartScreen: CGPoint?
     private var moveStartCenter: SIMD3<Float>?
+    private var moveStartOrigin: SIMD3<Float>?
     private var moveStartDepth: Float = 0
     private var rotateStartTransform: simd_float4x4?
     private var scaleStartExtent: SIMD3<Float>?
@@ -890,6 +912,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         var sumColor = SIMD3<Float>.zero
         var count: Float = 0
         var backgroundCount: Float = 0
+        var colorSampleCount: Float = 0
     }
 
     override func viewDidLoad() {
@@ -951,7 +974,9 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         didDeliver = true
         let points = snapshotPoints()
         let planes = lastPlaneInfos
+        let box = cropVolume
         DispatchQueue.main.async {
+            self.onCropVolumeCaptured?(box)
             self.onPointCount?(points.count)
             self.onPointsCaptured?(points, planes)
         }
@@ -968,54 +993,47 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             }
             isMoving = true
             moveStartScreen = location
-            moveStartCenter = volume.center
-            rotateStartTransform = volume.transform
+            moveStartOrigin = volume.origin
             let cameraPosition = SIMD3<Float>(
                 frame.camera.transform.columns.3.x,
                 frame.camera.transform.columns.3.y,
                 frame.camera.transform.columns.3.z
             )
-            moveStartDepth = max(simd_length(volume.center - cameraPosition), 0.1)
+            moveStartDepth = max(simd_length(volume.origin - cameraPosition), 0.1)
 
         case .changed:
             guard isMoving,
                   let start = moveStartScreen,
-                  let startCenter = moveStartCenter,
+                  let startOrigin = moveStartOrigin,
                   let cameraNode = sceneView.pointOfView,
-                  let startTransform = rotateStartTransform,
                   let volume = cropVolume else {
                 return
             }
             let viewport = sceneView.bounds.size
             guard viewport.width > 0, viewport.height > 0 else { return }
-            let dx = Float(location.x - start.x)
             let dy = Float(location.y - start.y)
-            let yaw = dx * 0.006
-            let yawQuat = simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0))
-            let newQuat = simd_normalize(yawQuat * simd_quatf(startTransform))
-            var newTransform = simd_float4x4(newQuat)
-
             let verticalDelta = worldDeltaFromScreen(
                 dx: 0,
                 dy: dy,
                 cameraNode: cameraNode,
-                center: startCenter,
+                center: startOrigin,
                 viewport: viewport,
                 depth: moveStartDepth
             )
-            let newCenter = SIMD3<Float>(
-                startCenter.x,
-                startCenter.y + verticalDelta.y,
-                startCenter.z
+            let newOrigin = SIMD3<Float>(
+                startOrigin.x,
+                startOrigin.y + verticalDelta.y,
+                startOrigin.z
             )
+            var newTransform = volume.transform
             newTransform.columns.3 = SIMD4<Float>(
-                newCenter.x,
-                newCenter.y,
-                newCenter.z,
+                newOrigin.x,
+                newOrigin.y,
+                newOrigin.z,
                 1
             )
             cropVolume = ObjectCropVolume(
-                center: newCenter,
+                origin: newOrigin,
                 extent: volume.extent,
                 transform: newTransform
             )
@@ -1025,6 +1043,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             isMoving = false
             moveStartScreen = nil
             moveStartCenter = nil
+            moveStartOrigin = nil
             rotateStartTransform = nil
             snapCropBoxToPlanes()
 
@@ -1299,12 +1318,12 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         updateCropBoxNode()
     }
 
-    func rotateCropBox(axis: SIMD3<Float>) {
+    func rotateCropBox(axis: SIMD3<Float>, degrees: Float = 1) {
         guard let volume = cropVolume else { return }
         let length = simd_length(axis)
         guard length > 1e-6 else { return }
         let normalized = axis / length
-        let quat = simd_quatf(angle: Float.pi / 180, axis: normalized)
+        let quat = simd_quatf(angle: degrees * Float.pi / 180, axis: normalized)
         let rotation = simd_float4x4(quat)
         let origin = volume.origin
         var toOrigin = matrix_identity_float4x4
@@ -1700,6 +1719,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             acc.sumColor += accumulator.sumColor
             acc.count += accumulator.count
             acc.backgroundCount += accumulator.backgroundCount
+            acc.colorSampleCount += accumulator.colorSampleCount
             merged[key] = acc
         }
         voxelMap = merged
@@ -1743,18 +1763,20 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                     )
                     classification = Int(raw)
                 }
+                var accumulator = voxelMap[key] ?? VoxelAccumulator()
                 var color = SIMD3<Float>(0.95, 0.55, 0.2)
-                let existingCount = voxelMap[key]?.count ?? 0
-                if (voxelMap[key] == nil || existingCount < 3),
+                if accumulator.colorSampleCount == 0,
                    let sampled = sampleCameraColor(frame: frame, world: world) {
                     color = sampled
-                } else if let classification {
-                    color = classificationColor(ARMeshClassification(rawValue: classification))
+                    accumulator.sumColor += sampled
+                    accumulator.colorSampleCount += 1
+                } else if accumulator.colorSampleCount == 0 {
+                    if let classification {
+                        color = classificationColor(ARMeshClassification(rawValue: classification))
+                    }
+                    accumulator.sumColor += color
                 }
-
-                var accumulator = voxelMap[key] ?? VoxelAccumulator()
                 accumulator.sum += world
-                accumulator.sumColor += color
                 if let classification, ObjectScanProcessor.isBackgroundClassification(classification) {
                     accumulator.backgroundCount += 1
                 }
@@ -1835,7 +1857,9 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         voxelMap.values.map { accumulator -> ObjectPoint in
             let inv = 1 / max(accumulator.count, 1)
             let position = accumulator.sum * inv
-            let color = accumulator.sumColor * inv
+            let color = accumulator.colorSampleCount > 0
+                ? accumulator.sumColor / accumulator.colorSampleCount
+                : accumulator.sumColor * inv
             let isBackground = accumulator.backgroundCount >= accumulator.count
             return ObjectPoint(
                 x: position.x,

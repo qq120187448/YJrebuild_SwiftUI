@@ -66,8 +66,8 @@ enum ObjectBoxVisual {
         cameraPosition: SIMD3<Float>,
         isOccupied: (SIMD3<Float>) -> Bool
     ) {
-        let solidMaterial = makeMaterial(color: UIColor(white: 0.05, alpha: 1))
-        let dashedMaterial = makeMaterial(color: UIColor(white: 0.28, alpha: 0.65))
+        let solidMaterial = makeMaterial(color: UIColor.systemRed)
+        let dashedMaterial = makeMaterial(color: UIColor.systemRed.withAlphaComponent(0.65))
 
         for edge in edges(extent: extent) {
             let dashed = edgeOccluded(

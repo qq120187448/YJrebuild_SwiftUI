@@ -156,6 +156,15 @@ struct ObjectScanDetailView: View {
                 )
             }
 
+            Section("指标说明") {
+                Text("AABB：沿世界坐标 X/Y/Z 方向的外包围盒。")
+                Text("OBB：按物体自身方向拟合的最优外包围盒。")
+                Text("凸包：包裹所有点云的最小凸多面体。")
+                Text("体素：用小立方体填充点云后计算体积和表面积。")
+                Text("高度场：从上方按网格高度估算体积和表面积。")
+                Text("裁剪盒：勾选范围内的点才参与工程量计算。")
+            }
+
             Section {
                 Button {
                     exportExcel()

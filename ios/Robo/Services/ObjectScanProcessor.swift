@@ -175,46 +175,13 @@ enum ObjectScanProcessor {
         gridSize: Float = 0.05,
         planes: [ScanPlaneInfo] = []
     ) throws -> ObjectScanProcessResult {
-        let nonBackground = points.filter { !isBackgroundClassification($0.classification) }
-        let source = nonBackground.isEmpty ? points : nonBackground
-        let classificationRemoved = max(0, points.count - source.count)
-        let effectiveVoxelSize = source.count > 180_000
+        let effectiveVoxelSize = points.count > 180_000
             ? max(voxelSize * 2, 0.03)
             : voxelSize
-        let downsampled = voxelDownsample(source, voxelSize: effectiveVoxelSize)
-        let (planeFiltered, planeAnchorRemoved) = removePlanePoints(downsampled, planes: planes)
-        let (keptPoints, groundY) = removeGround(planeFiltered)
-        let groundRemoved = max(0, planeFiltered.count - keptPoints.count)
-        let planeCleaned = removeDominantPlanes(keptPoints)
-        let planeRemoved = max(0, keptPoints.count - planeCleaned.count)
-        let localPlaneCleaned = removeLocalPlaneRegions(planeCleaned)
-        let localPlaneRemoved = max(0, planeCleaned.count - localPlaneCleaned.count)
-        let allClusters = connectedClusters(localPlaneCleaned, cellSize: 0.08)
-        let sceneAABB = computeAABB(localPlaneCleaned)
-        let objectClusters = allClusters.filter {
-            !isLikelyBackgroundCluster($0, sceneAABB: sceneAABB)
-        }
-        let backgroundFilteredPoints = objectClusters.isEmpty
-            ? localPlaneCleaned
-            : objectClusters.flatMap { $0 }
-        let candidateClusters = objectClusters
-            .filter { $0.count >= 20 }
-            .sorted { $0.count > $1.count }
-        let totalClusterCount = allClusters.count
-        let candidates: [[ObjectPoint]]
-        if !candidateClusters.isEmpty {
-            candidates = Array(candidateClusters.prefix(6))
-        } else if !objectClusters.isEmpty {
-            candidates = Array(objectClusters.sorted { $0.count > $1.count }.prefix(6))
-        } else {
-            candidates = [localPlaneCleaned]
-        }
-        let removedBackgroundCount = classificationRemoved
-            + planeAnchorRemoved
-            + groundRemoved
-            + planeRemoved
-            + localPlaneRemoved
-        let removedBackgroundRatio = Double(removedBackgroundCount) / Double(max(points.count, 1))
+        let downsampled = voxelDownsample(points, voxelSize: effectiveVoxelSize)
+        let keptPoints = downsampled
+        let groundY = keptPoints.map { $0.y }.min() ?? 0
+        let candidates: [[ObjectPoint]] = [keptPoints]
 
         var options: [ObjectScanClusterOption] = []
         for cluster in candidates {
@@ -223,18 +190,18 @@ enum ObjectScanProcessor {
                 groundY: groundY,
                 gridSize: gridSize,
                 planes: planes,
-                backgroundRemovedCount: removedBackgroundCount,
-                backgroundRemovedRatio: removedBackgroundRatio
+                backgroundRemovedCount: 0,
+                backgroundRemovedRatio: 0
             )
             var metrics = pair.metrics
             metrics.pointCount = points.count
-            metrics.processedPointCount = backgroundFilteredPoints.count
-            metrics.clusterCount = totalClusterCount
-            metrics.classificationRemovedCount = classificationRemoved
-            metrics.planeAnchorRemovedCount = planeAnchorRemoved
-            metrics.groundRemovedCount = groundRemoved
-            metrics.ransacRemovedCount = planeRemoved
-            metrics.localPlaneRemovedCount = localPlaneRemoved
+            metrics.processedPointCount = keptPoints.count
+            metrics.clusterCount = 1
+            metrics.classificationRemovedCount = 0
+            metrics.planeAnchorRemovedCount = 0
+            metrics.groundRemovedCount = 0
+            metrics.ransacRemovedCount = 0
+            metrics.localPlaneRemovedCount = 0
             options.append(
                 ObjectScanClusterOption(
                     points: cluster,
@@ -249,7 +216,7 @@ enum ObjectScanProcessor {
         let ply = plyData(points: primary.points)
         return ObjectScanProcessResult(
             clusters: options,
-            allPoints: backgroundFilteredPoints,
+            allPoints: keptPoints,
             points: primary.points,
             metrics: primary.metrics,
             metricsJSON: metricsJSON,
