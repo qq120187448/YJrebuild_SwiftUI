@@ -337,6 +337,8 @@ struct ObjectScanView: View {
 
     private func resultsView(_ result: ObjectScanProcessResult) -> some View {
         let current = currentPointsAndMetrics(result)
+        let voxelOK = current.metrics.voxelReconstructionSucceeded
+            ?? (current.metrics.voxelMeshVolumeM3 != nil)
         return List {
             Section("3D 预览与裁剪") {
                 Picker("预览模式", selection: $previewMode) {
@@ -461,45 +463,49 @@ struct ObjectScanView: View {
             }
 
             Section("体素表面重建（Surface Nets）") {
-                LabeledContent(
-                    "体积（闭合封口）",
-                    value: String(
-                        format: "%.3f m³",
-                        current.metrics.voxelMeshVolumeM3 ?? current.metrics.heightfieldVolumeM3
-                    )
-                )
-                LabeledContent(
-                    "不规则物体表面积（不含地面/墙面接触）",
-                    value: String(
-                        format: "%.3f m²",
-                        current.metrics.voxelMeshSurfaceAreaM2 ?? current.metrics.heightfieldSurfaceAreaM2
-                    )
-                )
-                LabeledContent(
-                    "网格总表面积",
-                    value: String(
-                        format: "%.3f m²",
-                        current.metrics.voxelMeshTotalSurfaceAreaM2 ?? current.metrics.heightfieldSurfaceAreaM2
-                    )
-                )
-                if let voxelSize = current.metrics.voxelSizeM {
+                if voxelOK {
                     LabeledContent(
-                        "体素尺寸",
-                        value: String(format: "%.4f m", voxelSize)
+                        "体积（闭合封口）",
+                        value: String(
+                            format: "%.3f m³",
+                            current.metrics.voxelMeshVolumeM3 ?? current.metrics.heightfieldVolumeM3
+                        )
                     )
-                }
-                if let coverage = current.metrics.voxelCoverageEstimate {
                     LabeledContent(
-                        "点云覆盖率",
-                        value: String(format: "%.0f%%", coverage * 100)
+                        "不规则物体表面积（不含地面/墙面接触）",
+                        value: String(
+                            format: "%.3f m²",
+                            current.metrics.voxelMeshSurfaceAreaM2 ?? current.metrics.heightfieldSurfaceAreaM2
+                        )
                     )
-                }
-                if let vertexCount = current.metrics.voxelMeshVertexCount,
-                   let triangleCount = current.metrics.voxelMeshTriangleCount {
                     LabeledContent(
-                        "网格顶点/三角面",
-                        value: "\(vertexCount) / \(triangleCount)"
+                        "网格总表面积",
+                        value: String(
+                            format: "%.3f m²",
+                            current.metrics.voxelMeshTotalSurfaceAreaM2 ?? current.metrics.heightfieldSurfaceAreaM2
+                        )
                     )
+                    if let voxelSize = current.metrics.voxelSizeM {
+                        LabeledContent(
+                            "体素尺寸",
+                            value: String(format: "%.4f m", voxelSize)
+                        )
+                    }
+                    if let coverage = current.metrics.voxelCoverageEstimate {
+                        LabeledContent(
+                            "点云覆盖率",
+                            value: String(format: "%.0f%%", coverage * 100)
+                        )
+                    }
+                    if let vertexCount = current.metrics.voxelMeshVertexCount,
+                       let triangleCount = current.metrics.voxelMeshTriangleCount {
+                        LabeledContent(
+                            "网格顶点/三角面",
+                            value: "\(vertexCount) / \(triangleCount)"
+                        )
+                    }
+                } else {
+                    LabeledContent("体素重建状态", value: "未生成，请参考高度场")
                 }
             }
 

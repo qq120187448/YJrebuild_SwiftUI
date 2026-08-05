@@ -97,6 +97,7 @@ struct ObjectScanMetrics: Codable, Sendable {
     var voxelCoverageEstimate: Double?
     var voxelMeshVertexCount: Int?
     var voxelMeshTriangleCount: Int?
+    var voxelReconstructionSucceeded: Bool?
     var backgroundRemovedCount: Int?
     var backgroundRemovedRatio: Double?
 }
@@ -124,6 +125,7 @@ struct OBBResult: Sendable {
 }
 
 struct VoxelReconstructionResult: Sendable {
+    var succeeded: Bool = false
     var voxelSizeM: Double?
     var volumeM3: Double?
     var totalSurfaceAreaM2: Double?
@@ -137,6 +139,21 @@ struct VoxelReconstructionResult: Sendable {
 }
 
 enum ObjectScanProcessor {
+    private struct VoxelizationData {
+        var filledKeys: Set<Int64>
+        var origin: SIMD3<Float>
+        var voxelSize: Float
+        var floorIndex: Int
+        var minIX: Int
+        var minIY: Int
+        var minIZ: Int
+        var maxIX: Int
+        var maxIY: Int
+        var maxIZ: Int
+        var knownColumnCount: Int
+        var filledColumnCount: Int
+    }
+
     private struct VoxelAccumulator {
         var sum = SIMD3<Float>.zero
         var sumColor = SIMD3<Float>.zero
@@ -152,7 +169,10 @@ enum ObjectScanProcessor {
         let nonBackground = points.filter { !isBackgroundClassification($0.classification) }
         let source = nonBackground.isEmpty ? points : nonBackground
         let classificationRemoved = max(0, points.count - source.count)
-        let downsampled = voxelDownsample(source, voxelSize: voxelSize)
+        let effectiveVoxelSize = source.count > 180_000
+            ? max(voxelSize * 2, 0.03)
+            : voxelSize
+        let downsampled = voxelDownsample(source, voxelSize: effectiveVoxelSize)
         let (planeFiltered, planeAnchorRemoved) = removePlanePoints(downsampled, planes: planes)
         let (keptPoints, groundY) = removeGround(planeFiltered)
         let groundRemoved = max(0, planeFiltered.count - keptPoints.count)
@@ -286,6 +306,7 @@ enum ObjectScanProcessor {
             voxelCoverageEstimate: voxel.coverageEstimate,
             voxelMeshVertexCount: voxel.vertexCount,
             voxelMeshTriangleCount: voxel.triangleCount,
+            voxelReconstructionSucceeded: voxel.succeeded,
             backgroundRemovedCount: backgroundRemovedCount,
             backgroundRemovedRatio: backgroundRemovedRatio
         )
@@ -294,6 +315,111 @@ enum ObjectScanProcessor {
 
     static func metrics(for points: [ObjectPoint]) -> ObjectScanMetrics {
         metricsAndUSDZ(for: points).metrics
+    }
+
+    private static func buildVoxelization(
+        points: [ObjectPoint],
+        aabb: ObjectScanMetrics.AABB,
+        initialVoxelSize: Float,
+        maxVoxels: Int
+    ) -> VoxelizationData? {
+        var multiplier: Float = 1.0
+        for _ in 0..<5 {
+            let voxelSize = max(initialVoxelSize * multiplier, 0.001)
+            let margin = voxelSize
+            let origin = SIMD3<Float>(
+                Float(aabb.minX) - margin,
+                Float(aabb.minY) - margin,
+                Float(aabb.minZ) - margin
+            )
+            var surfaceKeys = Set<Int64>()
+            var maxYByColumn: [Int64: Float] = [:]
+            var minIX = Int.max
+            var minIY = Int.max
+            var minIZ = Int.max
+            var maxIX = Int.min
+            var maxIY = Int.min
+            var maxIZ = Int.min
+
+            for point in points {
+                let ix = Int(floor((point.x - origin.x) / voxelSize))
+                let iy = Int(floor((point.y - origin.y) / voxelSize))
+                let iz = Int(floor((point.z - origin.z) / voxelSize))
+                surfaceKeys.insert(voxelKey(Int64(ix), Int64(iy), Int64(iz)))
+                let columnKey = gridKey(Int64(ix), Int64(iz))
+                maxYByColumn[columnKey] = max(maxYByColumn[columnKey] ?? point.y, point.y)
+                minIX = min(minIX, ix)
+                minIY = min(minIY, iy)
+                minIZ = min(minIZ, iz)
+                maxIX = max(maxIX, ix)
+                maxIY = max(maxIY, iy)
+                maxIZ = max(maxIZ, iz)
+            }
+
+            guard minIX != Int.max else { return nil }
+            let projected = points.map { SIMD2<Float>($0.x, $0.z) }
+            let footprint = convexHull2D(projected)
+            let floorIndex = Int(floor((Float(aabb.minY) - origin.y) / voxelSize))
+            var filledKeys = surfaceKeys
+            var filledColumnCount = 0
+
+            for (columnKey, topY) in maxYByColumn {
+                let ix = (columnKey & 0xFFFFF) - 0x80000
+                let iz = ((columnKey >> 20) & 0xFFFFF) - 0x80000
+                let topIndex = Int(floor((topY - origin.y) / voxelSize))
+                if floorIndex <= topIndex {
+                    for iy in floorIndex...topIndex {
+                        filledKeys.insert(voxelKey(Int64(ix), Int64(iy), Int64(iz)))
+                    }
+                }
+                filledColumnCount += 1
+            }
+
+            if footprint.count >= 3 {
+                for ix in minIX...maxIX {
+                    for iz in minIZ...maxIZ {
+                        let columnKey = gridKey(Int64(ix), Int64(iz))
+                        if maxYByColumn[columnKey] != nil { continue }
+                        let center = SIMD2<Float>(
+                            origin.x + (Float(ix) + 0.5) * voxelSize,
+                            origin.z + (Float(iz) + 0.5) * voxelSize
+                        )
+                        guard pointInsideConvexHull(center, hull: footprint) else { continue }
+                        guard let topY = interpolatedColumnHeight(
+                            ix: ix,
+                            iz: iz,
+                            known: maxYByColumn
+                        ) else { continue }
+                        let topIndex = Int(floor((topY - origin.y) / voxelSize))
+                        if floorIndex <= topIndex {
+                            for iy in floorIndex...topIndex {
+                                filledKeys.insert(voxelKey(Int64(ix), Int64(iy), Int64(iz)))
+                            }
+                        }
+                        filledColumnCount += 1
+                    }
+                }
+            }
+
+            if filledKeys.count <= maxVoxels {
+                return VoxelizationData(
+                    filledKeys: filledKeys,
+                    origin: origin,
+                    voxelSize: voxelSize,
+                    floorIndex: floorIndex,
+                    minIX: minIX,
+                    minIY: minIY,
+                    minIZ: minIZ,
+                    maxIX: maxIX,
+                    maxIY: maxIY,
+                    maxIZ: maxIZ,
+                    knownColumnCount: maxYByColumn.count,
+                    filledColumnCount: filledColumnCount
+                )
+            }
+            multiplier *= 1.6
+        }
+        return nil
     }
 
     static func voxelReconstruct(
@@ -308,82 +434,25 @@ enum ObjectScanProcessor {
 
         let sqrtCount = sqrt(Double(points.count))
         let target = min(max(Int((sqrtCount * 2).rounded()), 24), targetVoxelsPerAxis)
-        let voxelSize = max(Float(maxDim) / Float(target), 0.001)
-        let margin = voxelSize
-        let origin = SIMD3<Float>(
-            Float(aabb.minX) - margin,
-            Float(aabb.minY) - margin,
-            Float(aabb.minZ) - margin
-        )
-
-        var surfaceKeys = Set<Int64>()
-        var maxYByColumn: [Int64: Float] = [:]
-        var minIX = Int.max
-        var minIY = Int.max
-        var minIZ = Int.max
-        var maxIX = Int.min
-        var maxIY = Int.min
-        var maxIZ = Int.min
-
-        for point in points {
-            let ix = Int(floor((point.x - origin.x) / voxelSize))
-            let iy = Int(floor((point.y - origin.y) / voxelSize))
-            let iz = Int(floor((point.z - origin.z) / voxelSize))
-            surfaceKeys.insert(voxelKey(Int64(ix), Int64(iy), Int64(iz)))
-            let columnKey = gridKey(Int64(ix), Int64(iz))
-            maxYByColumn[columnKey] = max(maxYByColumn[columnKey] ?? point.y, point.y)
-            minIX = min(minIX, ix)
-            minIY = min(minIY, iy)
-            minIZ = min(minIZ, iz)
-            maxIX = max(maxIX, ix)
-            maxIY = max(maxIY, iy)
-            maxIZ = max(maxIZ, iz)
+        let initialVoxelSize = max(Float(maxDim) / Float(target), 0.001)
+        guard let voxelization = buildVoxelization(
+            points: points,
+            aabb: aabb,
+            initialVoxelSize: initialVoxelSize,
+            maxVoxels: 260_000
+        ) else {
+            return VoxelReconstructionResult()
         }
-
-        guard minIX != Int.max else { return VoxelReconstructionResult() }
-        let projected = points.map { SIMD2<Float>($0.x, $0.z) }
-        let footprint = convexHull2D(projected)
-        let floorIndex = Int(floor((Float(aabb.minY) - origin.y) / voxelSize))
-        var filledKeys = surfaceKeys
-        var filledColumnCount = 0
-
-        for (columnKey, topY) in maxYByColumn {
-            let ix = (columnKey & 0xFFFFF) - 0x80000
-            let iz = ((columnKey >> 20) & 0xFFFFF) - 0x80000
-            let topIndex = Int(floor((topY - origin.y) / voxelSize))
-            if floorIndex <= topIndex {
-                for iy in floorIndex...topIndex {
-                    filledKeys.insert(voxelKey(Int64(ix), Int64(iy), Int64(iz)))
-                }
-            }
-            filledColumnCount += 1
-        }
-
-        if footprint.count >= 3 {
-            for ix in minIX...maxIX {
-                for iz in minIZ...maxIZ {
-                    let columnKey = gridKey(Int64(ix), Int64(iz))
-                    if maxYByColumn[columnKey] != nil { continue }
-                    let center = SIMD2<Float>(
-                        origin.x + (Float(ix) + 0.5) * voxelSize,
-                        origin.z + (Float(iz) + 0.5) * voxelSize
-                    )
-                    guard pointInsideConvexHull(center, hull: footprint) else { continue }
-                    guard let topY = interpolatedColumnHeight(
-                        ix: ix,
-                        iz: iz,
-                        known: maxYByColumn
-                    ) else { continue }
-                    let topIndex = Int(floor((topY - origin.y) / voxelSize))
-                    if floorIndex <= topIndex {
-                        for iy in floorIndex...topIndex {
-                            filledKeys.insert(voxelKey(Int64(ix), Int64(iy), Int64(iz)))
-                        }
-                    }
-                    filledColumnCount += 1
-                }
-            }
-        }
+        let origin = voxelization.origin
+        let voxelSize = voxelization.voxelSize
+        let filledKeys = voxelization.filledKeys
+        let floorIndex = voxelization.floorIndex
+        let minIX = voxelization.minIX
+        let minIY = voxelization.minIY
+        let minIZ = voxelization.minIZ
+        let maxIX = voxelization.maxIX
+        let maxIY = voxelization.maxIY
+        let maxIZ = voxelization.maxIZ
 
         var voxels = VoxelHash<Float>(defaultVoxel: 1.0)
         for key in filledKeys {
@@ -432,10 +501,11 @@ enum ObjectScanProcessor {
         )
         let volume = max(0, manifold.volume)
         let excludedArea = max(0, totalArea - contacts.ground - contacts.wall)
-        let knownColumns = Double(maxYByColumn.count)
-        let coverage = min(1, knownColumns / Double(max(filledColumnCount, 1)))
+        let knownColumns = Double(voxelization.knownColumnCount)
+        let coverage = min(1, knownColumns / Double(max(voxelization.filledColumnCount, 1)))
 
         return VoxelReconstructionResult(
+            succeeded: true,
             voxelSizeM: Double(voxelSize),
             volumeM3: volume,
             totalSurfaceAreaM2: totalArea,
@@ -609,14 +679,72 @@ enum ObjectScanProcessor {
     static func removeGround(_ points: [ObjectPoint]) -> ([ObjectPoint], Float) {
         guard !points.isEmpty else { return ([], 0) }
         let ys = points.map { $0.y }.sorted()
-        let index = min(ys.count - 1, max(0, ys.count / 25))
-        let groundY = ys[index]
-        let nearGroundCount = points.filter { $0.y - groundY <= 0.05 }.count
-        guard Double(nearGroundCount) >= Double(points.count) * 0.02 else {
-            return (points, groundY)
+        let fallbackY = ys[min(ys.count - 1, max(0, ys.count / 25))]
+        let threshold: Float = 0.05
+        guard points.count >= 32 else {
+            return (points.filter { $0.y >= fallbackY + threshold }, fallbackY)
         }
-        let threshold = groundY + 0.05
-        return (points.filter { $0.y >= threshold }, groundY)
+        let lowerLimit = ys[min(ys.count - 1, max(0, ys.count / 4))]
+        let lowPoints = points.filter { $0.y <= lowerLimit }
+        guard lowPoints.count >= 16 else {
+            return (points.filter { $0.y >= fallbackY + threshold }, fallbackY)
+        }
+
+        var rng = SystemRandomNumberGenerator()
+        var bestNormal = SIMD3<Float>(0, 1, 0)
+        var bestPoint = SIMD3<Float>(0, fallbackY, 0)
+        var bestInliers = 0
+
+        for _ in 0..<60 {
+            var i = Int.random(in: 0..<lowPoints.count, using: &rng)
+            var j = Int.random(in: 0..<lowPoints.count, using: &rng)
+            var k = Int.random(in: 0..<lowPoints.count, using: &rng)
+            while j == i {
+                j = Int.random(in: 0..<lowPoints.count, using: &rng)
+            }
+            while k == i || k == j {
+                k = Int.random(in: 0..<lowPoints.count, using: &rng)
+            }
+            let a = lowPoints[i].position
+            let b = lowPoints[j].position
+            let c = lowPoints[k].position
+            var normal = simd_cross(b - a, c - a)
+            let length = simd_length(normal)
+            guard length > 1e-6 else { continue }
+            normal /= length
+            guard abs(normal.y) > 0.9 else { continue }
+
+            var inliers = 0
+            var index = 0
+            while index < points.count {
+                if abs(simd_dot(points[index].position - a, normal)) <= threshold {
+                    inliers += 1
+                }
+                index += 4
+            }
+            let estimated = inliers * 4
+            if estimated > bestInliers {
+                bestInliers = estimated
+                bestNormal = normal
+                bestPoint = a
+            }
+        }
+
+        var fullInliers = 0
+        for point in points {
+            if abs(simd_dot(point.position - bestPoint, bestNormal)) <= threshold {
+                fullInliers += 1
+            }
+        }
+        let minY = points.map { $0.y }.min() ?? fallbackY
+        let isLowPlane = abs(bestPoint.y - minY) < 0.15
+        guard fullInliers >= max(120, points.count / 20), isLowPlane else {
+            return (points.filter { $0.y >= fallbackY + threshold }, fallbackY)
+        }
+        let kept = points.filter {
+            abs(simd_dot($0.position - bestPoint, bestNormal)) > threshold
+        }
+        return (kept, bestPoint.y)
     }
 
     private static func removePlanePoints(
@@ -668,16 +796,16 @@ enum ObjectScanProcessor {
         _ points: [ObjectPoint],
         sceneAABB: ObjectScanMetrics.AABB? = nil
     ) -> Bool {
-        guard points.count >= 40 else { return false }
+        guard points.count >= 30 else { return false }
         let aabb = computeAABB(points)
         let dims = [aabb.sizeX, aabb.sizeY, aabb.sizeZ].sorted(by: >)
         let largest = dims[0]
         let smallest = dims[2]
         let planarity = smallest / max(largest, 1e-6)
-        if planarity < 0.08 && largest > 0.4 && smallest < 0.15 {
+        if planarity < 0.10 && largest > 0.35 && smallest < 0.18 {
             return true
         }
-        if aabb.sizeY < 0.15 && aabb.sizeX > 0.5 && aabb.sizeZ > 0.5 {
+        if aabb.sizeY < 0.18 && aabb.sizeX > 0.4 && aabb.sizeZ > 0.4 {
             return true
         }
         if let sceneAABB {
@@ -685,11 +813,11 @@ enum ObjectScanProcessor {
             let touchesZ = aabb.minZ <= sceneAABB.minZ + 0.05 || aabb.maxZ >= sceneAABB.maxZ - 0.05
             let touchesY = aabb.minY <= sceneAABB.minY + 0.05 || aabb.maxY >= sceneAABB.maxY - 0.05
             let boundaryTouches = [touchesX, touchesY, touchesZ].filter { $0 }.count
-            if boundaryTouches >= 2 && planarity < 0.12 && largest > 0.5 {
+            if boundaryTouches >= 2 && planarity < 0.15 && largest > 0.4 {
                 return true
             }
         }
-        if points.count >= 80 {
+        if points.count >= 60 {
             let mean = points.reduce(SIMD3<Float>.zero) { $0 + $1.position }
                 / Float(points.count)
             var covariance = [[Float]](repeating: [Float](repeating: 0, count: 3), count: 3)
@@ -715,7 +843,7 @@ enum ObjectScanProcessor {
             }
             let sorted = extents.sorted(by: >)
             let spread = sorted[2] / max(sorted[0], 1e-6)
-            if spread < 0.08 && sorted[0] > 0.5 && sorted[1] > 0.25 {
+            if spread < 0.10 && sorted[0] > 0.4 && sorted[1] > 0.2 {
                 return true
             }
         }
@@ -726,13 +854,13 @@ enum ObjectScanProcessor {
         _ points: [ObjectPoint],
         distanceThreshold: Float = 0.04
     ) -> [ObjectPoint] {
-        guard points.count > 500 else { return points }
+        guard points.count > 400 else { return points }
         var working = points
-        for _ in 0..<6 {
+        for _ in 0..<8 {
             let cleaned = removeLargestPlane(working, distanceThreshold: distanceThreshold)
             if cleaned.count == working.count { break }
             working = cleaned
-            if working.count < 120 { break }
+            if working.count < 100 { break }
         }
         return working
     }
@@ -744,7 +872,7 @@ enum ObjectScanProcessor {
         let count = points.count
         guard count >= 16 else { return points }
         var rng = SystemRandomNumberGenerator()
-        let minInliers = max(250, count / 6)
+        let minInliers = max(200, count / 8)
         var bestNormal = SIMD3<Float>(0, 1, 0)
         var bestPoint = SIMD3<Float>.zero
         var bestInliers = 0
@@ -794,8 +922,8 @@ enum ObjectScanProcessor {
         let minY = points.map { $0.y }.min() ?? 0
         let planeHeight = simd_dot(bestPoint, bestNormal)
         let verticalness = abs(bestNormal.y)
-        let isFloor = verticalness > 0.85 && (planeHeight - minY) < 0.12
-        let isWall = verticalness < 0.35 && Float(fullInliers) >= Float(count) * 0.12
+        let isFloor = verticalness > 0.85 && (planeHeight - minY) < 0.15
+        let isWall = verticalness < 0.4 && Float(fullInliers) >= Float(count) * 0.08
         guard isFloor || isWall else { return points }
 
         return points.filter {

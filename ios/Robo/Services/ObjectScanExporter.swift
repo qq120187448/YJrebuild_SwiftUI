@@ -30,6 +30,8 @@ enum ObjectScanExporter {
         let voxelVolume = input.metrics.voxelMeshVolumeM3 ?? input.metrics.heightfieldVolumeM3
         let voxelSurface = input.metrics.voxelMeshSurfaceAreaM2 ?? input.metrics.heightfieldSurfaceAreaM2
         let voxelTotalSurface = input.metrics.voxelMeshTotalSurfaceAreaM2 ?? voxelSurface
+        let voxelOK = input.metrics.voxelReconstructionSucceeded
+            ?? (input.metrics.voxelMeshVolumeM3 != nil)
         let coveragePercent = Int((input.metrics.voxelCoverageEstimate ?? 1) * 100)
 
         let summary = [
@@ -40,8 +42,12 @@ enum ObjectScanExporter {
             "已剔除背景点：\(input.metrics.backgroundRemovedCount ?? 0)（\(String(format: "%.1f%%", (input.metrics.backgroundRemovedRatio ?? 0) * 100))）",
             "AABB 外包围：\(two(aabb.sizeX)) × \(two(aabb.sizeY)) × \(two(aabb.sizeZ)) m",
             "OBB 长宽高：\(two(obbLength)) × \(two(obbWidth)) × \(two(obbHeight)) m",
-            "体素网格体积：\(three(voxelVolume)) m³",
-            "不规则物体表面积：\(three(voxelSurface)) m²",
+            voxelOK
+                ? "体素网格体积：\(three(voxelVolume)) m³"
+                : "体素网格体积：未生成（请参考高度场）",
+            voxelOK
+                ? "不规则物体表面积：\(three(voxelSurface)) m²"
+                : "不规则物体表面积：未生成（请参考高度场）",
             "点云覆盖率：\(coveragePercent)%",
             "占地面积：\(two(footprint)) m²"
         ].joined(separator: "；")
@@ -76,14 +82,18 @@ enum ObjectScanExporter {
         add("OBB 体积", three(obbVolume), "m³")
         add("凸包体积", three(input.metrics.convexHullVolumeM3), "m³")
         add("凸包表面积", three(input.metrics.convexHullSurfaceAreaM2), "m²")
-        add("体素网格体积（Surface Nets 闭合封口）", three(voxelVolume), "m³")
-        add("体素网格总表面积", three(voxelTotalSurface), "m²")
-        add("不规则物体表面积（不含地面/墙面接触）", three(voxelSurface), "m²")
-        if let voxelSize = input.metrics.voxelSizeM {
-            add("体素尺寸", String(format: "%.4f", voxelSize), "m")
-        }
-        if let coverage = input.metrics.voxelCoverageEstimate {
-            add("点云覆盖率", "\(Int((coverage * 100).rounded()))%", "%")
+        if voxelOK {
+            add("体素网格体积（Surface Nets 闭合封口）", three(voxelVolume), "m³")
+            add("体素网格总表面积", three(voxelTotalSurface), "m²")
+            add("不规则物体表面积（不含地面/墙面接触）", three(voxelSurface), "m²")
+            if let voxelSize = input.metrics.voxelSizeM {
+                add("体素尺寸", String(format: "%.4f", voxelSize), "m")
+            }
+            if let coverage = input.metrics.voxelCoverageEstimate {
+                add("点云覆盖率", "\(Int((coverage * 100).rounded()))%", "%")
+            }
+        } else {
+            add("体素重建状态", "未生成，请参考高度场", "—")
         }
         if let removedCount = input.metrics.backgroundRemovedCount {
             add(
@@ -104,7 +114,7 @@ enum ObjectScanExporter {
         rows.append([
             XLSXWriter.Cell("备注"),
             XLSXWriter.Cell(
-                "不规则物体表面积按体素表面重建计算，已扣除地面接触面积与靠墙接触面积；空白区域按最近邻点云高度估算，点云覆盖率 \(coveragePercent)%。"
+                "不规则物体表面积按体素表面重建计算，已扣除地面接触面积与靠墙接触面积；空白区域按最近邻点云高度估算，点云覆盖率 \(coveragePercent)%。体素重建失败时请以高度场数据为准。"
             )
         ])
 

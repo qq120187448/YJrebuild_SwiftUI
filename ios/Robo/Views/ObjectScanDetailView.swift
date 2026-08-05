@@ -9,6 +9,8 @@ struct ObjectScanDetailView: View {
     @State private var errorMessage: String?
 
     var body: some View {
+        let voxelOK = metrics?.voxelReconstructionSucceeded
+            ?? (metrics?.voxelMeshVolumeM3 != nil)
         List {
             Section("3D 预览") {
                 if points.isEmpty {
@@ -68,38 +70,42 @@ struct ObjectScanDetailView: View {
             }
 
             Section("体素表面重建（Surface Nets）") {
-                LabeledContent(
-                    "体积（闭合封口）",
-                    value: String(
-                        format: "%.3f m³",
-                        metrics?.voxelMeshVolumeM3 ?? record.heightfieldVolumeM3
-                    )
-                )
-                LabeledContent(
-                    "不规则物体表面积（不含地面/墙面接触）",
-                    value: String(
-                        format: "%.3f m²",
-                        metrics?.voxelMeshSurfaceAreaM2 ?? record.heightfieldSurfaceAreaM2
-                    )
-                )
-                LabeledContent(
-                    "网格总表面积",
-                    value: String(
-                        format: "%.3f m²",
-                        metrics?.voxelMeshTotalSurfaceAreaM2 ?? record.heightfieldSurfaceAreaM2
-                    )
-                )
-                if let voxelSize = metrics?.voxelSizeM {
+                if voxelOK {
                     LabeledContent(
-                        "体素尺寸",
-                        value: String(format: "%.4f m", voxelSize)
+                        "体积（闭合封口）",
+                        value: String(
+                            format: "%.3f m³",
+                            metrics?.voxelMeshVolumeM3 ?? record.heightfieldVolumeM3
+                        )
                     )
-                }
-                if let coverage = metrics?.voxelCoverageEstimate {
                     LabeledContent(
-                        "点云覆盖率",
-                        value: String(format: "%.0f%%", coverage * 100)
+                        "不规则物体表面积（不含地面/墙面接触）",
+                        value: String(
+                            format: "%.3f m²",
+                            metrics?.voxelMeshSurfaceAreaM2 ?? record.heightfieldSurfaceAreaM2
+                        )
                     )
+                    LabeledContent(
+                        "网格总表面积",
+                        value: String(
+                            format: "%.3f m²",
+                            metrics?.voxelMeshTotalSurfaceAreaM2 ?? record.heightfieldSurfaceAreaM2
+                        )
+                    )
+                    if let voxelSize = metrics?.voxelSizeM {
+                        LabeledContent(
+                            "体素尺寸",
+                            value: String(format: "%.4f m", voxelSize)
+                        )
+                    }
+                    if let coverage = metrics?.voxelCoverageEstimate {
+                        LabeledContent(
+                            "点云覆盖率",
+                            value: String(format: "%.0f%%", coverage * 100)
+                        )
+                    }
+                } else {
+                    LabeledContent("体素重建状态", value: "未生成，请参考高度场")
                 }
             }
 
