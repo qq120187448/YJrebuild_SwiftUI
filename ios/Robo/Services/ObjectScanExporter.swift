@@ -93,7 +93,11 @@ enum ObjectScanExporter {
                 add("点云覆盖率", "\(Int((coverage * 100).rounded()))%", "%")
             }
         } else {
-            add("体素重建状态", "未生成，请参考高度场", "—")
+            add(
+                "体素重建状态",
+                input.metrics.voxelFailureReason ?? "未生成",
+                "—"
+            )
         }
         if let removedCount = input.metrics.backgroundRemovedCount {
             add(
@@ -101,6 +105,21 @@ enum ObjectScanExporter {
                 "\(removedCount)（\(String(format: "%.1f%%", (input.metrics.backgroundRemovedRatio ?? 0) * 100))）",
                 "个"
             )
+        }
+        if let value = input.metrics.classificationRemovedCount {
+            add("分类剔除", "\(value)", "点")
+        }
+        if let value = input.metrics.planeAnchorRemovedCount {
+            add("AR 平面剔除", "\(value)", "点")
+        }
+        if let value = input.metrics.groundRemovedCount {
+            add("地面剔除", "\(value)", "点")
+        }
+        if let value = input.metrics.ransacRemovedCount {
+            add("RANSAC 平面剔除", "\(value)", "点")
+        }
+        if let value = input.metrics.localPlaneRemovedCount {
+            add("局部平面剔除", "\(value)", "点")
         }
         if let vertexCount = input.metrics.voxelMeshVertexCount,
            let triangleCount = input.metrics.voxelMeshTriangleCount {

@@ -11,6 +11,7 @@ struct ObjectScanDetailView: View {
     var body: some View {
         let voxelOK = metrics?.voxelReconstructionSucceeded
             ?? (metrics?.voxelMeshVolumeM3 != nil)
+        let previewPoints = sampled(points, limit: ObjectScanSettings.previewPointLimit)
         List {
             Section("3D 预览") {
                 if points.isEmpty {
@@ -21,7 +22,7 @@ struct ObjectScanDetailView: View {
                     )
                     .frame(height: 200)
                 } else {
-                    ObjectPointCloud3DView(points: points)
+                    ObjectPointCloud3DView(points: previewPoints)
                         .frame(height: 260)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
@@ -41,6 +42,21 @@ struct ObjectScanDetailView: View {
                         "已剔除背景点",
                         value: "\(removedCount)（\(String(format: "%.1f%%", ratio * 100))）"
                     )
+                }
+                if let value = metrics?.classificationRemovedCount {
+                    LabeledContent("分类剔除", value: "\(value)")
+                }
+                if let value = metrics?.planeAnchorRemovedCount {
+                    LabeledContent("AR 平面剔除", value: "\(value)")
+                }
+                if let value = metrics?.groundRemovedCount {
+                    LabeledContent("地面剔除", value: "\(value)")
+                }
+                if let value = metrics?.ransacRemovedCount {
+                    LabeledContent("RANSAC 平面剔除", value: "\(value)")
+                }
+                if let value = metrics?.localPlaneRemovedCount {
+                    LabeledContent("局部平面剔除", value: "\(value)")
                 }
                 LabeledContent(
                     "AABB 外包围尺寸",
@@ -105,7 +121,13 @@ struct ObjectScanDetailView: View {
                         )
                     }
                 } else {
-                    LabeledContent("体素重建状态", value: "未生成，请参考高度场")
+                    LabeledContent(
+                        "体素重建状态",
+                        value: metrics?.voxelFailureReason ?? "未生成"
+                    )
+                    Text("请参考高度场或凸包结果。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -213,5 +235,18 @@ struct ObjectScanDetailView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func sampled(_ points: [ObjectPoint], limit: Int) -> [ObjectPoint] {
+        guard points.count > limit, limit > 0 else { return points }
+        let stride = max(points.count / limit, 1)
+        var result: [ObjectPoint] = []
+        result.reserveCapacity(limit)
+        var index = 0
+        while index < points.count {
+            result.append(points[index])
+            index += stride
+        }
+        return result
     }
 }

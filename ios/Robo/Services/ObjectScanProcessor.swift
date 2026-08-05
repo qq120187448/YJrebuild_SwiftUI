@@ -98,6 +98,12 @@ struct ObjectScanMetrics: Codable, Sendable {
     var voxelMeshVertexCount: Int?
     var voxelMeshTriangleCount: Int?
     var voxelReconstructionSucceeded: Bool?
+    var voxelFailureReason: String?
+    var classificationRemovedCount: Int?
+    var planeAnchorRemovedCount: Int?
+    var groundRemovedCount: Int?
+    var ransacRemovedCount: Int?
+    var localPlaneRemovedCount: Int?
     var backgroundRemovedCount: Int?
     var backgroundRemovedRatio: Double?
 }
@@ -126,6 +132,7 @@ struct OBBResult: Sendable {
 
 struct VoxelReconstructionResult: Sendable {
     var succeeded: Bool = false
+    var failureReason: String? = nil
     var voxelSizeM: Double?
     var volumeM3: Double?
     var totalSurfaceAreaM2: Double?
@@ -178,13 +185,15 @@ enum ObjectScanProcessor {
         let groundRemoved = max(0, planeFiltered.count - keptPoints.count)
         let planeCleaned = removeDominantPlanes(keptPoints)
         let planeRemoved = max(0, keptPoints.count - planeCleaned.count)
-        let allClusters = connectedClusters(planeCleaned, cellSize: 0.08)
-        let sceneAABB = computeAABB(planeCleaned)
+        let localPlaneCleaned = removeLocalPlaneRegions(planeCleaned)
+        let localPlaneRemoved = max(0, planeCleaned.count - localPlaneCleaned.count)
+        let allClusters = connectedClusters(localPlaneCleaned, cellSize: 0.08)
+        let sceneAABB = computeAABB(localPlaneCleaned)
         let objectClusters = allClusters.filter {
             !isLikelyBackgroundCluster($0, sceneAABB: sceneAABB)
         }
         let backgroundFilteredPoints = objectClusters.isEmpty
-            ? planeCleaned
+            ? localPlaneCleaned
             : objectClusters.flatMap { $0 }
         let candidateClusters = objectClusters
             .filter { $0.count >= 20 }
@@ -196,12 +205,13 @@ enum ObjectScanProcessor {
         } else if !objectClusters.isEmpty {
             candidates = Array(objectClusters.sorted { $0.count > $1.count }.prefix(6))
         } else {
-            candidates = [keptPoints]
+            candidates = [localPlaneCleaned]
         }
         let removedBackgroundCount = classificationRemoved
             + planeAnchorRemoved
             + groundRemoved
             + planeRemoved
+            + localPlaneRemoved
         let removedBackgroundRatio = Double(removedBackgroundCount) / Double(max(points.count, 1))
 
         var options: [ObjectScanClusterOption] = []
@@ -218,6 +228,11 @@ enum ObjectScanProcessor {
             metrics.pointCount = points.count
             metrics.processedPointCount = backgroundFilteredPoints.count
             metrics.clusterCount = totalClusterCount
+            metrics.classificationRemovedCount = classificationRemoved
+            metrics.planeAnchorRemovedCount = planeAnchorRemoved
+            metrics.groundRemovedCount = groundRemoved
+            metrics.ransacRemovedCount = planeRemoved
+            metrics.localPlaneRemovedCount = localPlaneRemoved
             options.append(
                 ObjectScanClusterOption(
                     points: cluster,
@@ -307,6 +322,7 @@ enum ObjectScanProcessor {
             voxelMeshVertexCount: voxel.vertexCount,
             voxelMeshTriangleCount: voxel.triangleCount,
             voxelReconstructionSucceeded: voxel.succeeded,
+            voxelFailureReason: voxel.failureReason,
             backgroundRemovedCount: backgroundRemovedCount,
             backgroundRemovedRatio: backgroundRemovedRatio
         )
@@ -427,10 +443,14 @@ enum ObjectScanProcessor {
         targetVoxelsPerAxis: Int = 96,
         planes: [ScanPlaneInfo] = []
     ) -> VoxelReconstructionResult {
-        guard points.count >= 8 else { return VoxelReconstructionResult() }
+        guard points.count >= 8 else {
+            return VoxelReconstructionResult(failureReason: "目标点过少")
+        }
         let aabb = computeAABB(points)
         let maxDim = max(aabb.sizeX, aabb.sizeY, aabb.sizeZ)
-        guard maxDim > 1e-6 else { return VoxelReconstructionResult() }
+        guard maxDim > 1e-6 else {
+            return VoxelReconstructionResult(failureReason: "点云范围异常")
+        }
 
         let sqrtCount = sqrt(Double(points.count))
         let target = min(max(Int((sqrtCount * 2).rounded()), 24), targetVoxelsPerAxis)
@@ -441,7 +461,7 @@ enum ObjectScanProcessor {
             initialVoxelSize: initialVoxelSize,
             maxVoxels: 260_000
         ) else {
-            return VoxelReconstructionResult()
+            return VoxelReconstructionResult(failureReason: "体素网格过大")
         }
         let origin = voxelization.origin
         let voxelSize = voxelization.voxelSize
@@ -471,7 +491,7 @@ enum ObjectScanProcessor {
             within: renderBounds
         )
         guard !buffer.positions.isEmpty, buffer.indices.count >= 3 else {
-            return VoxelReconstructionResult()
+            return VoxelReconstructionResult(failureReason: "Surface Nets 生成失败")
         }
 
         let vertices = buffer.positions.map {
@@ -489,7 +509,9 @@ enum ObjectScanProcessor {
         }
         let meshGL = MeshGL<HullVector>(vertices: vertices, triangles: triangles)
         let manifold = try? Manifold<HullVector>(meshGL)
-        guard let manifold else { return VoxelReconstructionResult() }
+        guard let manifold else {
+            return VoxelReconstructionResult(failureReason: "网格闭合失败")
+        }
 
         let closedMesh = manifold.meshGL()
         let totalArea = max(0, manifold.surfaceArea)
@@ -848,6 +870,117 @@ enum ObjectScanProcessor {
             }
         }
         return false
+    }
+
+    private static func removeLocalPlaneRegions(
+        _ points: [ObjectPoint],
+        cellSize: Float = 0.05,
+        minAreaM2: Double = 0.5
+    ) -> [ObjectPoint] {
+        guard cellSize > 0, !points.isEmpty else { return points }
+        var cells: [Int64: [ObjectPoint]] = [:]
+        for point in points {
+            cells[voxelKey(point.position, voxelSize: cellSize), default: []].append(point)
+        }
+        let cellArea = Double(cellSize * cellSize)
+        let minCellCount = max(Int((minAreaM2 / cellArea).rounded()), 20)
+        let globalMinY = points.map { $0.y }.min() ?? 0
+
+        var offsets: [SIMD3<Int64>] = []
+        for dx in -1...1 {
+            for dy in -1...1 {
+                for dz in -1...1 {
+                    if dx != 0 || dy != 0 || dz != 0 {
+                        offsets.append(SIMD3<Int64>(Int64(dx), Int64(dy), Int64(dz)))
+                    }
+                }
+            }
+        }
+
+        func neighborKeys(of key: Int64) -> [Int64] {
+            let ix = (key & 0xFFFFF) - 0x80000
+            let iy = ((key >> 20) & 0xFFFFF) - 0x80000
+            let iz = ((key >> 40) & 0xFFFFF) - 0x80000
+            return offsets.map { voxelKey(ix + $0.x, iy + $0.y, iz + $0.z) }
+        }
+
+        var flatKeys = Set<Int64>()
+        for (key, cellPoints) in cells {
+            guard cellPoints.count >= 4 else { continue }
+            var neighborPoints = cellPoints
+            for neighborKey in neighborKeys(of: key) {
+                if let neighbor = cells[neighborKey] {
+                    neighborPoints.append(contentsOf: neighbor)
+                }
+            }
+            guard neighborPoints.count >= 16 else { continue }
+
+            let mean = neighborPoints.reduce(SIMD3<Float>.zero) { $0 + $1.position }
+                / Float(neighborPoints.count)
+            let yMin = neighborPoints.map { $0.y }.min() ?? mean.y
+            let yMax = neighborPoints.map { $0.y }.max() ?? mean.y
+            let ySpread = yMax - yMin
+            var covariance = [[Float]](repeating: [Float](repeating: 0, count: 3), count: 3)
+            for point in neighborPoints {
+                let d = point.position - mean
+                for row in 0..<3 {
+                    for column in 0..<3 {
+                        covariance[row][column] += d[row] * d[column]
+                    }
+                }
+            }
+            let axes = jacobiEigenvectors(covariance)
+            var extents: [Float] = []
+            for axis in axes {
+                var minValue = Float.greatestFiniteMagnitude
+                var maxValue = -Float.greatestFiniteMagnitude
+                for point in neighborPoints {
+                    let projection = simd_dot(point.position - mean, axis)
+                    minValue = min(minValue, projection)
+                    maxValue = max(maxValue, projection)
+                }
+                extents.append(max(maxValue - minValue, 0))
+            }
+            let sorted = extents.sorted(by: >)
+            let planarity = sorted[2] / max(sorted[0], 1e-6)
+            var minExtentIndex = 0
+            for index in 1..<extents.count where extents[index] < extents[minExtentIndex] {
+                minExtentIndex = index
+            }
+            let verticalness = abs(axes[minExtentIndex].y)
+            let isFloor = verticalness > 0.85 && (mean.y - globalMinY) < 0.15
+            let isWall = verticalness < 0.25 && ySpread >= 0.4
+            guard planarity < 0.18, isFloor || isWall else { continue }
+            flatKeys.insert(key)
+        }
+
+        guard !flatKeys.isEmpty else { return points }
+        var visited = Set<Int64>()
+        var removeKeys = Set<Int64>()
+        for key in flatKeys {
+            guard !visited.contains(key) else { continue }
+            visited.insert(key)
+            var stack = [key]
+            var region: Set<Int64> = [key]
+            while let current = stack.popLast() {
+                for neighborKey in neighborKeys(of: current) {
+                    if flatKeys.contains(neighborKey) && !visited.contains(neighborKey) {
+                        visited.insert(neighborKey)
+                        region.insert(neighborKey)
+                        stack.append(neighborKey)
+                    }
+                }
+            }
+            if Double(region.count) * cellArea >= minAreaM2 {
+                removeKeys.formUnion(region)
+            }
+        }
+        guard !removeKeys.isEmpty, removeKeys.count >= minCellCount else {
+            return points
+        }
+        return points.filter {
+            !removeKeys.contains(voxelKey($0.position, voxelSize: cellSize))
+        }
     }
 
     static func removeDominantPlanes(

@@ -349,7 +349,10 @@ struct ObjectScanView: View {
                 .pickerStyle(.segmented)
 
                 ObjectCropBox3DView(
-                    points: sampled(result.allPoints, limit: 80_000),
+                    points: sampled(
+                        result.allPoints,
+                        limit: ObjectScanSettings.previewPointLimit
+                    ),
                     targetPoints: current.points,
                     previewMode: previewMode,
                     cropVolume: cropVolume,
@@ -438,6 +441,21 @@ struct ObjectScanView: View {
                         value: "\(removedCount)（\(String(format: "%.1f%%", ratio * 100))）"
                     )
                 }
+                if let value = current.metrics.classificationRemovedCount {
+                    LabeledContent("分类剔除", value: "\(value)")
+                }
+                if let value = current.metrics.planeAnchorRemovedCount {
+                    LabeledContent("AR 平面剔除", value: "\(value)")
+                }
+                if let value = current.metrics.groundRemovedCount {
+                    LabeledContent("地面剔除", value: "\(value)")
+                }
+                if let value = current.metrics.ransacRemovedCount {
+                    LabeledContent("RANSAC 平面剔除", value: "\(value)")
+                }
+                if let value = current.metrics.localPlaneRemovedCount {
+                    LabeledContent("局部平面剔除", value: "\(value)")
+                }
                 LabeledContent(
                     "AABB 外包围尺寸",
                     value: String(
@@ -505,7 +523,13 @@ struct ObjectScanView: View {
                         )
                     }
                 } else {
-                    LabeledContent("体素重建状态", value: "未生成，请参考高度场")
+                    LabeledContent(
+                        "体素重建状态",
+                        value: current.metrics.voxelFailureReason ?? "未生成"
+                    )
+                    Text("请参考高度场或凸包结果。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -1763,21 +1787,18 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         guard !points.isEmpty else { return }
         var displayPoints: [ObjectPoint] = []
         displayPoints.reserveCapacity(40_000)
+        let scanColor = SIMD3<Float>(0.55, 0.05, 0.05)
         for point in sampled(points, limit: 40_000) {
             let world = point.position
             guard isPointVisible(world: world, frame: frame) else { continue }
-            let inverted = SIMD3<Float>(
-                1 - point.r,
-                1 - point.g,
-                1 - point.b
-            )
             displayPoints.append(ObjectPoint(
                 x: point.x,
                 y: point.y,
                 z: point.z,
-                r: inverted.x,
-                g: inverted.y,
-                b: inverted.z
+                r: scanColor.x,
+                g: scanColor.y,
+                b: scanColor.z,
+                classification: point.classification
             ))
         }
         guard !displayPoints.isEmpty else {
@@ -1788,8 +1809,8 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         }
         let material = SCNMaterial()
         material.lightingModel = .constant
-        material.diffuse.contents = UIColor.white
-        material.emission.contents = UIColor.black
+        material.diffuse.contents = UIColor.black
+        material.emission.contents = UIColor(red: 0.55, green: 0.05, blue: 0.05, alpha: 1)
         material.blendMode = .alpha
         material.writesToDepthBuffer = false
         let radius = CGFloat(pointSize)
