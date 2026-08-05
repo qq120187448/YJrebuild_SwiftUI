@@ -1394,7 +1394,23 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
 
     func moveCropBox(axis: SIMD3<Float>) {
         guard let volume = cropVolume else { return }
-        let rotation = simd_float3x3(volume.transform)
+        let rotation = simd_float3x3(
+            SIMD3<Float>(
+                volume.transform.columns.0.x,
+                volume.transform.columns.0.y,
+                volume.transform.columns.0.z
+            ),
+            SIMD3<Float>(
+                volume.transform.columns.1.x,
+                volume.transform.columns.1.y,
+                volume.transform.columns.1.z
+            ),
+            SIMD3<Float>(
+                volume.transform.columns.2.x,
+                volume.transform.columns.2.y,
+                volume.transform.columns.2.z
+            )
+        )
         let worldDelta = rotation * (axis * 0.05)
         let newOrigin = volume.origin + worldDelta
         var transform = volume.transform

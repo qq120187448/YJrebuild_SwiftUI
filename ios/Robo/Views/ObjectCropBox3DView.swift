@@ -450,7 +450,23 @@ struct ObjectCropBox3DView: UIViewRepresentable {
         func moveBox(axis: SIMD3<Float>) {
             guard let volume = parent.cropVolume else { return }
             let delta: Float = 0.05
-            let rotation = simd_float3x3(volume.transform)
+            let rotation = simd_float3x3(
+                SIMD3<Float>(
+                    volume.transform.columns.0.x,
+                    volume.transform.columns.0.y,
+                    volume.transform.columns.0.z
+                ),
+                SIMD3<Float>(
+                    volume.transform.columns.1.x,
+                    volume.transform.columns.1.y,
+                    volume.transform.columns.1.z
+                ),
+                SIMD3<Float>(
+                    volume.transform.columns.2.x,
+                    volume.transform.columns.2.y,
+                    volume.transform.columns.2.z
+                )
+            )
             let newOrigin = volume.origin + rotation * (axis * delta)
             var transform = volume.transform
             transform.columns.3 = SIMD4<Float>(
