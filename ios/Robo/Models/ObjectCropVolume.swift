@@ -1,6 +1,27 @@
 import Foundation
 import simd
 
+struct ObjectCropVolumeSnapshot: Codable {
+    var originX: Float
+    var originY: Float
+    var originZ: Float
+    var extentX: Float
+    var extentY: Float
+    var extentZ: Float
+    var m00: Float
+    var m01: Float
+    var m02: Float
+    var m10: Float
+    var m11: Float
+    var m12: Float
+    var m20: Float
+    var m21: Float
+    var m22: Float
+    var m30: Float
+    var m31: Float
+    var m32: Float
+}
+
 struct ObjectCropVolume {
     let origin: SIMD3<Float>
     let extent: SIMD3<Float>
@@ -51,6 +72,40 @@ struct ObjectCropVolume {
         )
         let world = transform * localCenter
         return SIMD3<Float>(world.x, world.y, world.z)
+    }
+
+    var snapshot: ObjectCropVolumeSnapshot {
+        ObjectCropVolumeSnapshot(
+            originX: origin.x,
+            originY: origin.y,
+            originZ: origin.z,
+            extentX: extent.x,
+            extentY: extent.y,
+            extentZ: extent.z,
+            m00: transform.columns.0.x,
+            m01: transform.columns.0.y,
+            m02: transform.columns.0.z,
+            m10: transform.columns.1.x,
+            m11: transform.columns.1.y,
+            m12: transform.columns.1.z,
+            m20: transform.columns.2.x,
+            m21: transform.columns.2.y,
+            m22: transform.columns.2.z,
+            m30: transform.columns.3.x,
+            m31: transform.columns.3.y,
+            m32: transform.columns.3.z
+        )
+    }
+
+    init?(snapshot: ObjectCropVolumeSnapshot) {
+        var transform = matrix_identity_float4x4
+        transform.columns.0 = SIMD4<Float>(snapshot.m00, snapshot.m01, snapshot.m02, 0)
+        transform.columns.1 = SIMD4<Float>(snapshot.m10, snapshot.m11, snapshot.m12, 0)
+        transform.columns.2 = SIMD4<Float>(snapshot.m20, snapshot.m21, snapshot.m22, 0)
+        transform.columns.3 = SIMD4<Float>(snapshot.m30, snapshot.m31, snapshot.m32, 1)
+        self.origin = SIMD3<Float>(snapshot.originX, snapshot.originY, snapshot.originZ)
+        self.extent = SIMD3<Float>(snapshot.extentX, snapshot.extentY, snapshot.extentZ)
+        self.transform = transform
     }
     var halfExtent: SIMD3<Float> { extent * 0.5 }
     var inverseTransform: simd_float4x4 { simd_inverse(transform) }

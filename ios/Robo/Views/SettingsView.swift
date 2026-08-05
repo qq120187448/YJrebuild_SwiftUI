@@ -12,6 +12,8 @@ struct SettingsView: View {
     @State private var priceMessage = ""
     @State private var scanPointSize: Double = ObjectScanSettings.pointSize
     @State private var previewPointLimit: Double = Double(ObjectScanSettings.previewPointLimit)
+    @State private var previewPointSize: Double = ObjectScanSettings.previewPointSize
+    @State private var boxLineWidth: Double = ObjectScanSettings.boxLineWidth
 
     var body: some View {
         NavigationStack {
@@ -39,9 +41,35 @@ struct SettingsView: View {
                             Text(String(format: "%.1f", scanPointSize))
                                 .foregroundStyle(.secondary)
                         }
-                        Slider(value: $scanPointSize, in: 0.5...6, step: 0.1)
+                        Slider(value: $scanPointSize, in: 1...20, step: 0.5)
                     }
-                    Text("扫描过程中红色点云的大小，默认 1.5。")
+                    Text("扫描过程中红色点云的大小，范围 1-20。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("预览云点大小")
+                            Spacer()
+                            Text(String(format: "%.1f", previewPointSize))
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $previewPointSize, in: 1...10, step: 0.5)
+                    }
+                    Text("预览 3D 时云点的大小，默认 4。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("盒子线宽")
+                            Spacer()
+                            Text(String(format: "%.1f", boxLineWidth))
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $boxLineWidth, in: 1...10, step: 0.5)
+                    }
+                    Text("裁剪盒线条的屏幕像素宽度，默认 4。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -85,6 +113,12 @@ struct SettingsView: View {
             }
             .onChange(of: previewPointLimit) { _, newValue in
                 ObjectScanSettings.previewPointLimit = Int(newValue)
+            }
+            .onChange(of: previewPointSize) { _, newValue in
+                ObjectScanSettings.previewPointSize = newValue
+            }
+            .onChange(of: boxLineWidth) { _, newValue in
+                ObjectScanSettings.boxLineWidth = newValue
             }
             .fileImporter(
                 isPresented: $showPriceImporter,

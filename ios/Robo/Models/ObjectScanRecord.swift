@@ -21,6 +21,7 @@ final class ObjectScanRecord {
     var plyData: Data?
     var usdzData: Data?
     var pointsJSON: Data = Data()
+    var cropVolumeData: Data?
 
     init(
         objectName: String,
@@ -38,7 +39,8 @@ final class ObjectScanRecord {
         metricsJSON: Data,
         plyData: Data?,
         usdzData: Data?,
-        pointsJSON: Data
+        pointsJSON: Data,
+        cropVolumeData: Data? = nil
     ) {
         self.id = UUID()
         self.objectName = objectName
@@ -58,5 +60,6 @@ final class ObjectScanRecord {
         self.plyData = plyData
         self.usdzData = usdzData
         self.pointsJSON = pointsJSON
+        self.cropVolumeData = cropVolumeData
     }
 }

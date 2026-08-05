@@ -1,9 +1,51 @@
 import SwiftUI
 import SwiftData
 import ARKit
+import AVFoundation
 import CoreVideo
 import SceneKit
 import simd
+
+struct RepeatCommandButton: View {
+    let title: String
+    let color: Color
+    let command: AxisMoveCommand
+    @Binding var current: AxisMoveCommand
+    @State private var timer: Timer?
+
+    var body: some View {
+        Text(title)
+            .font(.subheadline.bold())
+            .foregroundStyle(.white)
+            .frame(width: 44, height: 38)
+            .background(color.opacity(0.85))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .contentShape(Rectangle())
+            .onLongPressGesture(
+                minimumDuration: 0.15,
+                maximumDistance: 50,
+                pressing: { pressing in
+                    if pressing {
+                        fire()
+                        timer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { _ in
+                            fire()
+                        }
+                    } else {
+                        timer?.invalidate()
+                        timer = nil
+                    }
+                },
+                perform: {}
+            )
+    }
+
+    private func fire() {
+        current = .none
+        DispatchQueue.main.async {
+            current = command
+        }
+    }
+}
 
 enum AxisMoveCommand: Equatable {
     case none
@@ -76,6 +118,7 @@ struct ObjectScanView: View {
     @State private var scanCropBoxPlaced = false
     @State private var scanCropBoxSize: Float = 1.0
     @State private var scanClearCropBox = false
+    @State private var torchOn = false
 
     var body: some View {
         NavigationStack {
@@ -242,6 +285,9 @@ struct ObjectScanView: View {
                 }
             )
             .ignoresSafeArea()
+            .onDisappear {
+                setTorch(false)
+            }
 
             VStack {
                 HStack(spacing: 10) {
@@ -290,37 +336,52 @@ struct ObjectScanView: View {
                             .clipShape(Capsule())
                         }
 
-                        if scanCropBoxPlaced {
-                            VStack(spacing: 6) {
-                                cropBoxControlPanel(command: $scanAxisMoveCommand)
-                                Slider(value: $scanCropBoxSize, in: 0.2...10, step: 0.1)
-                                    .frame(width: 180)
-                                HStack {
-                                    Text("\(scanCropBoxSize, specifier: "%.1f") m")
-                                        .font(.caption.bold())
+                        Button {
+                            torchOn.toggle()
+                            setTorch(torchOn)
+                        } label: {
+                            Label(
+                                torchOn ? "补光开" : "补光",
+                                systemImage: torchOn ? "flashlight.on.fill" : "flashlight.off.fill"
+                            )
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .background(Color.orange.opacity(0.9))
+                            .clipShape(Capsule())
+                        }
+                    }
+
+                    if scanCropBoxPlaced {
+                        VStack(spacing: 6) {
+                            cropBoxControlPanel(command: $scanAxisMoveCommand)
+                            Slider(value: $scanCropBoxSize, in: 0.2...10, step: 0.1)
+                            HStack {
+                                Text("\(scanCropBoxSize, specifier: "%.1f") m")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.white)
+                                Spacer()
+                                Button {
+                                    scanCropBoxPlaced = false
+                                    scanClearCropBox = true
+                                } label: {
+                                    Image(systemName: "trash")
+                                        .font(.subheadline)
                                         .foregroundStyle(.white)
-                                    Spacer()
-                                    Button {
-                                        scanCropBoxPlaced = false
-                                        scanClearCropBox = true
-                                    } label: {
-                                        Image(systemName: "trash")
-                                            .font(.subheadline)
-                                            .foregroundStyle(.white)
-                                    }
                                 }
                             }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(.black.opacity(0.5))
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(.black.opacity(0.5))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
                 }
                 .padding(12)
                 .background(.black.opacity(0.45))
                 .clipShape(RoundedRectangle(cornerRadius: 16))
-                .padding(.bottom, 20)
+                .padding(.bottom, 10)
             }
         }
     }
@@ -333,6 +394,15 @@ struct ObjectScanView: View {
             return "已贴合地面 · 移动/尺寸/旋转微调"
         }
         return "点击“放置裁剪盒”，再点击地面放置；扫描采集全部点云"
+    }
+
+    private func setTorch(_ on: Bool) {
+        guard let device = AVCaptureDevice.default(for: .video), device.hasTorch else {
+            return
+        }
+        try? device.lockForConfiguration()
+        device.torchMode = on ? .on : .off
+        device.unlockForConfiguration()
     }
 
     private func cropBoxControlPanel(command: Binding<AxisMoveCommand>) -> some View {
@@ -378,16 +448,12 @@ struct ObjectScanView: View {
         _ color: Color,
         _ command: Binding<AxisMoveCommand>
     ) -> some View {
-        Button {
-            command.wrappedValue = commandValue
-        } label: {
-            Text(label)
-                .font(.subheadline.bold())
-                .foregroundStyle(.white)
-                .frame(width: 44, height: 38)
-                .background(color.opacity(0.85))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
-        }
+        RepeatCommandButton(
+            title: label,
+            color: color,
+            command: commandValue,
+            current: command
+        )
     }
 
     private func resultsView(_ result: ObjectScanProcessResult) -> some View {
@@ -431,6 +497,11 @@ struct ObjectScanView: View {
                 .frame(height: 320)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+
+                if cropVolume != nil {
+                    cropBoxControlPanel(command: $axisMoveCommand)
+                        .padding(.vertical, 4)
+                }
             }
 
             if result.clusters.count > 1 && cropVolume == nil {
@@ -498,6 +569,10 @@ struct ObjectScanView: View {
                     "占地面积",
                     value: String(format: "%.2f m²", current.metrics.footprintAreaM2 ?? 0)
                 )
+                DisclosureGroup("AABB / OBB 说明") {
+                    Text("AABB：沿世界坐标 X/Y/Z 方向的外包围盒。")
+                    Text("OBB：按物体自身方向拟合的最优外包围盒。")
+                }
             }
 
             Section("体素表面重建（Surface Nets）") {
@@ -554,6 +629,9 @@ struct ObjectScanView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                DisclosureGroup("体素说明") {
+                    Text("用小立方体填充点云后计算体积和表面积。")
+                }
             }
 
             Section("堆体/土方（高度场，参考）") {
@@ -573,6 +651,9 @@ struct ObjectScanView: View {
                     "靠墙接触面积",
                     value: String(format: "%.2f m²", current.metrics.wallContactAreaM2 ?? 0)
                 )
+                DisclosureGroup("高度场说明") {
+                    Text("从上方按网格高度估算体积和表面积。")
+                }
             }
 
             Section("设备（凸包）") {
@@ -584,15 +665,9 @@ struct ObjectScanView: View {
                     "表面积",
                     value: String(format: "%.3f m²", current.metrics.convexHullSurfaceAreaM2)
                 )
-            }
-
-            Section("指标说明") {
-                Text("AABB：沿世界坐标 X/Y/Z 方向的外包围盒。")
-                Text("OBB：按物体自身方向拟合的最优外包围盒。")
-                Text("凸包：包裹所有点云的最小凸多面体。")
-                Text("体素：用小立方体填充点云后计算体积和表面积。")
-                Text("高度场：从上方按网格高度估算体积和表面积。")
-                Text("裁剪盒：勾选范围内的点才参与工程量计算。")
+                DisclosureGroup("凸包说明") {
+                    Text("包裹所有点云的最小凸多面体。")
+                }
             }
 
             Section {
@@ -730,7 +805,10 @@ struct ObjectScanView: View {
             usdzData: cropVolume == nil
                 ? selectedOption(result).usdzData
                 : (boxUSDZData ?? ObjectScanProcessor.voxelReconstruct(current.points).usdzData),
-            pointsJSON: (try? JSONEncoder().encode(current.points)) ?? Data()
+            pointsJSON: (try? JSONEncoder().encode(current.points)) ?? Data(),
+            cropVolumeData: cropVolume.flatMap {
+                try? JSONEncoder().encode($0.snapshot)
+            }
         )
         modelContext.insert(record)
         try? modelContext.save()
@@ -1045,7 +1123,6 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             moveStartCenter = nil
             moveStartOrigin = nil
             rotateStartTransform = nil
-            snapCropBoxToPlanes()
 
         default:
             break
@@ -1109,7 +1186,6 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             isMoving = false
             moveStartScreen = nil
             moveStartCenter = nil
-            snapCropBoxToPlanes()
 
         default:
             break
@@ -1183,7 +1259,6 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         case .ended, .cancelled:
             isScaling = false
             scaleStartExtent = nil
-            snapCropBoxToPlanes()
 
         default:
             break
@@ -1382,7 +1457,10 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             cameraPosition: cameraPosition,
             isOccupied: { [weak self] world in
                 self?.isOccupied(world) ?? false
-            }
+            },
+            pixelLineWidth: CGFloat(ObjectScanSettings.boxLineWidth),
+            viewportHeight: sceneView.bounds.height,
+            fovYDegrees: CGFloat(sceneView.pointOfView?.camera?.fieldOfView ?? 60)
         )
         ObjectBoxVisual.addAxes(to: root, extent: volume.extent)
         sceneView.scene.rootNode.addChildNode(root)
@@ -1644,13 +1722,20 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             } else {
                 node = SCNNode()
                 node.name = "occlusionMesh"
-                node.renderingOrder = -20
                 sceneView.scene.rootNode.addChildNode(node)
                 meshOcclusionNodes[anchor.identifier] = node
             }
             node.simdTransform = anchor.transform
-            if let geometry = makeOcclusionGeometry(anchor) {
-                node.geometry = geometry
+            node.childNodes.forEach { $0.removeFromParentNode() }
+            if let depthGeometry = makeOcclusionGeometry(anchor) {
+                let depthNode = SCNNode(geometry: depthGeometry)
+                depthNode.renderingOrder = -20
+                node.addChildNode(depthNode)
+            }
+            if let overlayGeometry = makeOverlayGeometry(anchor) {
+                let overlayNode = SCNNode(geometry: overlayGeometry)
+                overlayNode.renderingOrder = 10
+                node.addChildNode(overlayNode)
             }
         }
     }
@@ -1699,12 +1784,23 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         let geometry = SCNGeometry(sources: [source], elements: [element])
         let material = SCNMaterial()
         material.lightingModel = .constant
+        material.diffuse.contents = UIColor.clear
+        material.colorBufferWriteMask = []
+        material.writesToDepthBuffer = true
+        material.isDoubleSided = true
+        geometry.materials = [material]
+        return geometry
+    }
+
+    private func makeOverlayGeometry(_ anchor: ARMeshAnchor) -> SCNGeometry? {
+        guard let geometry = makeOcclusionGeometry(anchor) else { return nil }
+        let material = SCNMaterial()
+        material.lightingModel = .constant
         material.diffuse.contents = UIColor(red: 1, green: 0.25, blue: 0.25, alpha: 0.35)
         material.emission.contents = UIColor(red: 1, green: 0.25, blue: 0.25, alpha: 0.35)
         material.transparency = 0.35
         material.blendMode = .alpha
-        material.colorBufferWriteMask = [.red, .green, .blue, .alpha]
-        material.writesToDepthBuffer = true
+        material.writesToDepthBuffer = false
         material.isDoubleSided = true
         geometry.materials = [material]
         return geometry

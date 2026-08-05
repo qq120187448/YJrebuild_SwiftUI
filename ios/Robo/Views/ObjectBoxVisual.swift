@@ -64,7 +64,10 @@ enum ObjectBoxVisual {
         to root: SCNNode,
         extent: SIMD3<Float>,
         cameraPosition: SIMD3<Float>,
-        isOccupied: (SIMD3<Float>) -> Bool
+        isOccupied: (SIMD3<Float>) -> Bool,
+        pixelLineWidth: CGFloat,
+        viewportHeight: CGFloat,
+        fovYDegrees: CGFloat
     ) {
         let solidMaterial = makeMaterial(color: UIColor.systemRed)
         let dashedMaterial = makeMaterial(color: UIColor.systemRed.withAlphaComponent(0.65))
@@ -75,12 +78,20 @@ enum ObjectBoxVisual {
                 cameraPosition: cameraPosition,
                 isOccupied: isOccupied
             )
+            let distance = simd_length(cameraPosition - edge.offset)
+            let fovRadians = fovYDegrees * .pi / 180
+            let worldRadius = Float(pixelLineWidth)
+                / Float(max(viewportHeight, 1))
+                * 2
+                * distance
+                * tan(Float(fovRadians) / 2)
             addLine(
                 to: root,
                 edge: edge,
                 dashed: dashed,
                 solidMaterial: solidMaterial,
-                dashedMaterial: dashedMaterial
+                dashedMaterial: dashedMaterial,
+                radius: max(worldRadius, 0.0005)
             )
         }
     }
@@ -179,15 +190,17 @@ enum ObjectBoxVisual {
         edge: Edge,
         dashed: Bool,
         solidMaterial: SCNMaterial,
-        dashedMaterial: SCNMaterial
+        dashedMaterial: SCNMaterial,
+        radius: Float
     ) {
         func addCylinder(
             axis: SIMD3<Float>,
             length: Float,
             offset: SIMD3<Float>,
-            material: SCNMaterial
+            material: SCNMaterial,
+            radius: Float
         ) {
-            let cylinder = SCNCylinder(radius: 0.004, height: CGFloat(length))
+            let cylinder = SCNCylinder(radius: CGFloat(radius), height: CGFloat(length))
             cylinder.firstMaterial = material
             let node = SCNNode(geometry: cylinder)
             node.position = SCNVector3(offset.x, offset.y, offset.z)
@@ -203,7 +216,8 @@ enum ObjectBoxVisual {
                 axis: edge.axis,
                 length: edge.length,
                 offset: edge.offset,
-                material: solidMaterial
+                material: solidMaterial,
+                radius: radius
             )
             return
         }
@@ -219,7 +233,8 @@ enum ObjectBoxVisual {
                 axis: edge.axis,
                 length: dash,
                 offset: position,
-                material: dashedMaterial
+                material: dashedMaterial,
+                radius: radius
             )
             cursor += dash + gapLength
         }

@@ -189,7 +189,7 @@ enum ObjectScanProcessor {
                 for: cluster,
                 groundY: groundY,
                 gridSize: gridSize,
-                planes: planes,
+                planes: [],
                 backgroundRemovedCount: 0,
                 backgroundRemovedRatio: 0
             )

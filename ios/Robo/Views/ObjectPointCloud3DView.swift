@@ -33,13 +33,15 @@ struct ObjectPointCloud3DView: UIViewRepresentable {
         scene.rootNode.addChildNode(lightNode)
 
         let centroid = points.reduce(SIMD3<Float>.zero) { $0 + $1.position } / Float(points.count)
-        let root = SCNNode()
-        root.name = "objectPoints"
-        root.position = SCNVector3(-centroid.x, -centroid.y, -centroid.z)
-        for node in SCNGeometry.objectPointCloudNodes(points: points) {
-            root.addChildNode(node)
-        }
-        scene.rootNode.addChildNode(root)
+        let pointSize = CGFloat(ObjectScanSettings.previewPointSize)
+        let geometry = SCNGeometry.objectPointCloud(
+            points: points,
+            minScreenRadius: pointSize,
+            maxScreenRadius: pointSize
+        )
+        let node = SCNNode(geometry: geometry)
+        node.position = SCNVector3(-centroid.x, -centroid.y, -centroid.z)
+        scene.rootNode.addChildNode(node)
 
         return scnView.snapshot()
     }
@@ -85,13 +87,15 @@ struct ObjectPointCloud3DView: UIViewRepresentable {
         guard !points.isEmpty else { return }
 
         let centroid = points.reduce(SIMD3<Float>.zero) { $0 + $1.position } / Float(points.count)
-        let root = SCNNode()
-        root.name = "objectPoints"
-        root.position = SCNVector3(-centroid.x, -centroid.y, -centroid.z)
-        for node in SCNGeometry.objectPointCloudNodes(points: points) {
-            root.addChildNode(node)
-        }
-        scene.rootNode.addChildNode(root)
+        let pointSize = CGFloat(ObjectScanSettings.previewPointSize)
+        let geometry = SCNGeometry.objectPointCloud(
+            points: points,
+            minScreenRadius: pointSize,
+            maxScreenRadius: pointSize
+        )
+        let node = SCNNode(geometry: geometry)
+        node.position = SCNVector3(-centroid.x, -centroid.y, -centroid.z)
+        scene.rootNode.addChildNode(node)
     }
 
     private static func boundingDiagonal(_ points: [ObjectPoint]) -> Float {

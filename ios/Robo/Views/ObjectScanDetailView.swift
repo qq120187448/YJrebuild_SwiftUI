@@ -5,6 +5,8 @@ struct ObjectScanDetailView: View {
 
     @State private var metrics: ObjectScanMetrics?
     @State private var points: [ObjectPoint] = []
+    @State private var cropVolume: ObjectCropVolume?
+    @State private var axisMoveCommand: AxisMoveCommand = .none
     @State private var shareURLs: [URL] = []
     @State private var errorMessage: String?
 
@@ -22,10 +24,26 @@ struct ObjectScanDetailView: View {
                     )
                     .frame(height: 200)
                 } else {
-                    ObjectPointCloud3DView(points: previewPoints)
+                    ObjectCropBox3DView(
+                        points: previewPoints,
+                        targetPoints: previewPoints,
+                        previewMode: .all,
+                        cropVolume: $cropVolume,
+                        placeRequested: .constant(false),
+                        axisMoveCommand: $axisMoveCommand,
+                        onCropVolumeChanged: { cropVolume = $0 },
+                        onCropBoxEditEnded: { volume in
+                            recomputeMetrics(for: volume)
+                        },
+                        onCommandHandled: { axisMoveCommand = .none }
+                    )
                         .frame(height: 260)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+
+                    if cropVolume != nil {
+                        historyCropBoxPanel
+                    }
                 }
             }
 
@@ -83,6 +101,10 @@ struct ObjectScanDetailView: View {
                         metrics?.footprintAreaM2 ?? 0
                     )
                 )
+                DisclosureGroup("AABB / OBB 说明") {
+                    Text("AABB：沿世界坐标 X/Y/Z 方向的外包围盒。")
+                    Text("OBB：按物体自身方向拟合的最优外包围盒。")
+                }
             }
 
             Section("体素表面重建（Surface Nets）") {
@@ -132,6 +154,9 @@ struct ObjectScanDetailView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                DisclosureGroup("体素说明") {
+                    Text("用小立方体填充点云后计算体积和表面积。")
+                }
             }
 
             Section("堆体/土方（高度场，参考）") {
@@ -143,6 +168,9 @@ struct ObjectScanDetailView: View {
                     "高度场表面积（参考）",
                     value: String(format: "%.3f m²", record.heightfieldSurfaceAreaM2)
                 )
+                DisclosureGroup("高度场说明") {
+                    Text("从上方按网格高度估算体积和表面积。")
+                }
             }
 
             Section("设备（凸包）") {
@@ -154,15 +182,9 @@ struct ObjectScanDetailView: View {
                     "表面积",
                     value: String(format: "%.3f m²", record.convexHullSurfaceAreaM2)
                 )
-            }
-
-            Section("指标说明") {
-                Text("AABB：沿世界坐标 X/Y/Z 方向的外包围盒。")
-                Text("OBB：按物体自身方向拟合的最优外包围盒。")
-                Text("凸包：包裹所有点云的最小凸多面体。")
-                Text("体素：用小立方体填充点云后计算体积和表面积。")
-                Text("高度场：从上方按网格高度估算体积和表面积。")
-                Text("裁剪盒：勾选范围内的点才参与工程量计算。")
+                DisclosureGroup("凸包说明") {
+                    Text("包裹所有点云的最小凸多面体。")
+                }
             }
 
             Section {
@@ -186,6 +208,14 @@ struct ObjectScanDetailView: View {
                 from: record.metricsJSON
             )
             points = (try? JSONDecoder().decode([ObjectPoint].self, from: record.pointsJSON)) ?? []
+            if let data = record.cropVolumeData,
+               let snapshot = try? JSONDecoder().decode(
+                ObjectCropVolumeSnapshot.self,
+                from: data
+               ),
+               let volume = ObjectCropVolume(snapshot: snapshot) {
+                cropVolume = volume
+            }
         }
         .alert("导出失败", isPresented: .constant(errorMessage != nil)) {
             Button("好") { errorMessage = nil }
@@ -246,6 +276,45 @@ struct ObjectScanDetailView: View {
             shareURLs = [url]
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private var historyCropBoxPanel: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 5) {
+                Text("移动").font(.caption2.bold()).foregroundStyle(.secondary).frame(width: 28)
+                RepeatCommandButton(title: "X-", color: .red, command: .xMinus, current: $axisMoveCommand)
+                RepeatCommandButton(title: "X+", color: .red, command: .xPlus, current: $axisMoveCommand)
+                RepeatCommandButton(title: "Y-", color: .green, command: .yMinus, current: $axisMoveCommand)
+                RepeatCommandButton(title: "Y+", color: .green, command: .yPlus, current: $axisMoveCommand)
+                RepeatCommandButton(title: "Z-", color: .blue, command: .zMinus, current: $axisMoveCommand)
+                RepeatCommandButton(title: "Z+", color: .blue, command: .zPlus, current: $axisMoveCommand)
+            }
+            HStack(spacing: 5) {
+                Text("尺寸").font(.caption2.bold()).foregroundStyle(.secondary).frame(width: 28)
+                RepeatCommandButton(title: "X-", color: .red, command: .sizeXMinus, current: $axisMoveCommand)
+                RepeatCommandButton(title: "X+", color: .red, command: .sizeXPlus, current: $axisMoveCommand)
+                RepeatCommandButton(title: "Y-", color: .green, command: .sizeYMinus, current: $axisMoveCommand)
+                RepeatCommandButton(title: "Y+", color: .green, command: .sizeYPlus, current: $axisMoveCommand)
+                RepeatCommandButton(title: "Z-", color: .blue, command: .sizeZMinus, current: $axisMoveCommand)
+                RepeatCommandButton(title: "Z+", color: .blue, command: .sizeZPlus, current: $axisMoveCommand)
+            }
+            HStack(spacing: 5) {
+                Text("旋转").font(.caption2.bold()).foregroundStyle(.secondary).frame(width: 28)
+                RepeatCommandButton(title: "Z-1°", color: .blue, command: .rotateZMinus, current: $axisMoveCommand)
+                RepeatCommandButton(title: "Z+1°", color: .blue, command: .rotateZPlus, current: $axisMoveCommand)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private func recomputeMetrics(for volume: ObjectCropVolume) {
+        let filtered = points.filter { volume.contains(worldPoint: $0.position) }
+        Task.detached(priority: .userInitiated) {
+            let pair = ObjectScanProcessor.metricsAndUSDZ(for: filtered)
+            await MainActor.run {
+                metrics = pair.metrics
+            }
         }
     }
 

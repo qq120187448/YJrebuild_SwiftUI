@@ -16,41 +16,67 @@ struct CaptureHomeView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 20) {
-                    featureCard(
-                        title: "房间工程扫描",
-                        subtitle: "扫描房间，识别墙、门窗、家具，生成工程量清单",
-                        icon: "house",
-                        startTitle: "开始房间扫描",
-                        historyCount: rooms.count,
-                        startAction: {
-                            showingLiDARScan = true
-                        },
-                        historyAction: {
-                            historyFilter = .room
-                            selectedTab = 1
-                        }
-                    )
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.04, green: 0.06, blue: 0.11),
+                        Color(red: 0.08, green: 0.12, blue: 0.2)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
 
-                    featureCard(
-                        title: "物体工程扫描",
-                        subtitle: "扫描堆体、土方、设备，计算体积、表面积和外包围尺寸",
-                        icon: "cube.transparent",
-                        startTitle: "开始物体扫描",
-                        historyCount: objectScans.count,
-                        startAction: {
-                            showingObjectScan = true
-                        },
-                        historyAction: {
-                            historyFilter = .object
-                            selectedTab = 1
+                ScrollView {
+                    VStack(spacing: 22) {
+                        VStack(spacing: 6) {
+                            Image(systemName: "scope")
+                                .font(.system(size: 34))
+                                .foregroundStyle(.cyan)
+                            Text("Robo 工程扫描")
+                                .font(.largeTitle.bold())
+                                .foregroundStyle(.white)
+                            Text("LiDAR 扫描 · 3D 建模 · 工程量计算")
+                                .font(.subheadline)
+                                .foregroundStyle(.white.opacity(0.65))
                         }
-                    )
+                        .padding(.top, 24)
+
+                        featureCard(
+                            title: "房间工程扫描",
+                            subtitle: "扫描房间，识别墙、门窗、家具，生成工程量清单",
+                            icon: "house",
+                            startTitle: "开始房间扫描",
+                            historyCount: rooms.count,
+                            startAction: {
+                                showingLiDARScan = true
+                            },
+                            historyAction: {
+                                historyFilter = .room
+                                selectedTab = 1
+                            }
+                        )
+
+                        featureCard(
+                            title: "物体工程扫描",
+                            subtitle: "扫描堆体、土方、设备，计算体积、表面积和外包围尺寸",
+                            icon: "cube.transparent",
+                            startTitle: "开始物体扫描",
+                            historyCount: objectScans.count,
+                            startAction: {
+                                showingObjectScan = true
+                            },
+                            historyAction: {
+                                historyFilter = .object
+                                selectedTab = 1
+                            }
+                        )
+                    }
+                    .padding(16)
                 }
-                .padding(16)
             }
-            .navigationTitle(AppStrings.Tabs.capture)
+            .navigationBarHidden(true)
+            .preferredColorScheme(.dark)
         }
         .fullScreenCover(isPresented: $showingLiDARScan) {
             LiDARScanView()
@@ -73,17 +99,24 @@ struct CaptureHomeView: View {
             HStack(spacing: 12) {
                 Image(systemName: icon)
                     .font(.system(size: 30))
-                    .foregroundColor(.accentColor)
+                    .foregroundColor(.white)
                     .frame(width: 52, height: 52)
-                    .background(Color.accentColor.opacity(0.12))
+                    .background(
+                        LinearGradient(
+                            colors: [Color.cyan.opacity(0.8), Color.blue.opacity(0.7)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
                     .clipShape(RoundedRectangle(cornerRadius: 10))
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title)
                         .font(.title3.bold())
+                        .foregroundStyle(.white)
                     Text(subtitle)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.white.opacity(0.6))
                 }
             }
 
@@ -92,7 +125,13 @@ struct CaptureHomeView: View {
                     .font(.headline)
                     .frame(maxWidth: .infinity)
                     .padding()
-                    .background(Color.accentColor)
+                    .background(
+                        LinearGradient(
+                            colors: [Color.cyan, Color.blue],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
                     .foregroundStyle(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
             }
@@ -105,13 +144,17 @@ struct CaptureHomeView: View {
                 .font(.subheadline)
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(.secondary.opacity(0.12))
-                .foregroundColor(.primary)
+                .background(Color.white.opacity(0.08))
+                .foregroundColor(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             }
         }
         .padding(18)
-        .background(Color(.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .background(Color(red: 0.08, green: 0.11, blue: 0.18))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(Color.cyan.opacity(0.25), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 }

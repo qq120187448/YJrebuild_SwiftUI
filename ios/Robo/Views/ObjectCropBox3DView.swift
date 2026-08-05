@@ -97,7 +97,31 @@ struct ObjectCropBox3DView: UIViewRepresentable {
         case .zPlus:
             context.coordinator.moveBox(axis: SIMD3<Float>(0, 1, 0))
             onCommandHandled()
-        default:
+        case .sizeXMinus:
+            context.coordinator.resizeBox(index: 0, delta: -0.05)
+            onCommandHandled()
+        case .sizeXPlus:
+            context.coordinator.resizeBox(index: 0, delta: 0.05)
+            onCommandHandled()
+        case .sizeYMinus:
+            context.coordinator.resizeBox(index: 2, delta: -0.05)
+            onCommandHandled()
+        case .sizeYPlus:
+            context.coordinator.resizeBox(index: 2, delta: 0.05)
+            onCommandHandled()
+        case .sizeZMinus:
+            context.coordinator.resizeBox(index: 1, delta: -0.05)
+            onCommandHandled()
+        case .sizeZPlus:
+            context.coordinator.resizeBox(index: 1, delta: 0.05)
+            onCommandHandled()
+        case .rotateZMinus:
+            context.coordinator.rotateBox(axis: SIMD3<Float>(0, 1, 0), degrees: -1)
+            onCommandHandled()
+        case .rotateZPlus:
+            context.coordinator.rotateBox(axis: SIMD3<Float>(0, 1, 0), degrees: 1)
+            onCommandHandled()
+        case .none:
             break
         }
         context.coordinator.rebuild(scnView)
@@ -134,7 +158,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                 lastPointCount = parent.points.count
                 lastPreviewSignature = previewSignature
                 scene.rootNode.childNodes
-                    .filter { $0.name == "objectPoints" || $0.name == "objectPointBucket" }
+                    .filter { $0.name == "objectPoints" }
                     .forEach { $0.removeFromParentNode() }
                 if !parent.points.isEmpty {
                     let targetSet = Set(parent.targetPoints)
@@ -156,12 +180,15 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                         displayPoints = parent.points.filter { targetSet.contains($0) }
                         colorTransform = nil
                     }
-                    for node in SCNGeometry.objectPointCloudNodes(
+                    let geometry = SCNGeometry.objectPointCloud(
                         points: displayPoints,
+                        minScreenRadius: CGFloat(ObjectScanSettings.previewPointSize),
+                        maxScreenRadius: CGFloat(ObjectScanSettings.previewPointSize),
                         colorTransform: colorTransform
-                    ) {
-                        scene.rootNode.addChildNode(node)
-                    }
+                    )
+                    let node = SCNNode(geometry: geometry)
+                    node.name = "objectPoints"
+                    scene.rootNode.addChildNode(node)
                 }
                 buildOccupancy()
                 positionCamera(scnView)
@@ -188,7 +215,10 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                 cameraPosition: cameraPosition,
                 isOccupied: { [weak self] world in
                     self?.isOccupied(world) ?? false
-                }
+                },
+                pixelLineWidth: CGFloat(ObjectScanSettings.boxLineWidth),
+                viewportHeight: scnView.bounds.height,
+                fovYDegrees: CGFloat(scnView.pointOfView?.camera?.fieldOfView ?? 60)
             )
             ObjectBoxVisual.addAxes(to: root, extent: volume.extent)
             scene.rootNode.addChildNode(root)
@@ -424,6 +454,46 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                 origin: newOrigin,
                 extent: volume.extent,
                 transform: transform
+            )
+            parent.onCropVolumeChanged(updated)
+            parent.onCropBoxEditEnded(updated)
+        }
+
+        func resizeBox(index: Int, delta: Float) {
+            guard let volume = parent.cropVolume else { return }
+            var extent = volume.extent
+            if index == 0 {
+                extent.x = min(max(extent.x + delta, 0.2), 10)
+            } else if index == 1 {
+                extent.y = min(max(extent.y + delta, 0.2), 10)
+            } else {
+                extent.z = min(max(extent.z + delta, 0.2), 10)
+            }
+            let updated = ObjectCropVolume(
+                origin: volume.origin,
+                extent: extent,
+                transform: volume.transform
+            )
+            parent.onCropVolumeChanged(updated)
+            parent.onCropBoxEditEnded(updated)
+        }
+
+        func rotateBox(axis: SIMD3<Float>, degrees: Float) {
+            guard let volume = parent.cropVolume else { return }
+            let length = simd_length(axis)
+            guard length > 1e-6 else { return }
+            let normalized = axis / length
+            let quat = simd_quatf(angle: degrees * Float.pi / 180, axis: normalized)
+            let rotation = simd_float4x4(quat)
+            let origin = volume.origin
+            var toOrigin = matrix_identity_float4x4
+            toOrigin.columns.3 = SIMD4<Float>(-origin.x, -origin.y, -origin.z, 1)
+            var back = matrix_identity_float4x4
+            back.columns.3 = SIMD4<Float>(origin.x, origin.y, origin.z, 1)
+            let updated = ObjectCropVolume(
+                origin: origin,
+                extent: volume.extent,
+                transform: back * rotation * toOrigin * volume.transform
             )
             parent.onCropVolumeChanged(updated)
             parent.onCropBoxEditEnded(updated)
