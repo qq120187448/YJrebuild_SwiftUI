@@ -32,11 +32,14 @@ struct ObjectPointCloud3DView: UIViewRepresentable {
         lightNode.light?.color = UIColor(white: 0.75, alpha: 1)
         scene.rootNode.addChildNode(lightNode)
 
-        let geometry = SCNGeometry.objectPointCloud(points: points)
-        let node = SCNNode(geometry: geometry)
         let centroid = points.reduce(SIMD3<Float>.zero) { $0 + $1.position } / Float(points.count)
-        node.position = SCNVector3(-centroid.x, -centroid.y, -centroid.z)
-        scene.rootNode.addChildNode(node)
+        let root = SCNNode()
+        root.name = "objectPoints"
+        root.position = SCNVector3(-centroid.x, -centroid.y, -centroid.z)
+        for node in SCNGeometry.objectPointCloudNodes(points: points) {
+            root.addChildNode(node)
+        }
+        scene.rootNode.addChildNode(root)
 
         return scnView.snapshot()
     }
@@ -81,12 +84,14 @@ struct ObjectPointCloud3DView: UIViewRepresentable {
             .forEach { $0.removeFromParentNode() }
         guard !points.isEmpty else { return }
 
-        let geometry = SCNGeometry.objectPointCloud(points: points)
-        let node = SCNNode(geometry: geometry)
-        node.name = "objectPoints"
         let centroid = points.reduce(SIMD3<Float>.zero) { $0 + $1.position } / Float(points.count)
-        node.position = SCNVector3(-centroid.x, -centroid.y, -centroid.z)
-        scene.rootNode.addChildNode(node)
+        let root = SCNNode()
+        root.name = "objectPoints"
+        root.position = SCNVector3(-centroid.x, -centroid.y, -centroid.z)
+        for node in SCNGeometry.objectPointCloudNodes(points: points) {
+            root.addChildNode(node)
+        }
+        scene.rootNode.addChildNode(root)
     }
 
     private static func boundingDiagonal(_ points: [ObjectPoint]) -> Float {
@@ -113,6 +118,66 @@ struct ObjectPointCloud3DView: UIViewRepresentable {
 }
 
 extension SCNGeometry {
+    static func objectPointCloudNodes(
+        points: [ObjectPoint],
+        worldPointSize: Float = 0.02,
+        minScreenRadius: CGFloat = 1,
+        maxScreenRadius: CGFloat = 1,
+        colorTransform: ((ObjectPoint) -> SIMD4<Float>)? = nil,
+        levelsPerChannel: Int = 5
+    ) -> [SCNNode] {
+        guard !points.isEmpty else { return [] }
+        let levelCount = max(2, min(levelsPerChannel, 8))
+        let bucketCount = levelCount * levelCount * levelCount
+        var buckets = [[ObjectPoint]](repeating: [], count: bucketCount)
+        var bucketColors = [SIMD4<Float>](repeating: SIMD4(1, 1, 1, 1), count: bucketCount)
+
+        func levelIndex(_ value: Float) -> Int {
+            min(max(Int(value * Float(levelCount)), 0), levelCount - 1)
+        }
+
+        for point in points {
+            let color = colorTransform?(point) ?? SIMD4(point.r, point.g, point.b, 1)
+            let ri = levelIndex(color.x)
+            let gi = levelIndex(color.y)
+            let bi = levelIndex(color.z)
+            let index = (ri * levelCount + gi) * levelCount + bi
+            buckets[index].append(point)
+            bucketColors[index] = SIMD4(
+                (Float(ri) + 0.5) / Float(levelCount),
+                (Float(gi) + 0.5) / Float(levelCount),
+                (Float(bi) + 0.5) / Float(levelCount),
+                color.w
+            )
+        }
+
+        var nodes: [SCNNode] = []
+        for index in 0..<bucketCount where !buckets[index].isEmpty {
+            let bucketColor = bucketColors[index]
+            let material = SCNMaterial()
+            material.lightingModel = .constant
+            material.diffuse.contents = UIColor(
+                red: CGFloat(bucketColor.x),
+                green: CGFloat(bucketColor.y),
+                blue: CGFloat(bucketColor.z),
+                alpha: CGFloat(bucketColor.w)
+            )
+            material.emission.contents = UIColor.black
+            material.blendMode = .alpha
+            let geometry = objectPointCloud(
+                points: buckets[index],
+                worldPointSize: worldPointSize,
+                minScreenRadius: minScreenRadius,
+                maxScreenRadius: maxScreenRadius,
+                material: material
+            )
+            let node = SCNNode(geometry: geometry)
+            node.name = "objectPointBucket"
+            nodes.append(node)
+        }
+        return nodes
+    }
+
     static func objectPointCloud(
         points: [ObjectPoint],
         worldPointSize: Float = 0.02,

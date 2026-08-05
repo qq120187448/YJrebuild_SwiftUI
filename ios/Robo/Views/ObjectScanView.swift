@@ -1174,7 +1174,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                 min(max(startExtent.z * scale, 0.2), 10)
             )
             cropVolume = ObjectCropVolume(
-                center: volume.center,
+                origin: volume.origin,
                 extent: newExtent,
                 transform: volume.transform
             )
@@ -1699,8 +1699,11 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         let geometry = SCNGeometry(sources: [source], elements: [element])
         let material = SCNMaterial()
         material.lightingModel = .constant
-        material.diffuse.contents = UIColor.clear
-        material.colorBufferWriteMask = []
+        material.diffuse.contents = UIColor(red: 1, green: 0.25, blue: 0.25, alpha: 0.35)
+        material.emission.contents = UIColor(red: 1, green: 0.25, blue: 0.25, alpha: 0.35)
+        material.transparency = 0.35
+        material.blendMode = .alpha
+        material.colorBufferWriteMask = [.red, .green, .blue, .alpha]
         material.writesToDepthBuffer = true
         material.isDoubleSided = true
         geometry.materials = [material]
@@ -1788,25 +1791,36 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
 
     private func sampleCameraColor(frame: ARFrame, world: SIMD3<Float>) -> SIMD3<Float>? {
         let image = frame.capturedImage
-        let sensorWidth = CVPixelBufferGetWidth(image)
-        let sensorHeight = CVPixelBufferGetHeight(image)
-        let portraitWidth = CGFloat(sensorHeight)
-        let portraitHeight = CGFloat(sensorWidth)
-        guard portraitWidth > 0, portraitHeight > 0 else { return nil }
+        let viewportSize = sceneView.bounds.size
+        guard viewportSize.width > 0, viewportSize.height > 0 else { return nil }
         let projected = frame.camera.projectPoint(
             world,
             orientation: .portrait,
-            viewportSize: CGSize(width: portraitWidth, height: portraitHeight)
+            viewportSize: viewportSize
         )
-        guard projected.x.isFinite, projected.y.isFinite,
-              projected.x >= 0, projected.y >= 0,
-              projected.x <= portraitWidth, projected.y <= portraitHeight else {
+        guard projected.x.isFinite, projected.y.isFinite else {
             return nil
         }
-        let sensorX = Int(projected.y.rounded())
-        let sensorY = sensorHeight - 1 - Int(projected.x.rounded())
-        let pixelX = min(max(sensorX, 0), sensorWidth - 1)
-        let pixelY = min(max(sensorY, 0), sensorHeight - 1)
+        let normalized = CGPoint(
+            x: projected.x / viewportSize.width,
+            y: projected.y / viewportSize.height
+        ).applying(
+            frame.displayTransform(for: .portrait, viewportSize: viewportSize).inverted()
+        )
+        guard normalized.x >= -0.02, normalized.x <= 1.02,
+              normalized.y >= -0.02, normalized.y <= 1.02 else {
+            return nil
+        }
+        let imageWidth = CVPixelBufferGetWidth(image)
+        let imageHeight = CVPixelBufferGetHeight(image)
+        let pixelX = min(
+            max(Int((normalized.x * CGFloat(imageWidth)).rounded()), 0),
+            imageWidth - 1
+        )
+        let pixelY = min(
+            max(Int((normalized.y * CGFloat(imageHeight)).rounded()), 0),
+            imageHeight - 1
+        )
 
         CVPixelBufferLockBaseAddress(image, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(image, .readOnly) }
@@ -1936,30 +1950,37 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         guard let depthMap = frame.smoothedSceneDepth?.depthMap ?? frame.sceneDepth?.depthMap else {
             return true
         }
-        let buffer = frame.capturedImage
-        let portraitWidth = CGFloat(CVPixelBufferGetHeight(buffer))
-        let portraitHeight = CGFloat(CVPixelBufferGetWidth(buffer))
-        guard portraitWidth > 0, portraitHeight > 0 else { return true }
+        let viewportSize = sceneView.bounds.size
+        guard viewportSize.width > 0, viewportSize.height > 0 else { return true }
         let projected = frame.camera.projectPoint(
             world,
             orientation: .portrait,
-            viewportSize: CGSize(width: portraitWidth, height: portraitHeight)
+            viewportSize: viewportSize
         )
-        guard projected.x.isFinite, projected.y.isFinite,
-              projected.x >= 0, projected.y >= 0,
-              projected.x <= portraitWidth, projected.y <= portraitHeight else {
+        guard projected.x.isFinite, projected.y.isFinite else {
+            return true
+        }
+        let normalized = CGPoint(
+            x: projected.x / viewportSize.width,
+            y: projected.y / viewportSize.height
+        ).applying(
+            frame.displayTransform(for: .portrait, viewportSize: viewportSize).inverted()
+        )
+        guard normalized.x >= -0.02, normalized.x <= 1.02,
+              normalized.y >= -0.02, normalized.y <= 1.02 else {
             return true
         }
         let depthWidth = CVPixelBufferGetWidth(depthMap)
         let depthHeight = CVPixelBufferGetHeight(depthMap)
         guard depthWidth > 0, depthHeight > 0 else { return true }
-        let normalizedX = projected.y / portraitHeight
-        let normalizedY = 1 - projected.x / portraitWidth
-        let depthX = Int(normalizedX * CGFloat(depthWidth))
-        let depthY = Int(normalizedY * CGFloat(depthHeight))
-        guard depthX >= 0, depthY >= 0, depthX < depthWidth, depthY < depthHeight else {
-            return true
-        }
+        let depthX = min(
+            max(Int((normalized.x * CGFloat(depthWidth)).rounded()), 0),
+            depthWidth - 1
+        )
+        let depthY = min(
+            max(Int((normalized.y * CGFloat(depthHeight)).rounded()), 0),
+            depthHeight - 1
+        )
 
         CVPixelBufferLockBaseAddress(depthMap, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }

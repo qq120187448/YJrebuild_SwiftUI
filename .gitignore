@@ -1,4 +1,5 @@
 .DS_Store
 *.ipa
+build/
 ios/RoboScan.xcodeproj/
 ios/Robo.xcodeproj/

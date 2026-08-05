@@ -134,7 +134,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                 lastPointCount = parent.points.count
                 lastPreviewSignature = previewSignature
                 scene.rootNode.childNodes
-                    .filter { $0.name == "objectPoints" }
+                    .filter { $0.name == "objectPoints" || $0.name == "objectPointBucket" }
                     .forEach { $0.removeFromParentNode() }
                 if !parent.points.isEmpty {
                     let targetSet = Set(parent.targetPoints)
@@ -156,13 +156,12 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                         displayPoints = parent.points.filter { targetSet.contains($0) }
                         colorTransform = nil
                     }
-                    let geometry = SCNGeometry.objectPointCloud(
+                    for node in SCNGeometry.objectPointCloudNodes(
                         points: displayPoints,
                         colorTransform: colorTransform
-                    )
-                    let node = SCNNode(geometry: geometry)
-                    node.name = "objectPoints"
-                    scene.rootNode.addChildNode(node)
+                    ) {
+                        scene.rootNode.addChildNode(node)
+                    }
                 }
                 buildOccupancy()
                 positionCamera(scnView)
@@ -370,7 +369,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                 )
                 parent.onCropVolumeChanged(
                     ObjectCropVolume(
-                        center: volume.center,
+                        origin: volume.origin,
                         extent: newExtent,
                         transform: transform
                     )
