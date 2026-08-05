@@ -70,8 +70,8 @@ enum ObjectBoxVisual {
         fovYDegrees: CGFloat
     ) {
         _ = pixelLineWidth
-        let solidMaterial = makeMaterial(color: UIColor.black)
-        let dashedMaterial = makeMaterial(color: UIColor.black.withAlphaComponent(0.65))
+        let solidMaterial = makeMaterial(color: UIColor.white)
+        let dashedMaterial = makeMaterial(color: UIColor.white.withAlphaComponent(0.65))
 
         for edge in edges(extent: extent) {
             let dashed = edgeOccluded(

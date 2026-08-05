@@ -125,4 +125,26 @@ struct ObjectCropVolume {
             && local.z >= -0.01
             && local.z <= extent.z + 0.01
     }
+
+    func alignedExtents(points: [ObjectPoint]) -> SIMD3<Float> {
+        guard !points.isEmpty else { return .zero }
+        var minLocal = SIMD3<Float>(repeating: Float.greatestFiniteMagnitude)
+        var maxLocal = SIMD3<Float>(repeating: -Float.greatestFiniteMagnitude)
+        for point in points {
+            let local4 = inverseTransform * SIMD4<Float>(
+                point.x,
+                point.y,
+                point.z,
+                1
+            )
+            let local = SIMD3<Float>(local4.x, local4.y, local4.z)
+            minLocal = simd_min(minLocal, local)
+            maxLocal = simd_max(maxLocal, local)
+        }
+        return SIMD3<Float>(
+            min(max(maxLocal.x - minLocal.x, 0), extent.x),
+            min(max(maxLocal.y - minLocal.y, 0), extent.y),
+            min(max(maxLocal.z - minLocal.z, 0), extent.z)
+        )
+    }
 }

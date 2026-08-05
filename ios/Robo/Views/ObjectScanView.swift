@@ -764,10 +764,18 @@ struct ObjectScanView: View {
             volume.contains(worldPoint: $0.position)
         }
         let groundY = filtered.map { $0.y }.min() ?? volume.origin.y
-        boxMetrics = ObjectScanProcessor.lightweightMetrics(
+        var lightweight = ObjectScanProcessor.lightweightMetrics(
             for: filtered,
             groundY: groundY
         )
+        let aligned = volume.alignedExtents(points: filtered)
+        let alignedX = aligned.x
+        let alignedY = aligned.y
+        let alignedZ = aligned.z
+        lightweight.obbLengthM = Double(aligned.x)
+        lightweight.obbWidthM = Double(alignedZ)
+        lightweight.obbHeightM = Double(alignedY)
+        boxMetrics = lightweight
         metricsTask?.cancel()
         let useRealtime = realtimeVoxel
         let task = Task.detached(priority: .userInitiated) {
@@ -777,7 +785,11 @@ struct ObjectScanView: View {
             if Task.isCancelled { return }
             let pair = ObjectScanProcessor.metricsAndUSDZ(for: filtered)
             await MainActor.run {
-                self.boxMetrics = pair.metrics
+                var metrics = pair.metrics
+                metrics.obbLengthM = Double(alignedX)
+                metrics.obbWidthM = Double(alignedZ)
+                metrics.obbHeightM = Double(alignedY)
+                self.boxMetrics = metrics
                 self.boxUSDZData = pair.voxelUSDZData
                 self.isComputingBoxMetrics = false
             }

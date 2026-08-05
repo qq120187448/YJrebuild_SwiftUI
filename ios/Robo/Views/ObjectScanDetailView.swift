@@ -230,6 +230,7 @@ struct ObjectScanDetailView: View {
                ),
                let volume = ObjectCropVolume(snapshot: snapshot) {
                 cropVolume = volume
+                recomputeMetrics(for: volume)
             }
         }
         .alert("导出失败", isPresented: .constant(errorMessage != nil)) {
@@ -326,10 +327,18 @@ struct ObjectScanDetailView: View {
     private func recomputeMetrics(for volume: ObjectCropVolume) {
         let filtered = points.filter { volume.contains(worldPoint: $0.position) }
         let groundY = filtered.map { $0.y }.min() ?? volume.origin.y
-        metrics = ObjectScanProcessor.lightweightMetrics(
+        var lightweight = ObjectScanProcessor.lightweightMetrics(
             for: filtered,
             groundY: groundY
         )
+        let aligned = volume.alignedExtents(points: filtered)
+        let alignedX = aligned.x
+        let alignedY = aligned.y
+        let alignedZ = aligned.z
+        lightweight.obbLengthM = Double(alignedX)
+        lightweight.obbWidthM = Double(alignedZ)
+        lightweight.obbHeightM = Double(alignedY)
+        metrics = lightweight
         metricsTask?.cancel()
         let useRealtime = realtimeVoxel
         let task = Task.detached(priority: .userInitiated) {
@@ -339,7 +348,11 @@ struct ObjectScanDetailView: View {
             if Task.isCancelled { return }
             let pair = ObjectScanProcessor.metricsAndUSDZ(for: filtered)
             await MainActor.run {
-                self.metrics = pair.metrics
+                var metrics = pair.metrics
+                metrics.obbLengthM = Double(alignedX)
+                metrics.obbWidthM = Double(alignedZ)
+                metrics.obbHeightM = Double(alignedY)
+                self.metrics = metrics
             }
         }
         metricsTask = task
