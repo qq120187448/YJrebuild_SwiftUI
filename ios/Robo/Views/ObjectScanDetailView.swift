@@ -9,6 +9,8 @@ struct ObjectScanDetailView: View {
     @State private var axisMoveCommand: AxisMoveCommand = .none
     @State private var shareURLs: [URL] = []
     @State private var errorMessage: String?
+    @AppStorage("objectScanPreviewPointSize") private var previewPointSizeSetting: Double = 4
+    @AppStorage("objectScanBoxLineWidth") private var boxLineWidthSetting: Double = 4
 
     var body: some View {
         let voxelOK = metrics?.voxelReconstructionSucceeded
@@ -40,9 +42,20 @@ struct ObjectScanDetailView: View {
                         .frame(height: 260)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                        .id("\(previewPointSizeSetting)-\(boxLineWidthSetting)")
 
                     if cropVolume != nil {
                         historyCropBoxPanel
+                        if let volume = cropVolume {
+                            let groundY = points.map { $0.y }.min() ?? volume.origin.y
+                            LabeledContent(
+                                "离地高度",
+                                value: String(
+                                    format: "%.2f m",
+                                    max(0, volume.origin.y - groundY)
+                                )
+                            )
+                        }
                     }
                 }
             }

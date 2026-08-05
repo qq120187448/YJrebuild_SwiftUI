@@ -151,6 +151,38 @@ enum ObjectBoxVisual {
         }
     }
 
+    static func makeGroundShadowNode(
+        extent: SIMD3<Float>,
+        transform: simd_float4x4,
+        groundY: Float
+    ) -> SCNNode {
+        let plane = SCNPlane(width: CGFloat(extent.x), height: CGFloat(extent.z))
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = UIColor(white: 0, alpha: 0.35)
+        material.emission.contents = UIColor(white: 0, alpha: 0.35)
+        material.blendMode = .alpha
+        material.isDoubleSided = true
+        material.writesToDepthBuffer = false
+        plane.firstMaterial = material
+
+        let node = SCNNode(geometry: plane)
+        node.name = "cropBoxShadow"
+        let xAxis = SIMD3<Float>(
+            transform.columns.0.x,
+            transform.columns.0.y,
+            transform.columns.0.z
+        )
+        let yaw = atan2(xAxis.z, xAxis.x)
+        node.simdOrientation = simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0))
+        node.position = SCNVector3(
+            transform.columns.3.x,
+            groundY + 0.001,
+            transform.columns.3.z
+        )
+        return node
+    }
+
     static func addFlow(to root: SCNNode, extent: SIMD3<Float>) {
         let bright = makeMaterial(color: UIColor(red: 0.35, green: 0.85, blue: 1.0, alpha: 1))
         for edge in edges(extent: extent) {

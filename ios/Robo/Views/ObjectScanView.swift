@@ -119,6 +119,10 @@ struct ObjectScanView: View {
     @State private var scanCropBoxSize: Float = 1.0
     @State private var scanClearCropBox = false
     @State private var torchOn = false
+    @State private var scanCropVolume: ObjectCropVolume?
+    @State private var scanGroundDistance: Float = 0
+    @AppStorage("objectScanPreviewPointSize") private var previewPointSizeSetting: Double = 4
+    @AppStorage("objectScanBoxLineWidth") private var boxLineWidthSetting: Double = 4
 
     var body: some View {
         NavigationStack {
@@ -272,6 +276,10 @@ struct ObjectScanView: View {
                         boxUSDZData = nil
                     }
                 },
+                onCropVolumeChanged: { volume, distance in
+                    scanCropVolume = volume
+                    scanGroundDistance = distance
+                },
                 onCropBoxPlaced: {
                     scanCropBoxPlaced = true
                     scanPlaceRequested = false
@@ -356,6 +364,15 @@ struct ObjectScanView: View {
                     if scanCropBoxPlaced {
                         VStack(spacing: 6) {
                             cropBoxControlPanel(command: $scanAxisMoveCommand)
+                            HStack {
+                                Text("离地高度")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.white)
+                                Spacer()
+                                Text(String(format: "%.2f m", scanGroundDistance))
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.white)
+                            }
                             Slider(value: $scanCropBoxSize, in: 0.2...10, step: 0.1)
                             HStack {
                                 Text("\(scanCropBoxSize, specifier: "%.1f") m")
@@ -497,10 +514,21 @@ struct ObjectScanView: View {
                 .frame(height: 320)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                .id("\(previewPointSizeSetting)-\(boxLineWidthSetting)")
 
                 if cropVolume != nil {
                     cropBoxControlPanel(command: $axisMoveCommand)
                         .padding(.vertical, 4)
+                    if let volume = cropVolume {
+                        let groundY = result.allPoints.map { $0.y }.min() ?? volume.origin.y
+                        LabeledContent(
+                            "离地高度",
+                            value: String(
+                                format: "%.2f m",
+                                max(0, volume.origin.y - groundY)
+                            )
+                        )
+                    }
                 }
             }
 
@@ -865,6 +893,7 @@ private struct ObjectScanARView: UIViewControllerRepresentable {
     let onPointCount: (Int) -> Void
     let onPointsCaptured: ([ObjectPoint], [ScanPlaneInfo]) -> Void
     let onCropVolumeCaptured: (ObjectCropVolume?) -> Void
+    let onCropVolumeChanged: (ObjectCropVolume?, Float) -> Void
     let onCropBoxPlaced: () -> Void
     let onCropBoxCleared: () -> Void
     let onCommandHandled: () -> Void
@@ -874,6 +903,7 @@ private struct ObjectScanARView: UIViewControllerRepresentable {
         controller.onPointCount = onPointCount
         controller.onPointsCaptured = onPointsCaptured
         controller.onCropVolumeCaptured = onCropVolumeCaptured
+        controller.onCropVolumeChanged = onCropVolumeChanged
         controller.pointSize = pointSize
         controller.cropBoxSize = cropBoxSize
         controller.onCropBoxPlaced = onCropBoxPlaced
@@ -885,6 +915,7 @@ private struct ObjectScanARView: UIViewControllerRepresentable {
         uiViewController.onPointCount = onPointCount
         uiViewController.onPointsCaptured = onPointsCaptured
         uiViewController.onCropVolumeCaptured = onCropVolumeCaptured
+        uiViewController.onCropVolumeChanged = onCropVolumeChanged
         uiViewController.pointSize = pointSize
         uiViewController.setCropBoxSize(cropBoxSize)
         uiViewController.onCropBoxPlaced = onCropBoxPlaced
@@ -956,6 +987,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     var onPointCount: ((Int) -> Void)?
     var onPointsCaptured: (([ObjectPoint], [ScanPlaneInfo]) -> Void)?
     var onCropVolumeCaptured: ((ObjectCropVolume?) -> Void)?
+    var onCropVolumeChanged: ((ObjectCropVolume?, Float) -> Void)?
     var onCropBoxPlaced: (() -> Void)?
     var onCropBoxCleared: (() -> Void)?
     var pointSize: Double = 1.5
@@ -969,6 +1001,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     private let maxVoxels = 200_000
     private var voxelMap: [Int64: VoxelAccumulator] = [:]
     private var lastPlaneInfos: [ScanPlaneInfo] = []
+    private var scanGroundY: Float?
     private var cropVolume: ObjectCropVolume?
     private var placeOnNextTap = false
     private var cropBoxNode: SCNNode?
@@ -1295,6 +1328,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     }
 
     private func placeCropBox(origin: SIMD3<Float>) {
+        scanGroundY = origin.y
         let extent = SIMD3<Float>(repeating: cropBoxSize)
         var transform = matrix_identity_float4x4
         transform.columns.3 = SIMD4<Float>(origin.x, origin.y, origin.z, 1)
@@ -1342,6 +1376,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         var transform = volume.transform
         if let floorY {
             transform.columns.3.y = floorY
+            scanGroundY = floorY
         }
 
         let newOrigin = SIMD3<Float>(
@@ -1359,7 +1394,9 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
 
     func moveCropBox(axis: SIMD3<Float>) {
         guard let volume = cropVolume else { return }
-        let newOrigin = volume.origin + axis * 0.05
+        let rotation = simd_float3x3(volume.transform)
+        let worldDelta = rotation * (axis * 0.05)
+        let newOrigin = volume.origin + worldDelta
         var transform = volume.transform
         transform.columns.3 = SIMD4<Float>(
             newOrigin.x,
@@ -1436,15 +1473,19 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         voxelMap.removeAll()
         frameCount = 0
         sceneView.scene.rootNode.childNodes
-            .filter { $0.name == "scanPoints" }
+            .filter { $0.name == "scanPoints" || $0.name == "cropBoxShadow" }
             .forEach { $0.removeFromParentNode() }
         onCropBoxCleared?()
+        onCropVolumeChanged?(nil, 0)
     }
 
     private func updateCropBoxNode() {
         cropBoxNode?.removeFromParentNode()
         cropBoxNode = nil
         guard let volume = cropVolume else { return }
+        sceneView.scene.rootNode.childNodes
+            .filter { $0.name == "cropBoxShadow" }
+            .forEach { $0.removeFromParentNode() }
 
         let root = SCNNode()
         root.name = "cropBox"
@@ -1465,6 +1506,16 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         ObjectBoxVisual.addAxes(to: root, extent: volume.extent)
         sceneView.scene.rootNode.addChildNode(root)
         cropBoxNode = root
+        let groundY = scanGroundY ?? volume.origin.y
+        sceneView.scene.rootNode.addChildNode(
+            ObjectBoxVisual.makeGroundShadowNode(
+                extent: volume.extent,
+                transform: volume.transform,
+                groundY: groundY
+            )
+        )
+        let distance = max(0, volume.origin.y - (scanGroundY ?? volume.origin.y))
+        onCropVolumeChanged?(volume, distance)
     }
 
     private var cameraPositionOfScene: SIMD3<Float> {
@@ -1697,6 +1748,11 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         if voxelMap.count >= maxVoxels {
             compactVoxelMap()
         }
+        if let minY = voxelMap.values
+            .map({ $0.sum.y / max($0.count, 1) })
+            .min() {
+            scanGroundY = minY
+        }
         let snapshot = snapshotPoints()
         DispatchQueue.main.async {
             self.updatePointCloud(snapshot, frame: frame)
@@ -1796,8 +1852,8 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         guard let geometry = makeOcclusionGeometry(anchor) else { return nil }
         let material = SCNMaterial()
         material.lightingModel = .constant
-        material.diffuse.contents = UIColor(red: 1, green: 0.25, blue: 0.25, alpha: 0.35)
-        material.emission.contents = UIColor(red: 1, green: 0.25, blue: 0.25, alpha: 0.35)
+        material.diffuse.contents = UIColor(white: 1, alpha: 0.35)
+        material.emission.contents = UIColor(white: 1, alpha: 0.35)
         material.transparency = 0.35
         material.blendMode = .alpha
         material.writesToDepthBuffer = false

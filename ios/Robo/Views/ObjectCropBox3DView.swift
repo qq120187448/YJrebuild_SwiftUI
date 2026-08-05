@@ -200,7 +200,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
             movePan?.isEnabled = false
 
             scene.rootNode.childNodes
-                .filter { $0.name == "cropBox" }
+                .filter { $0.name == "cropBox" || $0.name == "cropBoxShadow" }
                 .forEach { $0.removeFromParentNode() }
             guard let volume = parent.cropVolume else { return }
 
@@ -222,6 +222,14 @@ struct ObjectCropBox3DView: UIViewRepresentable {
             )
             ObjectBoxVisual.addAxes(to: root, extent: volume.extent)
             scene.rootNode.addChildNode(root)
+            let groundY = parent.points.map { $0.y }.min() ?? volume.origin.y
+            scene.rootNode.addChildNode(
+                ObjectBoxVisual.makeGroundShadowNode(
+                    extent: volume.extent,
+                    transform: volume.transform,
+                    groundY: groundY
+                )
+            )
         }
 
         @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
@@ -442,7 +450,8 @@ struct ObjectCropBox3DView: UIViewRepresentable {
         func moveBox(axis: SIMD3<Float>) {
             guard let volume = parent.cropVolume else { return }
             let delta: Float = 0.05
-            let newOrigin = volume.origin + axis * delta
+            let rotation = simd_float3x3(volume.transform)
+            let newOrigin = volume.origin + rotation * (axis * delta)
             var transform = volume.transform
             transform.columns.3 = SIMD4<Float>(
                 newOrigin.x,
