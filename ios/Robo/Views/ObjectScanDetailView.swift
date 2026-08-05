@@ -120,6 +120,9 @@ struct ObjectScanDetailView: View {
                             value: String(format: "%.0f%%", coverage * 100)
                         )
                     }
+                    if let note = metrics?.voxelNote {
+                        LabeledContent("体素说明", value: note)
+                    }
                 } else {
                     LabeledContent(
                         "体素重建状态",

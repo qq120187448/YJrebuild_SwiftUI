@@ -92,6 +92,9 @@ enum ObjectScanExporter {
             if let coverage = input.metrics.voxelCoverageEstimate {
                 add("点云覆盖率", "\(Int((coverage * 100).rounded()))%", "%")
             }
+            if let note = input.metrics.voxelNote {
+                add("体素说明", note, "—")
+            }
         } else {
             add(
                 "体素重建状态",

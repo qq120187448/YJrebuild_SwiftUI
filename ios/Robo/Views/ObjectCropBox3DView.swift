@@ -86,17 +86,19 @@ struct ObjectCropBox3DView: UIViewRepresentable {
             context.coordinator.moveBox(axis: SIMD3<Float>(1, 0, 0))
             onCommandHandled()
         case .yMinus:
-            context.coordinator.moveBox(axis: SIMD3<Float>(0, -1, 0))
-            onCommandHandled()
-        case .yPlus:
-            context.coordinator.moveBox(axis: SIMD3<Float>(0, 1, 0))
-            onCommandHandled()
-        case .zMinus:
             context.coordinator.moveBox(axis: SIMD3<Float>(0, 0, -1))
             onCommandHandled()
-        case .zPlus:
+        case .yPlus:
             context.coordinator.moveBox(axis: SIMD3<Float>(0, 0, 1))
             onCommandHandled()
+        case .zMinus:
+            context.coordinator.moveBox(axis: SIMD3<Float>(0, -1, 0))
+            onCommandHandled()
+        case .zPlus:
+            context.coordinator.moveBox(axis: SIMD3<Float>(0, 1, 0))
+            onCommandHandled()
+        default:
+            break
         }
         context.coordinator.rebuild(scnView)
     }
@@ -391,15 +393,15 @@ struct ObjectCropBox3DView: UIViewRepresentable {
             let centroid = parent.points.reduce(SIMD3<Float>.zero) {
                 $0 + $1.position
             } / Float(max(parent.points.count, 1))
-            let center = SIMD3<Float>(
+            let origin = SIMD3<Float>(
                 centroid.x,
-                groundY + extent.y * 0.5,
+                groundY,
                 centroid.z
             )
             var transform = matrix_identity_float4x4
-            transform.columns.3 = SIMD4<Float>(center.x, center.y, center.z, 1)
+            transform.columns.3 = SIMD4<Float>(origin.x, origin.y, origin.z, 1)
             let volume = ObjectCropVolume(
-                center: center,
+                origin: origin,
                 extent: extent,
                 transform: transform
             )
@@ -411,16 +413,16 @@ struct ObjectCropBox3DView: UIViewRepresentable {
         func moveBox(axis: SIMD3<Float>) {
             guard let volume = parent.cropVolume else { return }
             let delta: Float = 0.05
-            let newCenter = volume.center + axis * delta
+            let newOrigin = volume.origin + axis * delta
             var transform = volume.transform
             transform.columns.3 = SIMD4<Float>(
-                newCenter.x,
-                newCenter.y,
-                newCenter.z,
+                newOrigin.x,
+                newOrigin.y,
+                newOrigin.z,
                 1
             )
             let updated = ObjectCropVolume(
-                center: newCenter,
+                origin: newOrigin,
                 extent: volume.extent,
                 transform: transform
             )
@@ -431,18 +433,17 @@ struct ObjectCropBox3DView: UIViewRepresentable {
         private func snapToGround() {
             guard let volume = parent.cropVolume else { return }
             let groundY = parent.points.map { $0.y }.min() ?? 0
-            let targetY = groundY + volume.extent.y * 0.5
-            guard abs(volume.center.y - targetY) < 0.25 else { return }
-            let newCenter = SIMD3<Float>(volume.center.x, targetY, volume.center.z)
+            guard abs(volume.origin.y - groundY) < 0.1 else { return }
+            let newOrigin = SIMD3<Float>(volume.origin.x, groundY, volume.origin.z)
             var transform = volume.transform
             transform.columns.3 = SIMD4<Float>(
-                newCenter.x,
-                newCenter.y,
-                newCenter.z,
+                newOrigin.x,
+                newOrigin.y,
+                newOrigin.z,
                 1
             )
             let updated = ObjectCropVolume(
-                center: newCenter,
+                origin: newOrigin,
                 extent: volume.extent,
                 transform: transform
             )

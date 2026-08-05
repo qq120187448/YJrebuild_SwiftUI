@@ -99,6 +99,7 @@ struct ObjectScanMetrics: Codable, Sendable {
     var voxelMeshTriangleCount: Int?
     var voxelReconstructionSucceeded: Bool?
     var voxelFailureReason: String?
+    var voxelNote: String?
     var classificationRemovedCount: Int?
     var planeAnchorRemovedCount: Int?
     var groundRemovedCount: Int?
@@ -133,6 +134,7 @@ struct OBBResult: Sendable {
 struct VoxelReconstructionResult: Sendable {
     var succeeded: Bool = false
     var failureReason: String? = nil
+    var voxelNote: String? = nil
     var voxelSizeM: Double?
     var volumeM3: Double?
     var totalSurfaceAreaM2: Double?
@@ -323,6 +325,7 @@ enum ObjectScanProcessor {
             voxelMeshTriangleCount: voxel.triangleCount,
             voxelReconstructionSucceeded: voxel.succeeded,
             voxelFailureReason: voxel.failureReason,
+            voxelNote: voxel.voxelNote,
             backgroundRemovedCount: backgroundRemovedCount,
             backgroundRemovedRatio: backgroundRemovedRatio
         )
@@ -508,37 +511,85 @@ enum ObjectScanProcessor {
             triangleIndex += 3
         }
         let meshGL = MeshGL<HullVector>(vertices: vertices, triangles: triangles)
-        let manifold = try? Manifold<HullVector>(meshGL)
-        guard let manifold else {
-            return VoxelReconstructionResult(failureReason: "网格闭合失败")
-        }
-
-        let closedMesh = manifold.meshGL()
-        let totalArea = max(0, manifold.surfaceArea)
-        let contacts = contactAreas(
-            from: closedMesh,
+        let voxelVolume = Double(filledKeys.count)
+            * Double(voxelSize * voxelSize * voxelSize)
+        let rawArea = triangleSurfaceArea(meshGL)
+        let knownColumns = Double(voxelization.knownColumnCount)
+        let coverage = min(1, knownColumns / Double(max(voxelization.filledColumnCount, 1)))
+        let rawContacts = contactAreas(
+            from: meshGL,
             aabb: aabb,
             voxelSize: voxelSize,
             planes: planes
         )
-        let volume = max(0, manifold.volume)
-        let excludedArea = max(0, totalArea - contacts.ground - contacts.wall)
-        let knownColumns = Double(voxelization.knownColumnCount)
-        let coverage = min(1, knownColumns / Double(max(voxelization.filledColumnCount, 1)))
 
+        if let manifold = try? Manifold<HullVector>(meshGL) {
+            let closedMesh = manifold.meshGL()
+            let totalArea = max(0, manifold.surfaceArea)
+            let contacts = contactAreas(
+                from: closedMesh,
+                aabb: aabb,
+                voxelSize: voxelSize,
+                planes: planes
+            )
+            let volume = max(0, manifold.volume)
+            let excludedArea = max(0, totalArea - contacts.ground - contacts.wall)
+            return VoxelReconstructionResult(
+                succeeded: true,
+                voxelSizeM: Double(voxelSize),
+                volumeM3: volume,
+                totalSurfaceAreaM2: totalArea,
+                contactExcludedSurfaceAreaM2: excludedArea,
+                groundContactAreaM2: contacts.ground,
+                wallContactAreaM2: contacts.wall,
+                coverageEstimate: coverage,
+                vertexCount: closedMesh.vertexCount,
+                triangleCount: closedMesh.triangleCount,
+                usdzData: makeUSDZ(from: closedMesh)
+            )
+        }
+
+        let excludedArea = max(0, rawArea - rawContacts.ground - rawContacts.wall)
         return VoxelReconstructionResult(
             succeeded: true,
+            voxelNote: "网格未闭合，体积/表面积按体素近似",
             voxelSizeM: Double(voxelSize),
-            volumeM3: volume,
-            totalSurfaceAreaM2: totalArea,
+            volumeM3: voxelVolume,
+            totalSurfaceAreaM2: rawArea,
             contactExcludedSurfaceAreaM2: excludedArea,
-            groundContactAreaM2: contacts.ground,
-            wallContactAreaM2: contacts.wall,
+            groundContactAreaM2: rawContacts.ground,
+            wallContactAreaM2: rawContacts.wall,
             coverageEstimate: coverage,
-            vertexCount: closedMesh.vertexCount,
-            triangleCount: closedMesh.triangleCount,
-            usdzData: makeUSDZ(from: closedMesh)
+            vertexCount: meshGL.vertexCount,
+            triangleCount: meshGL.triangleCount,
+            usdzData: makeUSDZ(from: meshGL)
         )
+    }
+
+    private static func triangleSurfaceArea(_ mesh: MeshGL<HullVector>) -> Double {
+        let vertices = mesh.vertices
+        var total = 0.0
+        for triangle in mesh.triangles {
+            let a = SIMD3<Double>(
+                vertices[triangle.a].x,
+                vertices[triangle.a].y,
+                vertices[triangle.a].z
+            )
+            let b = SIMD3<Double>(
+                vertices[triangle.b].x,
+                vertices[triangle.b].y,
+                vertices[triangle.b].z
+            )
+            let c = SIMD3<Double>(
+                vertices[triangle.c].x,
+                vertices[triangle.c].y,
+                vertices[triangle.c].z
+            )
+            let u = b - a
+            let v = c - a
+            total += simd_length(simd_cross(u, v)) * 0.5
+        }
+        return total
     }
 
     private static func pointInsideConvexHull(

@@ -31,30 +31,30 @@ enum ObjectBoxVisual {
             axis: SIMD3<Float>(1, 0, 0),
             length: extent.x,
             offsets: [
-                SIMD3<Float>(0, -half.y, -half.z),
-                SIMD3<Float>(0, -half.y, half.z),
-                SIMD3<Float>(0, half.y, -half.z),
-                SIMD3<Float>(0, half.y, half.z)
+                SIMD3<Float>(half.x, 0, 0),
+                SIMD3<Float>(half.x, 0, extent.z),
+                SIMD3<Float>(half.x, extent.y, 0),
+                SIMD3<Float>(half.x, extent.y, extent.z)
             ]
         )
         add(
             axis: SIMD3<Float>(0, 1, 0),
             length: extent.y,
             offsets: [
-                SIMD3<Float>(-half.x, 0, -half.z),
-                SIMD3<Float>(-half.x, 0, half.z),
-                SIMD3<Float>(half.x, 0, -half.z),
-                SIMD3<Float>(half.x, 0, half.z)
+                SIMD3<Float>(0, half.y, 0),
+                SIMD3<Float>(0, half.y, extent.z),
+                SIMD3<Float>(extent.x, half.y, 0),
+                SIMD3<Float>(extent.x, half.y, extent.z)
             ]
         )
         add(
             axis: SIMD3<Float>(0, 0, 1),
             length: extent.z,
             offsets: [
-                SIMD3<Float>(-half.x, -half.y, 0),
-                SIMD3<Float>(-half.x, half.y, 0),
-                SIMD3<Float>(half.x, -half.y, 0),
-                SIMD3<Float>(half.x, half.y, 0)
+                SIMD3<Float>(0, 0, half.z),
+                SIMD3<Float>(0, extent.y, half.z),
+                SIMD3<Float>(extent.x, 0, half.z),
+                SIMD3<Float>(extent.x, extent.y, half.z)
             ]
         )
         return result
@@ -86,15 +86,14 @@ enum ObjectBoxVisual {
     }
 
     static func addAxes(to root: SCNNode, extent: SIMD3<Float>) {
-        let half = extent * 0.5
-        let definitions: [(SIMD3<Float>, UIColor, String)] = [
-            (SIMD3<Float>(1, 0, 0), .systemRed, "X"),
-            (SIMD3<Float>(0, 1, 0), .systemGreen, "Y"),
-            (SIMD3<Float>(0, 0, 1), .systemBlue, "Z")
+        let definitions: [(SIMD3<Float>, UIColor, String, Float)] = [
+            (SIMD3<Float>(1, 0, 0), .systemRed, "X", extent.x),
+            (SIMD3<Float>(0, 0, 1), .systemGreen, "Y", extent.z),
+            (SIMD3<Float>(0, 1, 0), .systemBlue, "Z", extent.y)
         ]
 
-        for (axis, color, label) in definitions {
-            let length = simd_length(axis * half)
+        for (axis, color, label, lengthValue) in definitions {
+            let length = max(lengthValue, 0.01)
             guard length > 0.01 else { continue }
 
             let cylinder = SCNCylinder(radius: 0.005, height: CGFloat(length))

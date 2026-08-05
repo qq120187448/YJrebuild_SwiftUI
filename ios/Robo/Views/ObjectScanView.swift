@@ -13,6 +13,15 @@ enum AxisMoveCommand: Equatable {
     case yPlus
     case zMinus
     case zPlus
+    case sizeXMinus
+    case sizeXPlus
+    case sizeYMinus
+    case sizeYPlus
+    case sizeZMinus
+    case sizeZPlus
+    case rotateX
+    case rotateY
+    case rotateZ
 }
 
 enum ObjectPreviewMode: String, CaseIterable, Identifiable {
@@ -213,6 +222,7 @@ struct ObjectScanView: View {
                 },
                 onCropBoxPlaced: {
                     scanCropBoxPlaced = true
+                    scanPlaceRequested = false
                 },
                 onCropBoxCleared: {
                     scanCropBoxPlaced = false
@@ -272,10 +282,10 @@ struct ObjectScanView: View {
                         }
 
                         if scanCropBoxPlaced {
-                            VStack(spacing: 4) {
-                                axisButtons(command: $scanAxisMoveCommand)
+                            VStack(spacing: 6) {
+                                cropBoxControlPanel(command: $scanAxisMoveCommand)
                                 Slider(value: $scanCropBoxSize, in: 0.2...10, step: 0.1)
-                                    .frame(width: 140)
+                                    .frame(width: 180)
                                 HStack {
                                     Text("\(scanCropBoxSize, specifier: "%.1f") m")
                                         .font(.caption.bold())
@@ -307,31 +317,68 @@ struct ObjectScanView: View {
     }
 
     private var scanCropBoxStatusText: String {
-        if scanCropBoxPlaced {
-            return "自动贴合 · 单指移动 · 双指缩放 · 按钮微调"
+        if scanPlaceRequested {
+            return "请点击地面放置裁剪盒"
         }
-        return "点“放置裁剪盒”自动贴合地面/墙面；扫描采集全部点云"
+        if scanCropBoxPlaced {
+            return "已贴合地面 · 移动/尺寸/旋转微调"
+        }
+        return "点击“放置裁剪盒”，再点击地面放置；扫描采集全部点云"
     }
 
-    private func axisButtons(command: Binding<AxisMoveCommand>) -> some View {
-        let buttons: [(String, AxisMoveCommand)] = [
-            ("X-", .xMinus), ("X+", .xPlus),
-            ("Y-", .yMinus), ("Y+", .yPlus),
-            ("Z-", .zMinus), ("Z+", .zPlus)
-        ]
-        return HStack(spacing: 6) {
-            ForEach(buttons, id: \.0) { label, commandValue in
-                Button {
-                    command.wrappedValue = commandValue
-                } label: {
-                    Text(label)
-                        .font(.caption2.bold())
-                        .foregroundStyle(.white)
-                        .frame(width: 34, height: 26)
-                        .background(Color.accentColor.opacity(0.8))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
+    private func cropBoxControlPanel(command: Binding<AxisMoveCommand>) -> some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 5) {
+                Text("移动")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.white)
+                    .frame(width: 28)
+                axisColorButton("X-", .xMinus, .red, command)
+                axisColorButton("X+", .xPlus, .red, command)
+                axisColorButton("Y-", .yMinus, .green, command)
+                axisColorButton("Y+", .yPlus, .green, command)
+                axisColorButton("Z-", .zMinus, .blue, command)
+                axisColorButton("Z+", .zPlus, .blue, command)
             }
+            HStack(spacing: 5) {
+                Text("尺寸")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.white)
+                    .frame(width: 28)
+                axisColorButton("X-", .sizeXMinus, .red, command)
+                axisColorButton("X+", .sizeXPlus, .red, command)
+                axisColorButton("Y-", .sizeYMinus, .green, command)
+                axisColorButton("Y+", .sizeYPlus, .green, command)
+                axisColorButton("Z-", .sizeZMinus, .blue, command)
+                axisColorButton("Z+", .sizeZPlus, .blue, command)
+            }
+            HStack(spacing: 5) {
+                Text("旋转")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.white)
+                    .frame(width: 28)
+                axisColorButton("X1°", .rotateX, .red, command)
+                axisColorButton("Y1°", .rotateY, .green, command)
+                axisColorButton("Z1°", .rotateZ, .blue, command)
+            }
+        }
+    }
+
+    private func axisColorButton(
+        _ label: String,
+        _ commandValue: AxisMoveCommand,
+        _ color: Color,
+        _ command: Binding<AxisMoveCommand>
+    ) -> some View {
+        Button {
+            command.wrappedValue = commandValue
+        } label: {
+            Text(label)
+                .font(.caption2.bold())
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 24)
+                .background(color.opacity(0.85))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
         }
     }
 
@@ -376,41 +423,6 @@ struct ObjectScanView: View {
                 .frame(height: 320)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
-
-                HStack(spacing: 10) {
-                    Button {
-                        placeCropBoxRequested = true
-                    } label: {
-                        Label(
-                            cropVolume == nil ? "放置裁剪盒" : "重新贴合",
-                            systemImage: "square.dashed"
-                        )
-                        .font(.subheadline.bold())
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    if cropVolume != nil {
-                        axisButtons(command: $axisMoveCommand)
-                        Button {
-                            cropVolume = nil
-                            boxMetrics = nil
-                        } label: {
-                            Label("清除裁剪盒", systemImage: "trash")
-                                .font(.subheadline)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-
-                    if isComputingBoxMetrics {
-                        ProgressView()
-                    }
-                }
-
-                if cropVolume != nil {
-                    Text("盒子自动贴合地面；单指移动、双指缩放，按钮微调 X/Y/Z。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
             }
 
             if result.clusters.count > 1 && cropVolume == nil {
@@ -521,6 +533,9 @@ struct ObjectScanView: View {
                             "网格顶点/三角面",
                             value: "\(vertexCount) / \(triangleCount)"
                         )
+                    }
+                    if let note = current.metrics.voxelNote {
+                        LabeledContent("体素说明", value: note)
                     }
                 } else {
                     LabeledContent(
@@ -774,8 +789,7 @@ private struct ObjectScanARView: UIViewControllerRepresentable {
         uiViewController.onCropBoxPlaced = onCropBoxPlaced
         uiViewController.onCropBoxCleared = onCropBoxCleared
         if placeRequested {
-            uiViewController.placeCropBoxAutomatically()
-            onCommandHandled()
+            uiViewController.beginGroundPlacement()
         }
         switch axisMoveCommand {
         case .none:
@@ -787,16 +801,43 @@ private struct ObjectScanARView: UIViewControllerRepresentable {
             uiViewController.moveCropBox(axis: SIMD3<Float>(1, 0, 0))
             onCommandHandled()
         case .yMinus:
-            uiViewController.moveCropBox(axis: SIMD3<Float>(0, -1, 0))
-            onCommandHandled()
-        case .yPlus:
-            uiViewController.moveCropBox(axis: SIMD3<Float>(0, 1, 0))
-            onCommandHandled()
-        case .zMinus:
             uiViewController.moveCropBox(axis: SIMD3<Float>(0, 0, -1))
             onCommandHandled()
-        case .zPlus:
+        case .yPlus:
             uiViewController.moveCropBox(axis: SIMD3<Float>(0, 0, 1))
+            onCommandHandled()
+        case .zMinus:
+            uiViewController.moveCropBox(axis: SIMD3<Float>(0, -1, 0))
+            onCommandHandled()
+        case .zPlus:
+            uiViewController.moveCropBox(axis: SIMD3<Float>(0, 1, 0))
+            onCommandHandled()
+        case .sizeXMinus:
+            uiViewController.resizeCropBox(index: 0, delta: -0.05)
+            onCommandHandled()
+        case .sizeXPlus:
+            uiViewController.resizeCropBox(index: 0, delta: 0.05)
+            onCommandHandled()
+        case .sizeYMinus:
+            uiViewController.resizeCropBox(index: 2, delta: -0.05)
+            onCommandHandled()
+        case .sizeYPlus:
+            uiViewController.resizeCropBox(index: 2, delta: 0.05)
+            onCommandHandled()
+        case .sizeZMinus:
+            uiViewController.resizeCropBox(index: 1, delta: -0.05)
+            onCommandHandled()
+        case .sizeZPlus:
+            uiViewController.resizeCropBox(index: 1, delta: 0.05)
+            onCommandHandled()
+        case .rotateX:
+            uiViewController.rotateCropBox(axis: SIMD3<Float>(1, 0, 0))
+            onCommandHandled()
+        case .rotateY:
+            uiViewController.rotateCropBox(axis: SIMD3<Float>(0, 0, 1))
+            onCommandHandled()
+        case .rotateZ:
+            uiViewController.rotateCropBox(axis: SIMD3<Float>(0, 1, 0))
             onCommandHandled()
         }
         if clearRequested {
@@ -830,6 +871,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     private var voxelMap: [Int64: VoxelAccumulator] = [:]
     private var lastPlaneInfos: [ScanPlaneInfo] = []
     private var cropVolume: ObjectCropVolume?
+    private var placeOnNextTap = false
     private var cropBoxNode: SCNNode?
     private var meshOcclusionNodes: [UUID: SCNNode] = [:]
 
@@ -873,6 +915,10 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
         pinch.cancelsTouchesInView = false
         sceneView.addGestureRecognizer(pinch)
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleGroundTap(_:)))
+        tap.cancelsTouchesInView = false
+        sceneView.addGestureRecognizer(tap)
 
         let configuration = ARWorldTrackingConfiguration()
         configuration.planeDetection = [.horizontal, .vertical]
@@ -1126,46 +1172,40 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     }
 
     func placeCropBoxAutomatically() {
-        let extent = SIMD3<Float>(repeating: cropBoxSize)
-        let screenCenter = CGPoint(x: sceneView.bounds.midX, y: sceneView.bounds.midY)
+        beginGroundPlacement()
+    }
+
+    func beginGroundPlacement() {
+        placeOnNextTap = true
+    }
+
+    @objc private func handleGroundTap(_ recognizer: UITapGestureRecognizer) {
+        guard placeOnNextTap else { return }
+        let location = recognizer.location(in: sceneView)
         let query = sceneView.raycastQuery(
-            from: screenCenter,
+            from: location,
             allowing: .estimatedPlane,
             alignment: .horizontal
         )
-        let result = query.flatMap { sceneView.session.raycast($0).first }
-
-        let center: SIMD3<Float>
-        if let result {
-            let transform = result.worldTransform
-            let hit = SIMD3<Float>(
-                transform.columns.3.x,
-                transform.columns.3.y,
-                transform.columns.3.z
-            )
-            center = hit + SIMD3<Float>(0, extent.y * 0.5, 0)
-        } else {
-            let cameraTransform = sceneView.session.currentFrame?.camera.transform
-                ?? matrix_identity_float4x4
-            let forward = SIMD3<Float>(
-                -cameraTransform.columns.2.x,
-                -cameraTransform.columns.2.y,
-                -cameraTransform.columns.2.z
-            )
-            let cameraPosition = SIMD3<Float>(
-                cameraTransform.columns.3.x,
-                cameraTransform.columns.3.y,
-                cameraTransform.columns.3.z
-            )
-            var fallback = cameraPosition + forward * 1.2
-            fallback.y = max(fallback.y, cameraPosition.y - 1.0)
-            center = fallback + SIMD3<Float>(0, extent.y * 0.5, 0)
+        guard let result = query.flatMap({ sceneView.session.raycast($0).first }) else {
+            return
         }
+        let transform = result.worldTransform
+        let hit = SIMD3<Float>(
+            transform.columns.3.x,
+            transform.columns.3.y,
+            transform.columns.3.z
+        )
+        placeCropBox(origin: hit)
+        placeOnNextTap = false
+    }
 
+    private func placeCropBox(origin: SIMD3<Float>) {
+        let extent = SIMD3<Float>(repeating: cropBoxSize)
         var transform = matrix_identity_float4x4
-        transform.columns.3 = SIMD4<Float>(center.x, center.y, center.z, 1)
+        transform.columns.3 = SIMD4<Float>(origin.x, origin.y, origin.z, 1)
         cropVolume = ObjectCropVolume(
-            center: center,
+            origin: origin,
             extent: extent,
             transform: transform
         )
@@ -1184,8 +1224,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         let planeAnchors = frame.anchors.compactMap { $0 as? ARPlaneAnchor }
         guard !planeAnchors.isEmpty else { return }
 
-        let center = volume.center
-        let half = volume.extent * 0.5
+        let origin = volume.origin
         var floorY: Float?
 
         for anchor in planeAnchors {
@@ -1200,24 +1239,24 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                 transform.columns.2.y,
                 transform.columns.2.z
             )
-            let distance = simd_dot(center - planeCenter, normal)
-            if abs(normal.y) > 0.7, abs(distance) < 0.25 {
+            let distance = simd_dot(origin - planeCenter, normal)
+            if abs(normal.y) > 0.7, abs(distance) < 0.1 {
                 floorY = planeCenter.y
             }
         }
 
         var transform = volume.transform
         if let floorY {
-            transform.columns.3.y = floorY + half.y
+            transform.columns.3.y = floorY
         }
 
-        let newCenter = SIMD3<Float>(
+        let newOrigin = SIMD3<Float>(
             transform.columns.3.x,
             transform.columns.3.y,
             transform.columns.3.z
         )
         cropVolume = ObjectCropVolume(
-            center: newCenter,
+            origin: newOrigin,
             extent: volume.extent,
             transform: transform
         )
@@ -1226,18 +1265,57 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
 
     func moveCropBox(axis: SIMD3<Float>) {
         guard let volume = cropVolume else { return }
-        let newCenter = volume.center + axis * 0.05
+        let newOrigin = volume.origin + axis * 0.05
         var transform = volume.transform
         transform.columns.3 = SIMD4<Float>(
-            newCenter.x,
-            newCenter.y,
-            newCenter.z,
+            newOrigin.x,
+            newOrigin.y,
+            newOrigin.z,
             1
         )
         cropVolume = ObjectCropVolume(
-            center: newCenter,
+            origin: newOrigin,
             extent: volume.extent,
             transform: transform
+        )
+        updateCropBoxNode()
+    }
+
+    func resizeCropBox(index: Int, delta: Float) {
+        guard let volume = cropVolume else { return }
+        var extent = volume.extent
+        if index == 0 {
+            extent.x = min(max(extent.x + delta, 0.2), 10)
+        } else if index == 1 {
+            extent.y = min(max(extent.y + delta, 0.2), 10)
+        } else {
+            extent.z = min(max(extent.z + delta, 0.2), 10)
+        }
+        cropVolume = ObjectCropVolume(
+            origin: volume.origin,
+            extent: extent,
+            transform: volume.transform
+        )
+        updateCropBoxNode()
+    }
+
+    func rotateCropBox(axis: SIMD3<Float>) {
+        guard let volume = cropVolume else { return }
+        let length = simd_length(axis)
+        guard length > 1e-6 else { return }
+        let normalized = axis / length
+        let quat = simd_quatf(angle: Float.pi / 180, axis: normalized)
+        let rotation = simd_float4x4(quat)
+        let origin = volume.origin
+        var toOrigin = matrix_identity_float4x4
+        toOrigin.columns.3 = SIMD4<Float>(-origin.x, -origin.y, -origin.z, 1)
+        var back = matrix_identity_float4x4
+        back.columns.3 = SIMD4<Float>(origin.x, origin.y, origin.z, 1)
+        let newTransform = back * rotation * toOrigin * volume.transform
+        cropVolume = ObjectCropVolume(
+            origin: origin,
+            extent: volume.extent,
+            transform: newTransform
         )
         updateCropBoxNode()
     }
@@ -1249,7 +1327,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         guard let volume = cropVolume else { return }
         let extent = SIMD3<Float>(repeating: cropBoxSize)
         cropVolume = ObjectCropVolume(
-            center: volume.center,
+            origin: volume.origin,
             extent: extent,
             transform: volume.transform
         )
@@ -1258,6 +1336,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
 
     func clearCropBox() {
         cropVolume = nil
+        placeOnNextTap = false
         cropBoxNode?.removeFromParentNode()
         cropBoxNode = nil
         voxelMap.removeAll()
