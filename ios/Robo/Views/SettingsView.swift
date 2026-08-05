@@ -13,7 +13,7 @@ struct SettingsView: View {
     @State private var scanPointSize: Double = ObjectScanSettings.pointSize
     @State private var previewPointLimit: Double = Double(ObjectScanSettings.previewPointLimit)
     @State private var previewPointSize: Double = ObjectScanSettings.previewPointSize
-    @State private var boxLineWidth: Double = ObjectScanSettings.boxLineWidth
+    @AppStorage("objectScanRealtimeVoxel") private var realtimeVoxel = false
 
     var body: some View {
         NavigationStack {
@@ -62,19 +62,6 @@ struct SettingsView: View {
 
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text("盒子线宽")
-                            Spacer()
-                            Text(String(format: "%.1f", boxLineWidth))
-                                .foregroundStyle(.secondary)
-                        }
-                        Slider(value: $boxLineWidth, in: 1...10, step: 0.5)
-                    }
-                    Text("裁剪盒线条的屏幕像素宽度，默认 4。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
                             Text("预览点云密度")
                             Spacer()
                             Text("\(Int(previewPointLimit))")
@@ -83,6 +70,11 @@ struct SettingsView: View {
                         Slider(value: $previewPointLimit, in: 10_000...200_000, step: 10_000)
                     }
                     Text("预览 3D 点云时显示的最大点数，默认 80000。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Toggle("实时体素计算", isOn: $realtimeVoxel)
+                    Text("开启后调整盒子立即重算体素；关闭时停止操作 0.5 秒后自动重算。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -116,9 +108,6 @@ struct SettingsView: View {
             }
             .onChange(of: previewPointSize) { _, newValue in
                 ObjectScanSettings.previewPointSize = newValue
-            }
-            .onChange(of: boxLineWidth) { _, newValue in
-                ObjectScanSettings.boxLineWidth = newValue
             }
             .fileImporter(
                 isPresented: $showPriceImporter,

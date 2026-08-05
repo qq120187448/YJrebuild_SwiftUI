@@ -9,8 +9,10 @@ struct ObjectScanDetailView: View {
     @State private var axisMoveCommand: AxisMoveCommand = .none
     @State private var shareURLs: [URL] = []
     @State private var errorMessage: String?
+    @State private var metricsTask: Task<Void, Never>?
     @AppStorage("objectScanPreviewPointSize") private var previewPointSizeSetting: Double = 4
     @AppStorage("objectScanBoxLineWidth") private var boxLineWidthSetting: Double = 4
+    @AppStorage("objectScanRealtimeVoxel") private var realtimeVoxel = false
 
     var body: some View {
         let voxelOK = metrics?.voxelReconstructionSucceeded
@@ -323,12 +325,24 @@ struct ObjectScanDetailView: View {
 
     private func recomputeMetrics(for volume: ObjectCropVolume) {
         let filtered = points.filter { volume.contains(worldPoint: $0.position) }
-        Task.detached(priority: .userInitiated) {
+        let groundY = filtered.map { $0.y }.min() ?? volume.origin.y
+        metrics = ObjectScanProcessor.lightweightMetrics(
+            for: filtered,
+            groundY: groundY
+        )
+        metricsTask?.cancel()
+        let useRealtime = realtimeVoxel
+        let task = Task.detached(priority: .userInitiated) {
+            if !useRealtime {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            if Task.isCancelled { return }
             let pair = ObjectScanProcessor.metricsAndUSDZ(for: filtered)
             await MainActor.run {
-                metrics = pair.metrics
+                self.metrics = pair.metrics
             }
         }
+        metricsTask = task
     }
 
     private func sampled(_ points: [ObjectPoint], limit: Int) -> [ObjectPoint] {

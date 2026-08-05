@@ -4,7 +4,6 @@ enum ObjectScanSettings {
     private static let pointSizeKey = "objectScanPointSize"
     private static let previewPointLimitKey = "objectScanPreviewPointLimit"
     private static let previewPointSizeKey = "objectScanPreviewPointSize"
-    private static let boxLineWidthKey = "objectScanBoxLineWidth"
 
     static var pointSize: Double {
         get {
@@ -36,12 +35,7 @@ enum ObjectScanSettings {
     }
 
     static var boxLineWidth: Double {
-        get {
-            let stored = UserDefaults.standard.double(forKey: boxLineWidthKey)
-            return stored > 0 ? min(max(stored, 1), 10) : 4
-        }
-        set {
-            UserDefaults.standard.set(min(max(newValue, 1), 10), forKey: boxLineWidthKey)
-        }
+        get { 2 }
+        set {}
     }
 }

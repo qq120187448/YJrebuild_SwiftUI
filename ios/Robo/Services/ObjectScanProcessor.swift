@@ -260,12 +260,17 @@ enum ObjectScanProcessor {
             )
         }
         let resolvedGroundY = groundY ?? (points.map { $0.y }.min() ?? 0)
-        let aabb = computeAABB(points)
-        let obb = computeOBB(points)
-        let heightfield = computeHeightfield(points, groundY: resolvedGroundY, gridSize: gridSize)
-        let hull = convexHull(points)
-        let footprint = footprintArea(points)
-        let voxel = voxelReconstruct(points, planes: planes)
+        let workPoints = cappedPoints(
+            points,
+            groundY: resolvedGroundY,
+            spacing: max(gridSize, 0.02)
+        )
+        let aabb = computeAABB(workPoints)
+        let obb = computeOBB(workPoints)
+        let heightfield = computeHeightfield(workPoints, groundY: resolvedGroundY, gridSize: gridSize)
+        let hull = convexHull(workPoints)
+        let footprint = footprintArea(workPoints)
+        let voxel = voxelReconstruct(workPoints, planes: planes)
         let metrics = ObjectScanMetrics(
             pointCount: points.count,
             processedPointCount: points.count,
@@ -297,6 +302,101 @@ enum ObjectScanProcessor {
             backgroundRemovedRatio: backgroundRemovedRatio
         )
         return (metrics, voxel.usdzData ?? hull.usdzData)
+    }
+
+    static func lightweightMetrics(
+        for points: [ObjectPoint],
+        groundY: Float? = nil
+    ) -> ObjectScanMetrics {
+        guard !points.isEmpty else {
+            return ObjectScanMetrics(
+                pointCount: 0,
+                processedPointCount: 0,
+                targetPointCount: 0,
+                clusterCount: 0,
+                groundY: 0,
+                aabb: ObjectScanMetrics.AABB(
+                    minX: 0, minY: 0, minZ: 0,
+                    maxX: 0, maxY: 0, maxZ: 0
+                ),
+                obbLengthM: 0,
+                obbWidthM: 0,
+                obbHeightM: 0,
+                heightfieldVolumeM3: 0,
+                heightfieldSurfaceAreaM2: 0,
+                convexHullVolumeM3: 0,
+                convexHullSurfaceAreaM2: 0,
+                footprintAreaM2: 0,
+                groundContactAreaM2: 0,
+                wallContactAreaM2: 0
+            )
+        }
+        let resolvedGroundY = groundY ?? (points.map { $0.y }.min() ?? 0)
+        let work = cappedPoints(
+            points,
+            groundY: resolvedGroundY,
+            spacing: 0.05
+        )
+        let aabb = computeAABB(work)
+        let obb = computeOBB(work)
+        let heightfield = computeHeightfield(work, groundY: resolvedGroundY, gridSize: 0.05)
+        let hull = convexHull(work)
+        let footprint = footprintArea(work)
+        return ObjectScanMetrics(
+            pointCount: points.count,
+            processedPointCount: points.count,
+            targetPointCount: points.count,
+            clusterCount: 1,
+            groundY: Double(resolvedGroundY),
+            aabb: aabb,
+            obbLengthM: obb.lengthM,
+            obbWidthM: obb.widthM,
+            obbHeightM: obb.heightM,
+            heightfieldVolumeM3: heightfield.volumeM3,
+            heightfieldSurfaceAreaM2: heightfield.surfaceAreaM2,
+            convexHullVolumeM3: hull.volumeM3,
+            convexHullSurfaceAreaM2: hull.surfaceAreaM2,
+            footprintAreaM2: footprint,
+            groundContactAreaM2: footprint,
+            wallContactAreaM2: 0
+        )
+    }
+
+    private static func cappedPoints(
+        _ points: [ObjectPoint],
+        groundY: Float,
+        spacing: Float
+    ) -> [ObjectPoint] {
+        guard spacing > 0, !points.isEmpty, groundY.isFinite else { return points }
+        let projected = points.map { SIMD2<Float>($0.x, $0.z) }
+        let hull = convexHull2D(projected)
+        guard hull.count >= 3 else { return points }
+        let minX = hull.map { $0.x }.min() ?? 0
+        let maxX = hull.map { $0.x }.max() ?? 0
+        let minZ = hull.map { $0.z }.min() ?? 0
+        let maxZ = hull.map { $0.z }.max() ?? 0
+        var result = points
+        var x = (minX / spacing).rounded(.down) * spacing
+        while x <= maxX {
+            var z = (minZ / spacing).rounded(.down) * spacing
+            while z <= maxZ {
+                if pointInsideConvexHull(SIMD2<Float>(x, z), hull: hull) {
+                    result.append(
+                        ObjectPoint(
+                            x: x,
+                            y: groundY,
+                            z: z,
+                            r: 0.6,
+                            g: 0.6,
+                            b: 0.6
+                        )
+                    )
+                }
+                z += spacing
+            }
+            x += spacing
+        }
+        return result
     }
 
     static func metrics(for points: [ObjectPoint]) -> ObjectScanMetrics {

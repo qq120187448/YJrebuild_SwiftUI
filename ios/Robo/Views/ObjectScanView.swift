@@ -113,6 +113,8 @@ struct ObjectScanView: View {
     @State private var previewMode: ObjectPreviewMode = .all
     @State private var isComputingBoxMetrics = false
     @State private var pointSize: Double = ObjectScanSettings.pointSize
+    @State private var metricsTask: Task<Void, Never>?
+    @AppStorage("objectScanRealtimeVoxel") private var realtimeVoxel = false
     @State private var scanPlaceRequested = false
     @State private var scanAxisMoveCommand: AxisMoveCommand = .none
     @State private var scanCropBoxPlaced = false
@@ -761,7 +763,18 @@ struct ObjectScanView: View {
         let filtered = result.allPoints.filter {
             volume.contains(worldPoint: $0.position)
         }
-        Task.detached(priority: .userInitiated) {
+        let groundY = filtered.map { $0.y }.min() ?? volume.origin.y
+        boxMetrics = ObjectScanProcessor.lightweightMetrics(
+            for: filtered,
+            groundY: groundY
+        )
+        metricsTask?.cancel()
+        let useRealtime = realtimeVoxel
+        let task = Task.detached(priority: .userInitiated) {
+            if !useRealtime {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            if Task.isCancelled { return }
             let pair = ObjectScanProcessor.metricsAndUSDZ(for: filtered)
             await MainActor.run {
                 self.boxMetrics = pair.metrics
@@ -769,6 +782,7 @@ struct ObjectScanView: View {
                 self.isComputingBoxMetrics = false
             }
         }
+        metricsTask = task
     }
 
     private func processCapturedPoints() {
@@ -1868,9 +1882,10 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         guard let geometry = makeOcclusionGeometry(anchor) else { return nil }
         let material = SCNMaterial()
         material.lightingModel = .constant
-        material.diffuse.contents = UIColor(white: 1, alpha: 0.35)
-        material.emission.contents = UIColor(white: 1, alpha: 0.35)
-        material.transparency = 0.35
+        material.diffuse.contents = UIColor.white
+        material.emission.contents = UIColor.white
+        material.fillMode = .lines
+        material.transparency = 1
         material.blendMode = .alpha
         material.writesToDepthBuffer = false
         material.isDoubleSided = true

@@ -132,6 +132,7 @@ struct ObjectCropBox3DView: UIViewRepresentable {
 
         private var lastPointCount = -1
         private var lastPreviewSignature = ""
+        private var didPositionCamera = false
         fileprivate var pan: UIPanGestureRecognizer?
         fileprivate var pinch: UIPinchGestureRecognizer?
         fileprivate var movePan: UIPanGestureRecognizer?
@@ -191,7 +192,10 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                     scene.rootNode.addChildNode(node)
                 }
                 buildOccupancy()
-                positionCamera(scnView)
+                if !didPositionCamera {
+                    positionCamera(scnView)
+                    didPositionCamera = true
+                }
             }
 
             scnView.allowsCameraControl = true

@@ -69,8 +69,9 @@ enum ObjectBoxVisual {
         viewportHeight: CGFloat,
         fovYDegrees: CGFloat
     ) {
-        let solidMaterial = makeMaterial(color: UIColor.systemRed)
-        let dashedMaterial = makeMaterial(color: UIColor.systemRed.withAlphaComponent(0.65))
+        _ = pixelLineWidth
+        let solidMaterial = makeMaterial(color: UIColor.black)
+        let dashedMaterial = makeMaterial(color: UIColor.black.withAlphaComponent(0.65))
 
         for edge in edges(extent: extent) {
             let dashed = edgeOccluded(
@@ -80,7 +81,7 @@ enum ObjectBoxVisual {
             )
             let distance = simd_length(cameraPosition - edge.offset)
             let fovRadians = fovYDegrees * .pi / 180
-            let worldRadius = Float(pixelLineWidth)
+            let worldRadius = Float(2)
                 / Float(max(viewportHeight, 1))
                 * 2
                 * distance
