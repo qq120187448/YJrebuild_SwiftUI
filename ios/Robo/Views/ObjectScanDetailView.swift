@@ -28,9 +28,9 @@ struct ObjectScanDetailView: View {
                         points: previewPoints,
                         targetPoints: previewPoints,
                         previewMode: .all,
-                        cropVolume: $cropVolume,
-                        placeRequested: .constant(false),
-                        axisMoveCommand: $axisMoveCommand,
+                        cropVolume: cropVolume,
+                        placeRequested: false,
+                        axisMoveCommand: axisMoveCommand,
                         onCropVolumeChanged: { cropVolume = $0 },
                         onCropBoxEditEnded: { volume in
                             recomputeMetrics(for: volume)
