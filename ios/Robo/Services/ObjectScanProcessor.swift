@@ -373,8 +373,8 @@ enum ObjectScanProcessor {
         guard hull.count >= 3 else { return points }
         let minX = hull.map { $0.x }.min() ?? 0
         let maxX = hull.map { $0.x }.max() ?? 0
-        let minZ = hull.map { $0.z }.min() ?? 0
-        let maxZ = hull.map { $0.z }.max() ?? 0
+        let minZ = hull.map { $0.y }.min() ?? 0
+        let maxZ = hull.map { $0.y }.max() ?? 0
         var result = points
         var x = (minX / spacing).rounded(.down) * spacing
         while x <= maxX {
