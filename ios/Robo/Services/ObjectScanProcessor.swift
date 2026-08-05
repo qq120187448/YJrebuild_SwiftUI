@@ -159,7 +159,13 @@ enum ObjectScanProcessor {
         let planeCleaned = removeDominantPlanes(keptPoints)
         let planeRemoved = max(0, keptPoints.count - planeCleaned.count)
         let allClusters = connectedClusters(planeCleaned, cellSize: 0.08)
-        let objectClusters = allClusters.filter { !isLikelyBackgroundCluster($0) }
+        let sceneAABB = computeAABB(planeCleaned)
+        let objectClusters = allClusters.filter {
+            !isLikelyBackgroundCluster($0, sceneAABB: sceneAABB)
+        }
+        let backgroundFilteredPoints = objectClusters.isEmpty
+            ? planeCleaned
+            : objectClusters.flatMap { $0 }
         let candidateClusters = objectClusters
             .filter { $0.count >= 20 }
             .sorted { $0.count > $1.count }
@@ -190,7 +196,7 @@ enum ObjectScanProcessor {
             )
             var metrics = pair.metrics
             metrics.pointCount = points.count
-            metrics.processedPointCount = keptPoints.count
+            metrics.processedPointCount = backgroundFilteredPoints.count
             metrics.clusterCount = totalClusterCount
             options.append(
                 ObjectScanClusterOption(
@@ -206,7 +212,7 @@ enum ObjectScanProcessor {
         let ply = plyData(points: primary.points)
         return ObjectScanProcessResult(
             clusters: options,
-            allPoints: planeCleaned,
+            allPoints: backgroundFilteredPoints,
             points: primary.points,
             metrics: primary.metrics,
             metricsJSON: metricsJSON,
@@ -603,16 +609,20 @@ enum ObjectScanProcessor {
     static func removeGround(_ points: [ObjectPoint]) -> ([ObjectPoint], Float) {
         guard !points.isEmpty else { return ([], 0) }
         let ys = points.map { $0.y }.sorted()
-        let index = min(ys.count - 1, max(0, ys.count / 50))
+        let index = min(ys.count - 1, max(0, ys.count / 25))
         let groundY = ys[index]
-        let threshold = groundY + 0.01
+        let nearGroundCount = points.filter { $0.y - groundY <= 0.05 }.count
+        guard Double(nearGroundCount) >= Double(points.count) * 0.02 else {
+            return (points, groundY)
+        }
+        let threshold = groundY + 0.05
         return (points.filter { $0.y >= threshold }, groundY)
     }
 
     private static func removePlanePoints(
         _ points: [ObjectPoint],
         planes: [ScanPlaneInfo],
-        distanceThreshold: Float = 0.03
+        distanceThreshold: Float = 0.05
     ) -> ([ObjectPoint], Int) {
         guard !planes.isEmpty else { return (points, 0) }
         let kept = points.filter { point in
@@ -624,7 +634,7 @@ enum ObjectScanProcessor {
                 normal /= normalLength
                 let distance = abs(simd_dot(point.position - center, normal))
                 guard distance <= distanceThreshold else { continue }
-                if planeContains(point.position, plane: plane, normal: normal, margin: 0.05) {
+                if planeContains(point.position, plane: plane, normal: normal, margin: 0.15) {
                     return false
                 }
             }
@@ -654,20 +664,32 @@ enum ObjectScanProcessor {
             && localY <= plane.height * 0.5 + margin
     }
 
-    private static func isLikelyBackgroundCluster(_ points: [ObjectPoint]) -> Bool {
-        guard points.count >= 60 else { return false }
+    private static func isLikelyBackgroundCluster(
+        _ points: [ObjectPoint],
+        sceneAABB: ObjectScanMetrics.AABB? = nil
+    ) -> Bool {
+        guard points.count >= 40 else { return false }
         let aabb = computeAABB(points)
         let dims = [aabb.sizeX, aabb.sizeY, aabb.sizeZ].sorted(by: >)
         let largest = dims[0]
         let smallest = dims[2]
         let planarity = smallest / max(largest, 1e-6)
-        if planarity < 0.06 && largest > 0.6 && smallest < 0.12 {
+        if planarity < 0.08 && largest > 0.4 && smallest < 0.15 {
             return true
         }
-        if aabb.sizeY < 0.12 && aabb.sizeX > 0.8 && aabb.sizeZ > 0.8 {
+        if aabb.sizeY < 0.15 && aabb.sizeX > 0.5 && aabb.sizeZ > 0.5 {
             return true
         }
-        if points.count >= 120 {
+        if let sceneAABB {
+            let touchesX = aabb.minX <= sceneAABB.minX + 0.05 || aabb.maxX >= sceneAABB.maxX - 0.05
+            let touchesZ = aabb.minZ <= sceneAABB.minZ + 0.05 || aabb.maxZ >= sceneAABB.maxZ - 0.05
+            let touchesY = aabb.minY <= sceneAABB.minY + 0.05 || aabb.maxY >= sceneAABB.maxY - 0.05
+            let boundaryTouches = [touchesX, touchesY, touchesZ].filter { $0 }.count
+            if boundaryTouches >= 2 && planarity < 0.12 && largest > 0.5 {
+                return true
+            }
+        }
+        if points.count >= 80 {
             let mean = points.reduce(SIMD3<Float>.zero) { $0 + $1.position }
                 / Float(points.count)
             var covariance = [[Float]](repeating: [Float](repeating: 0, count: 3), count: 3)
@@ -693,7 +715,7 @@ enum ObjectScanProcessor {
             }
             let sorted = extents.sorted(by: >)
             let spread = sorted[2] / max(sorted[0], 1e-6)
-            if spread < 0.05 && sorted[0] > 0.7 && sorted[1] > 0.3 {
+            if spread < 0.08 && sorted[0] > 0.5 && sorted[1] > 0.25 {
                 return true
             }
         }
@@ -702,15 +724,15 @@ enum ObjectScanProcessor {
 
     static func removeDominantPlanes(
         _ points: [ObjectPoint],
-        distanceThreshold: Float = 0.03
+        distanceThreshold: Float = 0.04
     ) -> [ObjectPoint] {
-        guard points.count > 800 else { return points }
+        guard points.count > 500 else { return points }
         var working = points
-        for _ in 0..<3 {
+        for _ in 0..<6 {
             let cleaned = removeLargestPlane(working, distanceThreshold: distanceThreshold)
             if cleaned.count == working.count { break }
             working = cleaned
-            if working.count < 200 { break }
+            if working.count < 120 { break }
         }
         return working
     }
@@ -722,12 +744,12 @@ enum ObjectScanProcessor {
         let count = points.count
         guard count >= 16 else { return points }
         var rng = SystemRandomNumberGenerator()
-        let minInliers = max(400, count / 8)
+        let minInliers = max(250, count / 6)
         var bestNormal = SIMD3<Float>(0, 1, 0)
         var bestPoint = SIMD3<Float>.zero
         var bestInliers = 0
 
-        for _ in 0..<80 {
+        for _ in 0..<120 {
             var i = Int.random(in: 0..<count, using: &rng)
             var j = Int.random(in: 0..<count, using: &rng)
             var k = Int.random(in: 0..<count, using: &rng)
@@ -773,7 +795,7 @@ enum ObjectScanProcessor {
         let planeHeight = simd_dot(bestPoint, bestNormal)
         let verticalness = abs(bestNormal.y)
         let isFloor = verticalness > 0.85 && (planeHeight - minY) < 0.12
-        let isWall = verticalness < 0.3 && Float(fullInliers) >= Float(count) * 0.18
+        let isWall = verticalness < 0.35 && Float(fullInliers) >= Float(count) * 0.12
         guard isFloor || isWall else { return points }
 
         return points.filter {

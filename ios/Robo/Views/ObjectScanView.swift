@@ -1,7 +1,6 @@
 import SwiftUI
 import SwiftData
 import ARKit
-import CoreImage
 import CoreVideo
 import SceneKit
 import simd
@@ -60,7 +59,7 @@ struct ObjectScanView: View {
     @State private var axisMoveCommand: AxisMoveCommand = .none
     @State private var boxMetrics: ObjectScanMetrics?
     @State private var boxUSDZData: Data?
-    @State private var previewMode: ObjectPreviewMode = .highlightTarget
+    @State private var previewMode: ObjectPreviewMode = .all
     @State private var isComputingBoxMetrics = false
     @State private var pointSize: Double = ObjectScanSettings.pointSize
     @State private var scanPlaceRequested = false
@@ -800,14 +799,6 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     private let maxVoxels = 200_000
     private var voxelMap: [Int64: VoxelAccumulator] = [:]
     private var lastPlaneInfos: [ScanPlaneInfo] = []
-    private let ciContext = CIContext(options: [
-        .workingColorSpace: NSNull(),
-        .useSoftwareRenderer: false
-    ])
-    private var portraitPixels: [UInt8]?
-    private var portraitPixelWidth = 0
-    private var portraitPixelHeight = 0
-    private var portraitPixelScale: CGFloat = 1
     private var cropVolume: ObjectCropVolume?
     private var cropBoxNode: SCNNode?
     private var meshOcclusionNodes: [UUID: SCNNode] = [:]
@@ -1607,7 +1598,6 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     }
 
     private func captureMeshPoints(from frame: ARFrame) {
-        preparePortraitColorImage(from: frame)
         for anchor in frame.anchors {
             guard let mesh = anchor as? ARMeshAnchor else { continue }
             let geometry = mesh.geometry
@@ -1637,18 +1627,20 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                 if voxelMap[key] == nil && voxelMap.count >= maxVoxels { continue }
 
                 var classification: Int?
-                var color = SIMD3<Float>(0.95, 0.55, 0.2)
-                let existingCount = voxelMap[key]?.count ?? 0
-                if (voxelMap[key] == nil || existingCount < 3),
-                   let sampled = sampleCameraColor(frame: frame, world: world) {
-                    color = sampled
-                } else if let classificationBuffer {
+                if let classificationBuffer {
                     let raw = classificationBuffer.load(
                         fromByteOffset: classificationOffset + i * classificationStride,
                         as: UInt8.self
                     )
                     classification = Int(raw)
-                    color = classificationColor(ARMeshClassification(rawValue: Int(raw)))
+                }
+                var color = SIMD3<Float>(0.95, 0.55, 0.2)
+                let existingCount = voxelMap[key]?.count ?? 0
+                if (voxelMap[key] == nil || existingCount < 3),
+                   let sampled = sampleCameraColor(frame: frame, world: world) {
+                    color = sampled
+                } else if let classification {
+                    color = classificationColor(ARMeshClassification(rawValue: classification))
                 }
 
                 var accumulator = voxelMap[key] ?? VoxelAccumulator()
@@ -1664,10 +1656,11 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
     }
 
     private func sampleCameraColor(frame: ARFrame, world: SIMD3<Float>) -> SIMD3<Float>? {
-        guard let pixels = portraitPixels else { return nil }
-        let buffer = frame.capturedImage
-        let portraitWidth = CGFloat(CVPixelBufferGetHeight(buffer))
-        let portraitHeight = CGFloat(CVPixelBufferGetWidth(buffer))
+        let image = frame.capturedImage
+        let sensorWidth = CVPixelBufferGetWidth(image)
+        let sensorHeight = CVPixelBufferGetHeight(image)
+        let portraitWidth = CGFloat(sensorHeight)
+        let portraitHeight = CGFloat(sensorWidth)
         guard portraitWidth > 0, portraitHeight > 0 else { return nil }
         let projected = frame.camera.projectPoint(
             world,
@@ -1679,49 +1672,41 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
               projected.x <= portraitWidth, projected.y <= portraitHeight else {
             return nil
         }
-        let px = min(max(Int(projected.x * portraitPixelScale), 0), portraitPixelWidth - 1)
-        let py = min(max(Int(projected.y * portraitPixelScale), 0), portraitPixelHeight - 1)
-        let offset = (py * portraitPixelWidth + px) * 4
-        let r = Float(pixels[offset]) / 255
-        let g = Float(pixels[offset + 1]) / 255
-        let b = Float(pixels[offset + 2]) / 255
-        return SIMD3<Float>(r, g, b)
-    }
+        let sensorX = Int(projected.y.rounded())
+        let sensorY = sensorHeight - 1 - Int(projected.x.rounded())
+        let pixelX = min(max(sensorX, 0), sensorWidth - 1)
+        let pixelY = min(max(sensorY, 0), sensorHeight - 1)
 
-    private func preparePortraitColorImage(from frame: ARFrame) {
-        let buffer = frame.capturedImage
-        let width = CVPixelBufferGetHeight(buffer)
-        let height = CVPixelBufferGetWidth(buffer)
-        guard width > 0, height > 0 else { return }
-        let source = CIImage(cvPixelBuffer: buffer).oriented(.right)
-        let scale: CGFloat = 0.5
-        let scaled = source.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        let extent = scaled.extent
-        let bounds = CGRect(origin: .zero, size: extent.size).integral
-        let translated: CIImage
-        if abs(extent.origin.x) > 0.5 || abs(extent.origin.y) > 0.5 {
-            translated = scaled.transformed(by: CGAffineTransform(
-                translationX: -extent.origin.x,
-                y: -extent.origin.y
-            ))
-        } else {
-            translated = scaled
+        CVPixelBufferLockBaseAddress(image, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(image, .readOnly) }
+        guard CVPixelBufferGetPlaneCount(image) >= 2,
+              let yBase = CVPixelBufferGetBaseAddressOfPlane(image, 0)?
+                .assumingMemoryBound(to: UInt8.self),
+              let uvBase = CVPixelBufferGetBaseAddressOfPlane(image, 1)?
+                .assumingMemoryBound(to: UInt8.self) else {
+            return nil
         }
-        let outWidth = max(1, Int(bounds.width))
-        let outHeight = max(1, Int(bounds.height))
-        var pixels = [UInt8](repeating: 0, count: outWidth * outHeight * 4)
-        ciContext.render(
-            translated,
-            toBitmap: &pixels,
-            rowBytes: outWidth * 4,
-            bounds: bounds,
-            format: .RGBA8,
-            colorSpace: CGColorSpaceCreateDeviceRGB()
+        let yWidth = CVPixelBufferGetWidthOfPlane(image, 0)
+        let yHeight = CVPixelBufferGetHeightOfPlane(image, 0)
+        let uvWidth = CVPixelBufferGetWidthOfPlane(image, 1)
+        let uvHeight = CVPixelBufferGetHeightOfPlane(image, 1)
+        let yRow = CVPixelBufferGetBytesPerRowOfPlane(image, 0)
+        let uvRow = CVPixelBufferGetBytesPerRowOfPlane(image, 1)
+        guard pixelX < yWidth, pixelY < yHeight else { return nil }
+        let yValue = Float(yBase[pixelY * yRow + pixelX])
+        let uvX = min(max(pixelX / 2, 0), uvWidth - 1)
+        let uvY = min(max(pixelY / 2, 0), uvHeight - 1)
+        let uvIndex = uvY * uvRow + uvX * 2
+        let cbValue = Float(uvBase[uvIndex]) - 128
+        let crValue = Float(uvBase[uvIndex + 1]) - 128
+        let rRaw = (yValue + 1.402 * crValue) / 255
+        let gRaw = (yValue - 0.344136 * cbValue - 0.714136 * crValue) / 255
+        let bRaw = (yValue + 1.772 * cbValue) / 255
+        return SIMD3<Float>(
+            min(max(rRaw, 0), 1),
+            min(max(gRaw, 0), 1),
+            min(max(bRaw, 0), 1)
         )
-        portraitPixels = pixels
-        portraitPixelWidth = outWidth
-        portraitPixelHeight = outHeight
-        portraitPixelScale = scale
     }
 
     private func classificationColor(_ classification: ARMeshClassification?) -> SIMD3<Float> {
@@ -1861,7 +1846,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             frame.camera.transform.columns.3.z
         )
         let pointDistance = simd_length(world - cameraPosition)
-        return pointDistance <= depthValue + 0.05
+        return pointDistance <= depthValue + 0.15
     }
 
     private func voxelKey(_ position: SIMD3<Float>) -> Int64 {
