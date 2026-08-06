@@ -169,6 +169,7 @@ enum ObjectScanProcessor {
         var sum = SIMD3<Float>.zero
         var sumColor = SIMD3<Float>.zero
         var count: Float = 0
+        var classificationVotes: [Int: Int] = [:]
     }
 
     private struct BackgroundIdentification {
@@ -177,12 +178,19 @@ enum ObjectScanProcessor {
         var objectPoints: [ObjectPoint] = []
     }
 
+    private struct PlaneFit {
+        var normal: SIMD3<Float>
+        var anchor: SIMD3<Float>
+        var inliers: Set<Int>
+    }
+
     private static func identifyGroundAndWall(
         _ points: [ObjectPoint],
         planes: [ScanPlaneInfo]
     ) -> BackgroundIdentification {
         var result = BackgroundIdentification()
         let minY = points.map { $0.y }.min() ?? 0
+        var unresolved: [ObjectPoint] = []
         for point in points {
             let classification = point.classification
             if classification == 2 {
@@ -204,9 +212,114 @@ enum ObjectScanProcessor {
                     continue
                 }
             }
-            result.objectPoints.append(point)
+            unresolved.append(point)
         }
+
+        if let groundFit = ransacPlaneFit(
+            unresolved,
+            requireHorizontal: true,
+            minInliers: max(80, unresolved.count / 20)
+        ), abs(groundFit.anchor.y - minY) < 0.2 {
+            var remaining: [ObjectPoint] = []
+            for (index, point) in unresolved.enumerated() {
+                if groundFit.inliers.contains(index) {
+                    result.groundPoints.append(point)
+                } else {
+                    remaining.append(point)
+                }
+            }
+            unresolved = remaining
+        }
+
+        for _ in 0..<4 {
+            guard unresolved.count >= 200 else { break }
+            guard let wallFit = ransacPlaneFit(
+                unresolved,
+                requireHorizontal: false,
+                minInliers: max(100, unresolved.count / 12)
+            ) else { break }
+            let before = unresolved.count
+            var remaining: [ObjectPoint] = []
+            for (index, point) in unresolved.enumerated() {
+                if wallFit.inliers.contains(index) {
+                    result.wallPoints.append(point)
+                } else {
+                    remaining.append(point)
+                }
+            }
+            unresolved = remaining
+            if unresolved.count >= before { break }
+        }
+        result.objectPoints = unresolved
         return result
+    }
+
+    private static func ransacPlaneFit(
+        _ points: [ObjectPoint],
+        requireHorizontal: Bool?,
+        distanceThreshold: Float = 0.05,
+        minInliers: Int
+    ) -> PlaneFit? {
+        let count = points.count
+        guard count >= 16 else { return nil }
+        var rng = SystemRandomNumberGenerator()
+        var bestNormal = SIMD3<Float>(0, 1, 0)
+        var bestAnchor = SIMD3<Float>.zero
+        var bestInliers = 0
+
+        for _ in 0..<90 {
+            var i = Int.random(in: 0..<count, using: &rng)
+            var j = Int.random(in: 0..<count, using: &rng)
+            var k = Int.random(in: 0..<count, using: &rng)
+            while j == i {
+                j = Int.random(in: 0..<count, using: &rng)
+            }
+            while k == i || k == j {
+                k = Int.random(in: 0..<count, using: &rng)
+            }
+            let a = points[i].position
+            let b = points[j].position
+            let c = points[k].position
+            var normal = simd_cross(b - a, c - a)
+            let length = simd_length(normal)
+            guard length > 1e-6 else { continue }
+            normal /= length
+
+            if let requireHorizontal {
+                if requireHorizontal && abs(normal.y) < 0.8 { continue }
+                if !requireHorizontal && abs(normal.y) > 0.4 { continue }
+            }
+
+            var inliers = 0
+            var index = 0
+            while index < count {
+                let point = points[index]
+                if abs(simd_dot(point.position - a, normal)) <= distanceThreshold {
+                    inliers += 1
+                }
+                index += 4
+            }
+            let estimated = inliers * 4
+            if estimated > bestInliers {
+                bestInliers = estimated
+                bestNormal = normal
+                bestAnchor = a
+            }
+        }
+
+        guard bestInliers >= minInliers else { return nil }
+        var fullInliers = Set<Int>()
+        for (index, point) in points.enumerated() {
+            if abs(simd_dot(point.position - bestAnchor, bestNormal)) <= distanceThreshold {
+                fullInliers.insert(index)
+            }
+        }
+        guard fullInliers.count >= minInliers else { return nil }
+        return PlaneFit(
+            normal: bestNormal,
+            anchor: bestAnchor,
+            inliers: fullInliers
+        )
     }
 
     private static func matchingPlane(
@@ -868,19 +981,26 @@ enum ObjectScanProcessor {
             acc.sum += point.position
             acc.sumColor += SIMD3<Float>(point.r, point.g, point.b)
             acc.count += 1
+            if let classification = point.classification {
+                acc.classificationVotes[classification, default: 0] += 1
+            }
             map[key] = acc
         }
         return map.values.map { acc -> ObjectPoint in
             let inv = 1 / max(acc.count, 1)
             let position = acc.sum * inv
             let color = acc.sumColor * inv
+            let classification = acc.classificationVotes
+                .max { $0.value < $1.value }?
+                .key
             return ObjectPoint(
                 x: position.x,
                 y: position.y,
                 z: position.z,
                 r: color.x,
                 g: color.y,
-                b: color.z
+                b: color.z,
+                classification: classification
             )
         }
     }

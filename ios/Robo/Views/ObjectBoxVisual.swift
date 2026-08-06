@@ -71,14 +71,17 @@ enum ObjectBoxVisual {
     ) {
         let solidMaterial = makeMaterial(color: UIColor.white)
         let dashedMaterial = makeMaterial(color: UIColor.white.withAlphaComponent(0.65))
+        let transform = root.simdTransform
 
         for edge in edges(extent: extent) {
             let dashed = edgeOccluded(
                 edge: edge,
+                transform: transform,
                 cameraPosition: cameraPosition,
                 isOccupied: isOccupied
             )
-            let distance = simd_length(cameraPosition - edge.offset)
+            let worldOffset = worldPosition(edge.offset, transform: transform)
+            let distance = simd_length(cameraPosition - worldOffset)
             let worldRadius = lineWorldRadius(
                 distance: distance,
                 pixelLineWidth: pixelLineWidth,
@@ -100,7 +103,9 @@ enum ObjectBoxVisual {
             extent.z * 0.5
         )
         let flowRadius = lineWorldRadius(
-            distance: simd_length(cameraPosition - flowCenter),
+            distance: simd_length(
+                cameraPosition - worldPosition(flowCenter, transform: transform)
+            ),
             pixelLineWidth: pixelLineWidth,
             viewportHeight: viewportHeight,
             fovYDegrees: fovYDegrees
@@ -123,13 +128,16 @@ enum ObjectBoxVisual {
         ]
 
         var axisEdges: [Edge] = []
+        let transform = root.simdTransform
         for (axis, color, label, lengthValue) in definitions {
             let length = max(lengthValue, 0.01)
             guard length > 0.01 else { continue }
 
             let lineRadius = max(
                 lineWorldRadius(
-                    distance: simd_length(cameraPosition - axis * length * 0.5),
+                    distance: simd_length(
+                        cameraPosition - worldPosition(axis * length * 0.5, transform: transform)
+                    ),
                     pixelLineWidth: pixelLineWidth,
                     viewportHeight: viewportHeight,
                     fovYDegrees: fovYDegrees
@@ -189,7 +197,9 @@ enum ObjectBoxVisual {
         }
         let flowRadius = max(
             lineWorldRadius(
-                distance: simd_length(cameraPosition - SIMD3<Float>.zero),
+                distance: simd_length(
+                    cameraPosition - worldPosition(SIMD3<Float>.zero, transform: transform)
+                ),
                 pixelLineWidth: pixelLineWidth,
                 viewportHeight: viewportHeight,
                 fovYDegrees: fovYDegrees
@@ -244,11 +254,15 @@ enum ObjectBoxVisual {
         edges: [Edge],
         radius: Float
     ) {
-        let duration: TimeInterval = 1.6
+        let duration: TimeInterval = 3.0
         let segmentCount = 24
         for edge in edges {
-            let bandSpan = min(max(edge.length * 0.42, 0.10), edge.length)
+            let bandSpan = min(
+                max(edge.length * 0.42, 0.10),
+                edge.length
+            )
             let segmentHeight = CGFloat(bandSpan) / CGFloat(segmentCount)
+            let travel = max(edge.length - bandSpan, 0)
             let offsets: [Float] = (0..<segmentCount).map { index in
                 -bandSpan * 0.5 + bandSpan * (Float(index) + 0.5) / Float(segmentCount)
             }
@@ -271,7 +285,7 @@ enum ObjectBoxVisual {
                     SCNAction.customAction(duration: duration) { animatedNode, elapsed in
                         let elapsedSeconds = TimeInterval(elapsed)
                         let t = elapsedSeconds.truncatingRemainder(dividingBy: duration) / duration
-                        let centerOffset = Float(t - 0.5) * edge.length
+                        let centerOffset = Float(t - 0.5) * travel
                         let position = edge.offset + edge.axis * (centerOffset + localOffset)
                         animatedNode.position = SCNVector3(position.x, position.y, position.z)
                     }
@@ -293,6 +307,14 @@ enum ObjectBoxVisual {
             * 2
             * distance
             * tan(Float(fovRadians) / 2)
+    }
+
+    private static func worldPosition(
+        _ local: SIMD3<Float>,
+        transform: simd_float4x4
+    ) -> SIMD3<Float> {
+        let vector = transform * SIMD4<Float>(local.x, local.y, local.z, 1)
+        return SIMD3<Float>(vector.x, vector.y, vector.z)
     }
 
     private static func makeMaterial(color: UIColor) -> SCNMaterial {
@@ -360,13 +382,16 @@ enum ObjectBoxVisual {
 
     private static func edgeOccluded(
         edge: Edge,
+        transform: simd_float4x4,
         cameraPosition: SIMD3<Float>,
         isOccupied: (SIMD3<Float>) -> Bool
     ) -> Bool {
+        let start = worldPosition(edge.start, transform: transform)
+        let end = worldPosition(edge.end, transform: transform)
         let samples = 8
         for index in 0...samples {
             let t = Float(index) / Float(samples)
-            let point = edge.start + (edge.end - edge.start) * t
+            let point = start + (end - start) * t
             let toPoint = point - cameraPosition
             let distance = simd_length(toPoint)
             guard distance > 0.05 else { continue }

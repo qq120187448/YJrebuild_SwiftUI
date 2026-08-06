@@ -1883,6 +1883,11 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                 depthNode.renderingOrder = -20
                 node.addChildNode(depthNode)
             }
+            if let wireframeGeometry = makeWireframeOverlayGeometry(anchor) {
+                let wireframeNode = SCNNode(geometry: wireframeGeometry)
+                wireframeNode.renderingOrder = 9
+                node.addChildNode(wireframeNode)
+            }
             if let overlayGeometry = makeClassifiedOverlayGeometry(anchor) {
                 let overlayNode = SCNNode(geometry: overlayGeometry)
                 overlayNode.renderingOrder = 10
@@ -1938,6 +1943,21 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         material.diffuse.contents = UIColor.clear
         material.colorBufferWriteMask = []
         material.writesToDepthBuffer = true
+        material.isDoubleSided = true
+        geometry.materials = [material]
+        return geometry
+    }
+
+    private func makeWireframeOverlayGeometry(_ anchor: ARMeshAnchor) -> SCNGeometry? {
+        guard let geometry = makeOcclusionGeometry(anchor) else { return nil }
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = UIColor.white
+        material.emission.contents = UIColor.white
+        material.fillMode = .lines
+        material.transparency = 1
+        material.blendMode = .alpha
+        material.writesToDepthBuffer = false
         material.isDoubleSided = true
         geometry.materials = [material]
         return geometry
