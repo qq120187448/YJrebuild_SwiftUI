@@ -1,5 +1,7 @@
 import CoreGraphics
 import Foundation
+import ImageIO
+import ModelIO
 import SceneKit
 import simd
 import UIKit
@@ -30,6 +32,7 @@ struct TextureScanResult {
     let processingDuration: TimeInterval
     let outputDirectory: URL
     let usdzURL: URL
+    let objURL: URL
     let plyURL: URL
     let jsonURL: URL
     let textureURLs: [URL]
@@ -56,7 +59,18 @@ private final class RGBAImage {
     private let bytesPerRow: Int
 
     init?(url: URL) {
-        guard let image = UIImage(contentsOfFile: url.path)?.cgImage else { return nil }
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(
+                source,
+                0,
+                [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 4096,
+                    kCGImageSourceCreateThumbnailWithTransform: true
+                ] as CFDictionary
+              ) else {
+            return nil
+        }
         width = image.width
         height = image.height
         bytesPerRow = width * 4
@@ -135,39 +149,50 @@ enum TextureBakeProcessor {
             throw TextureScanError.noWallSegments
         }
 
-        let scene = SCNScene()
-        addLights(to: scene)
         var textureURLs: [URL] = []
         var segmentInfo: [[String: Any]] = []
 
         for (index, segment) in segments.enumerated() {
-            let fraction = 0.08 + 0.78 * Double(index) / Double(segments.count)
-            progress(fraction, "烘焙墙面 \(index + 1)/\(segments.count)")
-            let textureURL = outputDirectory.appendingPathComponent("wall-\(index + 1).jpg")
-            let image = bakeTexture(for: segment, mesh: data.mesh, photos: data.photos)
-            if let image, let jpeg = image.jpegData(compressionQuality: 0.9) {
-                try jpeg.write(to: textureURL)
-                textureURLs.append(textureURL)
+            autoreleasepool {
+                let fraction = 0.08 + 0.78 * Double(index) / Double(segments.count)
+                progress(fraction, "烘焙墙面 \(index + 1)/\(segments.count)")
+                let textureURL = outputDirectory.appendingPathComponent("wall-\(index + 1).jpg")
+                let image = bakeTexture(for: segment, mesh: data.mesh, photos: data.photos)
+                var writtenURL: URL?
+                if let image, let jpeg = image.jpegData(compressionQuality: 0.9) {
+                    try? jpeg.write(to: textureURL)
+                    if FileManager.default.fileExists(atPath: textureURL.path) {
+                        writtenURL = textureURL
+                        textureURLs.append(textureURL)
+                    }
+                }
+
+                segmentInfo.append([
+                    "name": "wall-\(index + 1)",
+                    "kind": segment.kindName,
+                    "widthM": segment.width,
+                    "heightM": segment.height,
+                    "texture": writtenURL?.lastPathComponent ?? ""
+                ])
             }
-
-            let geometry = makeGeometry(for: segment, mesh: data.mesh, textureImage: image)
-            let node = SCNNode(geometry: geometry)
-            node.name = "wall-\(index + 1)"
-            scene.rootNode.addChildNode(node)
-
-            segmentInfo.append([
-                "name": "wall-\(index + 1)",
-                "kind": segment.kindName,
-                "widthM": segment.width,
-                "heightM": segment.height,
-                "texture": textureURL.lastPathComponent
-            ])
         }
 
         progress(0.9, "导出 USDZ / PLY / JSON")
         let usdzURL = outputDirectory.appendingPathComponent("texture-model.usdz")
-        guard scene.write(to: usdzURL, options: nil, delegate: nil, progressHandler: nil) else {
-            throw TextureScanError.exportFailed("USDZ 导出失败")
+        let objURL = outputDirectory.appendingPathComponent("texture-model.obj")
+        try writeOBJ(segments: segments, mesh: data.mesh, textureURLs: textureURLs, to: objURL)
+        let asset = MDLAsset(url: objURL)
+        do {
+            try asset.export(to: usdzURL)
+        } catch {
+            let fallbackScene = makeFallbackScene(
+                segments: segments,
+                mesh: data.mesh,
+                textureURLs: textureURLs
+            )
+            guard fallbackScene.write(to: usdzURL, options: nil, delegate: nil, progressHandler: nil) else {
+                throw TextureScanError.exportFailed("USDZ 导出失败")
+            }
         }
 
         let plyURL = outputDirectory.appendingPathComponent("texture-model.ply")
@@ -212,6 +237,7 @@ enum TextureBakeProcessor {
             processingDuration: Date().timeIntervalSince(started),
             outputDirectory: outputDirectory,
             usdzURL: usdzURL,
+            objURL: objURL,
             plyURL: plyURL,
             jsonURL: jsonURL,
             textureURLs: textureURLs
@@ -402,28 +428,51 @@ enum TextureBakeProcessor {
         return Array(scored.prefix(maxCount).map(\.photo))
     }
 
-    private static func makeGeometry(
-        for segment: TextureWallSegment,
-        mesh: TextureScanMesh,
-        textureImage: UIImage?
-    ) -> SCNGeometry {
-        var positions: [SCNVector3] = []
-        var normals: [SCNVector3] = []
-        var textureCoordinates: [CGPoint] = []
-        var indices: [Int32] = []
+    private struct TextureTriangleSoup {
+        var positions: [SIMD3<Float>] = []
+        var normals: [SIMD3<Float>] = []
+        var uvs: [SIMD2<Float>] = []
+    }
 
-        let normalVector = SCNVector3(segment.normal.x, segment.normal.y, segment.normal.z)
+    private static func triangleSoup(
+        for segment: TextureWallSegment,
+        mesh: TextureScanMesh
+    ) -> TextureTriangleSoup {
+        var soup = TextureTriangleSoup()
+        let normal = segment.normal
         for face in segment.faces {
             for offset in 0..<3 {
                 let globalIndex = mesh.indices[face * 3 + offset]
                 let point = mesh.vertices[globalIndex]
-                positions.append(SCNVector3(point.x, point.y, point.z))
-                normals.append(normalVector)
                 let u = (simd_dot(point, segment.uAxis) - segment.minU) / segment.width
                 let v = (simd_dot(point, segment.vAxis) - segment.minV) / segment.height
-                textureCoordinates.append(CGPoint(x: CGFloat(u), y: CGFloat(1 - v)))
-                indices.append(Int32(positions.count - 1))
+                soup.positions.append(point)
+                soup.normals.append(normal)
+                soup.uvs.append(SIMD2<Float>(u, v))
             }
+        }
+        return soup
+    }
+
+    private static func makeGeometry(
+        for segment: TextureWallSegment,
+        mesh: TextureScanMesh,
+        textureURL: URL?
+    ) -> SCNGeometry {
+        let soup = triangleSoup(for: segment, mesh: mesh)
+        let positions = soup.positions.map {
+            SCNVector3($0.x, $0.y, $0.z)
+        }
+        let normals = soup.normals.map {
+            SCNVector3($0.x, $0.y, $0.z)
+        }
+        let textureCoordinates = soup.uvs.map {
+            CGPoint(x: CGFloat($0.x), y: CGFloat(1 - $0.y))
+        }
+        var indices: [Int32] = []
+        indices.reserveCapacity(positions.count)
+        for index in 0..<positions.count {
+            indices.append(Int32(index))
         }
 
         let positionSource = SCNGeometrySource(vertices: positions)
@@ -438,8 +487,8 @@ enum TextureBakeProcessor {
         let material = SCNMaterial()
         material.lightingModel = .lambert
         material.isDoubleSided = true
-        if let textureImage {
-            material.diffuse.contents = textureImage
+        if let textureURL {
+            material.diffuse.contents = textureURL
         } else {
             material.diffuse.contents = UIColor(red: 0.75, green: 0.8, blue: 0.86, alpha: 1)
         }
@@ -447,6 +496,53 @@ enum TextureBakeProcessor {
         material.diffuse.wrapT = .clamp
         geometry.materials = [material]
         return geometry
+    }
+
+    private static func writeOBJ(
+        segments: [TextureWallSegment],
+        mesh: TextureScanMesh,
+        textureURLs: [URL],
+        to objURL: URL
+    ) throws {
+        var obj = "# RoboScan 0.5.1\n"
+        var mtl = "# RoboScan materials\n"
+        var vertexOffset = 0
+
+        for (index, segment) in segments.enumerated() {
+            let soup = triangleSoup(for: segment, mesh: mesh)
+            guard !soup.positions.isEmpty else { continue }
+
+            mtl += "newmtl wall\(index + 1)\n"
+            mtl += "Kd 1 1 1\n"
+            if index < textureURLs.count {
+                mtl += "map_Kd \(textureURLs[index].lastPathComponent)\n"
+            }
+            mtl += "\n"
+            obj += "usemtl wall\(index + 1)\n"
+
+            for position in soup.positions {
+                obj += String(format: "v %.5f %.5f %.5f\n", position.x, position.y, position.z)
+            }
+            for normal in soup.normals {
+                obj += String(format: "vn %.5f %.5f %.5f\n", normal.x, normal.y, normal.z)
+            }
+            for uv in soup.uvs {
+                obj += String(format: "vt %.5f %.5f\n", uv.x, 1 - uv.y)
+            }
+
+            let faceCount = soup.positions.count / 3
+            for face in 0..<faceCount {
+                let a = vertexOffset + face * 3 + 1
+                let b = vertexOffset + face * 3 + 2
+                let c = vertexOffset + face * 3 + 3
+                obj += "f \(a)/\(a)/\(a) \(b)/\(b)/\(b) \(c)/\(c)/\(c)\n"
+            }
+            vertexOffset += soup.positions.count
+        }
+
+        let mtlURL = objURL.deletingPathExtension().appendingPathExtension("mtl")
+        try obj.write(to: objURL, atomically: true, encoding: .utf8)
+        try mtl.write(to: mtlURL, atomically: true, encoding: .utf8)
     }
 
     private static func addLights(to scene: SCNScene) {
@@ -462,6 +558,23 @@ enum TextureBakeProcessor {
         directional.light?.intensity = 650
         directional.eulerAngles = SCNVector3(-0.6, 0.4, 0)
         scene.rootNode.addChildNode(directional)
+    }
+
+    private static func makeFallbackScene(
+        segments: [TextureWallSegment],
+        mesh: TextureScanMesh,
+        textureURLs: [URL]
+    ) -> SCNScene {
+        let scene = SCNScene()
+        addLights(to: scene)
+        for (index, segment) in segments.enumerated() {
+            let textureURL = index < textureURLs.count ? textureURLs[index] : nil
+            let geometry = makeGeometry(for: segment, mesh: mesh, textureURL: textureURL)
+            let node = SCNNode(geometry: geometry)
+            node.name = "wall-\(index + 1)"
+            scene.rootNode.addChildNode(node)
+        }
+        return scene
     }
 
     private static func writePLY(

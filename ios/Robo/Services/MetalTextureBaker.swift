@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import ImageIO
 import Metal
 import simd
 import UIKit
@@ -85,7 +86,7 @@ final class MetalTextureBaker {
             for: segment,
             mesh: mesh,
             photos: photos,
-            maxCount: 4
+            maxCount: 2
         )
         guard !candidates.isEmpty else { return nil }
 
@@ -95,7 +96,7 @@ final class MetalTextureBaker {
             guard let texture = makeTexture(from: photo.fileURL) else { continue }
             loadedTextures.append(texture)
             loadedPhotos.append(photo)
-            if loadedTextures.count >= 4 { break }
+            if loadedTextures.count >= 2 { break }
         }
         guard !loadedTextures.isEmpty else { return nil }
 
@@ -197,8 +198,19 @@ final class MetalTextureBaker {
     }
 
     private func makeTexture(from url: URL) -> MTLTexture? {
-        guard let cgImage = UIImage(contentsOfFile: url.path)?.cgImage,
-              let device else {
+        guard let device else {
+            return nil
+        }
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cgImage = CGImageSourceCreateThumbnailAtIndex(
+                source,
+                0,
+                [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 4096,
+                    kCGImageSourceCreateThumbnailWithTransform: true
+                ] as CFDictionary
+              ) else {
             return nil
         }
         let width = cgImage.width

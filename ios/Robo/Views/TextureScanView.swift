@@ -906,7 +906,14 @@ struct TextureScanResultView: View {
         ScrollView {
             VStack(spacing: 16) {
                 GroupBox {
-                    if let scene = try? SCNScene(url: result.usdzURL, options: nil) {
+                    if let scene = try? SCNScene(url: result.objURL, options: nil) {
+                        SceneView(
+                            scene: scene,
+                            options: [.autoenablesDefaultLighting, .allowsCameraControl]
+                        )
+                        .frame(height: 340)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    } else if let scene = try? SCNScene(url: result.usdzURL, options: nil) {
                         SceneView(
                             scene: scene,
                             options: [.autoenablesDefaultLighting, .allowsCameraControl]
