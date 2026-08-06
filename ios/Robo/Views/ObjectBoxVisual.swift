@@ -69,7 +69,6 @@ enum ObjectBoxVisual {
         viewportHeight: CGFloat,
         fovYDegrees: CGFloat
     ) {
-        _ = pixelLineWidth
         let solidMaterial = makeMaterial(color: UIColor.white)
         let dashedMaterial = makeMaterial(color: UIColor.white.withAlphaComponent(0.65))
 
@@ -80,12 +79,12 @@ enum ObjectBoxVisual {
                 isOccupied: isOccupied
             )
             let distance = simd_length(cameraPosition - edge.offset)
-            let fovRadians = fovYDegrees * .pi / 180
-            let worldRadius = Float(2)
-                / Float(max(viewportHeight, 1))
-                * 2
-                * distance
-                * tan(Float(fovRadians) / 2)
+            let worldRadius = lineWorldRadius(
+                distance: distance,
+                pixelLineWidth: pixelLineWidth,
+                viewportHeight: viewportHeight,
+                fovYDegrees: fovYDegrees
+            )
             addLine(
                 to: root,
                 edge: edge,
@@ -95,7 +94,18 @@ enum ObjectBoxVisual {
                 radius: max(worldRadius, 0.0005)
             )
         }
-        addFlow(to: root, extent: extent)
+        let flowCenter = SIMD3<Float>(
+            extent.x * 0.5,
+            extent.y * 0.5,
+            extent.z * 0.5
+        )
+        let flowRadius = lineWorldRadius(
+            distance: simd_length(cameraPosition - flowCenter),
+            pixelLineWidth: pixelLineWidth,
+            viewportHeight: viewportHeight,
+            fovYDegrees: fovYDegrees
+        )
+        addFlow(to: root, extent: extent, radius: max(flowRadius, 0.0005))
     }
 
     static func addAxes(to root: SCNNode, extent: SIMD3<Float>) {
@@ -185,13 +195,26 @@ enum ObjectBoxVisual {
         return node
     }
 
-    static func addFlow(to root: SCNNode, extent: SIMD3<Float>) {
-        let grayValues: [CGFloat] = [0.15, 0.5, 0.85]
+    static func addFlow(
+        to root: SCNNode,
+        extent: SIMD3<Float>,
+        radius: Float
+    ) {
         let duration: TimeInterval = 2.4
+        let segmentCount = 24
         for edge in edges(extent: extent) {
-            for (index, gray) in grayValues.enumerated() {
-                let material = makeMaterial(color: UIColor(white: gray, alpha: 1))
-                let segment = SCNCylinder(radius: 0.006, height: 0.12)
+            let bandSpan = min(max(edge.length * 0.28, 0.12), edge.length)
+            let segmentHeight = CGFloat(bandSpan) / CGFloat(segmentCount)
+            let offsets: [Float] = (0..<segmentCount).map { index in
+                -bandSpan * 0.5 + bandSpan * (Float(index) + 0.5) / Float(segmentCount)
+            }
+            for index in 0..<segmentCount {
+                let localOffset = offsets[index]
+                let u = (localOffset + bandSpan * 0.5) / bandSpan
+                let smooth = Float(sin(Double(u) * .pi))
+                let gray = 0.45 + 0.55 * smooth
+                let material = makeMaterial(color: UIColor(white: CGFloat(gray), alpha: 1))
+                let segment = SCNCylinder(radius: CGFloat(radius), height: segmentHeight)
                 segment.firstMaterial = material
                 let node = SCNNode(geometry: segment)
                 node.simdOrientation = simd_quatf(
@@ -200,20 +223,32 @@ enum ObjectBoxVisual {
                 )
                 root.addChildNode(node)
 
-                let phase = Double(index) / Double(grayValues.count)
                 let action = SCNAction.repeatForever(
                     SCNAction.customAction(duration: duration) { animatedNode, elapsed in
                         let elapsedSeconds = TimeInterval(elapsed)
-                        let raw = elapsedSeconds.truncatingRemainder(dividingBy: duration) / duration + phase
-                        let t = raw.truncatingRemainder(dividingBy: 1)
-                        let halfSpan = Float(t - 0.5) * edge.length
-                        let position = edge.offset + edge.axis * halfSpan
+                        let t = elapsedSeconds.truncatingRemainder(dividingBy: duration) / duration
+                        let centerOffset = Float(t - 0.5) * edge.length
+                        let position = edge.offset + edge.axis * (centerOffset + localOffset)
                         animatedNode.position = SCNVector3(position.x, position.y, position.z)
                     }
                 )
                 node.runAction(action)
             }
         }
+    }
+
+    private static func lineWorldRadius(
+        distance: Float,
+        pixelLineWidth: CGFloat,
+        viewportHeight: CGFloat,
+        fovYDegrees: CGFloat
+    ) -> Float {
+        let fovRadians = fovYDegrees * .pi / 180
+        return Float(max(pixelLineWidth, 0.5))
+            / Float(max(viewportHeight, 1))
+            * 2
+            * distance
+            * tan(Float(fovRadians) / 2)
     }
 
     private static func makeMaterial(color: UIColor) -> SCNMaterial {

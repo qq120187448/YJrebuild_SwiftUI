@@ -35,7 +35,7 @@ enum ObjectScanSettings {
     }
 
     static var boxLineWidth: Double {
-        get { 2 }
+        get { 1 }
         set {}
     }
 }

@@ -845,11 +845,11 @@ struct ObjectScanView: View {
             convexHullVolumeM3: metrics.convexHullVolumeM3,
             convexHullSurfaceAreaM2: metrics.convexHullSurfaceAreaM2,
             metricsJSON: (try? JSONEncoder().encode(metrics)) ?? Data(),
-            plyData: ObjectScanProcessor.plyData(points: current.points),
+            plyData: ObjectScanProcessor.plyData(points: result.allPoints),
             usdzData: cropVolume == nil
                 ? selectedOption(result).usdzData
                 : (boxUSDZData ?? ObjectScanProcessor.voxelReconstruct(current.points).usdzData),
-            pointsJSON: (try? JSONEncoder().encode(current.points)) ?? Data(),
+            pointsJSON: (try? JSONEncoder().encode(result.allPoints)) ?? Data(),
             cropVolumeData: cropVolume.flatMap {
                 try? JSONEncoder().encode($0.snapshot)
             }

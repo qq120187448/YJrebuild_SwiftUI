@@ -32,10 +32,9 @@ struct ObjectScanDetailView: View {
     var body: some View {
         let voxelOK = metrics?.voxelReconstructionSucceeded
             ?? (metrics?.voxelMeshVolumeM3 != nil)
-        let previewPoints = sampled(points, limit: ObjectScanSettings.previewPointLimit)
         let displayPoints = historyPointMode == .cropBoxOnly
-            ? previewPoints.filter { cropVolume?.contains(worldPoint: $0.position) ?? true }
-            : previewPoints
+            ? points.filter { cropVolume?.contains(worldPoint: $0.position) ?? true }
+            : points
         List {
             Section("3D 预览") {
                 if points.isEmpty {
@@ -374,16 +373,4 @@ struct ObjectScanDetailView: View {
         metricsTask = task
     }
 
-    private func sampled(_ points: [ObjectPoint], limit: Int) -> [ObjectPoint] {
-        guard points.count > limit, limit > 0 else { return points }
-        let stride = max(points.count / limit, 1)
-        var result: [ObjectPoint] = []
-        result.reserveCapacity(limit)
-        var index = 0
-        while index < points.count {
-            result.append(points[index])
-            index += stride
-        }
-        return result
-    }
 }
