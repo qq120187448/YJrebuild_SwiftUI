@@ -95,6 +95,7 @@ enum ObjectBoxVisual {
                 radius: max(worldRadius, 0.0005)
             )
         }
+        addFlow(to: root, extent: extent)
     }
 
     static func addAxes(to root: SCNNode, extent: SIMD3<Float>) {
@@ -185,28 +186,33 @@ enum ObjectBoxVisual {
     }
 
     static func addFlow(to root: SCNNode, extent: SIMD3<Float>) {
-        let bright = makeMaterial(color: UIColor(red: 0.35, green: 0.85, blue: 1.0, alpha: 1))
+        let grayValues: [CGFloat] = [0.15, 0.5, 0.85]
+        let duration: TimeInterval = 2.4
         for edge in edges(extent: extent) {
-            let segment = SCNCylinder(radius: 0.006, height: 0.12)
-            segment.firstMaterial = bright
-            let node = SCNNode(geometry: segment)
-            node.simdOrientation = simd_quatf(
-                from: SIMD3<Float>(0, 1, 0),
-                to: edge.axis
-            )
-            root.addChildNode(node)
+            for (index, gray) in grayValues.enumerated() {
+                let material = makeMaterial(color: UIColor(white: gray, alpha: 1))
+                let segment = SCNCylinder(radius: 0.006, height: 0.12)
+                segment.firstMaterial = material
+                let node = SCNNode(geometry: segment)
+                node.simdOrientation = simd_quatf(
+                    from: SIMD3<Float>(0, 1, 0),
+                    to: edge.axis
+                )
+                root.addChildNode(node)
 
-            let duration = 2.4
-            let action = SCNAction.repeatForever(
-                SCNAction.customAction(duration: duration) { animatedNode, elapsed in
-                    let t = elapsed.truncatingRemainder(dividingBy: duration) / duration
-                    let halfSpan = Float((t - 0.5) * Double(edge.length))
-                    let alongAxis = edge.axis * halfSpan
-                    let position = edge.offset + alongAxis
-                    animatedNode.position = SCNVector3(position.x, position.y, position.z)
-                }
-            )
-            node.runAction(action)
+                let phase = Double(index) / Double(grayValues.count)
+                let action = SCNAction.repeatForever(
+                    SCNAction.customAction(duration: duration) { animatedNode, elapsed in
+                        let elapsedSeconds = TimeInterval(elapsed)
+                        let raw = elapsedSeconds.truncatingRemainder(dividingBy: duration) / duration + phase
+                        let t = raw.truncatingRemainder(dividingBy: 1)
+                        let halfSpan = Float(t - 0.5) * edge.length
+                        let position = edge.offset + edge.axis * halfSpan
+                        animatedNode.position = SCNVector3(position.x, position.y, position.z)
+                    }
+                )
+                node.runAction(action)
+            }
         }
     }
 

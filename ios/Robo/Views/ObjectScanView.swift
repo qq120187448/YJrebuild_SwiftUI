@@ -196,7 +196,7 @@ struct ObjectScanView: View {
                 .foregroundColor(.accentColor)
             Text("物体工程扫描")
                 .font(.title.bold())
-            Text("扫描堆体、土方、中大型设备，在本机计算体积、表面积和外包围尺寸。")
+            Text("扫描堆体、土方、中大型设备，在本机计算体积、表面积和 OBB 外包围尺寸。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -578,15 +578,6 @@ struct ObjectScanView: View {
                     LabeledContent("局部平面剔除", value: "\(value)")
                 }
                 LabeledContent(
-                    "AABB 外包围尺寸",
-                    value: String(
-                        format: "%.2f × %.2f × %.2f m",
-                        current.metrics.aabb.sizeX,
-                        current.metrics.aabb.sizeY,
-                        current.metrics.aabb.sizeZ
-                    )
-                )
-                LabeledContent(
                     "OBB 长×宽×高",
                     value: String(
                         format: "%.2f × %.2f × %.2f m",
@@ -599,8 +590,7 @@ struct ObjectScanView: View {
                     "占地面积",
                     value: String(format: "%.2f m²", current.metrics.footprintAreaM2 ?? 0)
                 )
-                DisclosureGroup("AABB / OBB 说明") {
-                    Text("AABB：沿世界坐标 X/Y/Z 方向的外包围盒。")
+                DisclosureGroup("OBB 说明") {
                     Text("OBB：按物体自身方向拟合的最优外包围盒。")
                 }
             }
@@ -615,7 +605,7 @@ struct ObjectScanView: View {
                         )
                     )
                     LabeledContent(
-                        "不规则物体表面积（不含地面/墙面接触）",
+                        "上表面积（外露表面，不含地面/墙面）",
                         value: String(
                             format: "%.3f m²",
                             current.metrics.voxelMeshSurfaceAreaM2 ?? current.metrics.heightfieldSurfaceAreaM2
@@ -660,7 +650,7 @@ struct ObjectScanView: View {
                         .foregroundStyle(.secondary)
                 }
                 DisclosureGroup("体素说明") {
-                    Text("用小立方体填充点云后计算体积和表面积。")
+                    Text("用小立方体填充点云后计算体积；上表面积按外露表面计算，已扣除地面和墙面接触。")
                 }
             }
 
@@ -670,7 +660,7 @@ struct ObjectScanView: View {
                     value: String(format: "%.3f m³", current.metrics.heightfieldVolumeM3)
                 )
                 LabeledContent(
-                    "高度场表面积（参考）",
+                    "高度场表面积（上表面，不含地面）",
                     value: String(format: "%.3f m²", current.metrics.heightfieldSurfaceAreaM2)
                 )
                 LabeledContent(
@@ -682,7 +672,7 @@ struct ObjectScanView: View {
                     value: String(format: "%.2f m²", current.metrics.wallContactAreaM2 ?? 0)
                 )
                 DisclosureGroup("高度场说明") {
-                    Text("从上方按网格高度估算体积和表面积。")
+                    Text("按网格最高点估算体积和上表面面积，不包含纯地面面积。")
                 }
             }
 
@@ -1797,7 +1787,6 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         }
         let snapshot = snapshotPoints()
         DispatchQueue.main.async {
-            self.updatePointCloud(snapshot, frame: frame)
             self.updateOcclusionMeshes(from: frame)
             if self.cropVolume != nil {
                 self.updateCropBoxNode()
@@ -2093,106 +2082,6 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             index += stride
         }
         return result
-    }
-
-    private func updatePointCloud(_ points: [ObjectPoint], frame: ARFrame) {
-        guard !points.isEmpty else { return }
-        var displayPoints: [ObjectPoint] = []
-        displayPoints.reserveCapacity(40_000)
-        let scanColor = SIMD3<Float>(0.55, 0.05, 0.05)
-        for point in sampled(points, limit: 40_000) {
-            let world = point.position
-            guard isPointVisible(world: world, frame: frame) else { continue }
-            displayPoints.append(ObjectPoint(
-                x: point.x,
-                y: point.y,
-                z: point.z,
-                r: scanColor.x,
-                g: scanColor.y,
-                b: scanColor.z,
-                classification: point.classification
-            ))
-        }
-        guard !displayPoints.isEmpty else {
-            sceneView.scene.rootNode.childNodes
-                .filter { $0.name == "scanPoints" }
-                .forEach { $0.removeFromParentNode() }
-            return
-        }
-        let material = SCNMaterial()
-        material.lightingModel = .constant
-        material.diffuse.contents = UIColor.black
-        material.emission.contents = UIColor(red: 0.55, green: 0.05, blue: 0.05, alpha: 1)
-        material.blendMode = .alpha
-        material.writesToDepthBuffer = false
-        let radius = CGFloat(pointSize)
-        let geometry = SCNGeometry.objectPointCloud(
-            points: displayPoints,
-            worldPointSize: 0.02,
-            minScreenRadius: radius,
-            maxScreenRadius: radius,
-            material: material
-        )
-        let node = SCNNode(geometry: geometry)
-        node.name = "scanPoints"
-        sceneView.scene.rootNode.childNodes
-            .filter { $0.name == "scanPoints" }
-            .forEach { $0.removeFromParentNode() }
-        sceneView.scene.rootNode.addChildNode(node)
-    }
-
-    private func isPointVisible(world: SIMD3<Float>, frame: ARFrame) -> Bool {
-        guard let depthMap = frame.smoothedSceneDepth?.depthMap ?? frame.sceneDepth?.depthMap else {
-            return true
-        }
-        let viewportSize = sceneView.bounds.size
-        guard viewportSize.width > 0, viewportSize.height > 0 else { return true }
-        let projected = frame.camera.projectPoint(
-            world,
-            orientation: .portrait,
-            viewportSize: viewportSize
-        )
-        guard projected.x.isFinite, projected.y.isFinite else {
-            return true
-        }
-        let normalized = CGPoint(
-            x: projected.x / viewportSize.width,
-            y: projected.y / viewportSize.height
-        ).applying(
-            frame.displayTransform(for: .portrait, viewportSize: viewportSize).inverted()
-        )
-        guard normalized.x >= -0.02, normalized.x <= 1.02,
-              normalized.y >= -0.02, normalized.y <= 1.02 else {
-            return true
-        }
-        let depthWidth = CVPixelBufferGetWidth(depthMap)
-        let depthHeight = CVPixelBufferGetHeight(depthMap)
-        guard depthWidth > 0, depthHeight > 0 else { return true }
-        let depthX = min(
-            max(Int((normalized.x * CGFloat(depthWidth)).rounded()), 0),
-            depthWidth - 1
-        )
-        let depthY = min(
-            max(Int((normalized.y * CGFloat(depthHeight)).rounded()), 0),
-            depthHeight - 1
-        )
-
-        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(depthMap)?
-            .assumingMemoryBound(to: Float32.self) else {
-            return true
-        }
-        let row = CVPixelBufferGetBytesPerRow(depthMap) / MemoryLayout<Float32>.stride
-        let depthValue = base[depthY * row + depthX]
-        guard depthValue > 0.1 else { return true }
-        let cameraPosition = SIMD3<Float>(
-            frame.camera.transform.columns.3.x,
-            frame.camera.transform.columns.3.y,
-            frame.camera.transform.columns.3.z
-        )
-        let pointDistance = simd_length(world - cameraPosition)
-        return pointDistance <= depthValue + 0.15
     }
 
     private func voxelKey(_ position: SIMD3<Float>) -> Int64 {

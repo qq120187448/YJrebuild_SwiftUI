@@ -121,7 +121,7 @@ struct ScanHistoryView: View {
                                         Text("点数 \(record.pointCount) · 体积 \(String(format: "%.3f m³", record.heightfieldVolumeM3))")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
-                                        Text("表面积 \(String(format: "%.3f m²", record.heightfieldSurfaceAreaM2))")
+                                        Text("上表面积 \(String(format: "%.3f m²", record.heightfieldSurfaceAreaM2))")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
                                     }

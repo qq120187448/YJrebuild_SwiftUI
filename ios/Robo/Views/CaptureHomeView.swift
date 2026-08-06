@@ -59,7 +59,7 @@ struct CaptureHomeView: View {
 
                         featureCard(
                             title: "物体工程扫描",
-                            subtitle: "扫描堆体、土方、设备，计算体积、表面积和外包围尺寸",
+                            subtitle: "扫描堆体、土方、设备，计算体积、表面积和 OBB 外包围尺寸",
                             icon: "cube.transparent",
                             startTitle: "开始物体扫描",
                             historyCount: objectScans.count,

@@ -79,7 +79,6 @@ struct ObjectScanMetrics: Codable, Sendable {
     var targetPointCount: Int?
     var clusterCount: Int?
     var groundY: Double
-    var aabb: AABB
     var obbLengthM: Double?
     var obbWidthM: Double?
     var obbHeightM: Double?
@@ -241,10 +240,6 @@ enum ObjectScanProcessor {
                     targetPointCount: 0,
                     clusterCount: 0,
                     groundY: 0,
-                    aabb: ObjectScanMetrics.AABB(
-                        minX: 0, minY: 0, minZ: 0,
-                        maxX: 0, maxY: 0, maxZ: 0
-                    ),
                     obbLengthM: 0,
                     obbWidthM: 0,
                     obbHeightM: 0,
@@ -265,19 +260,17 @@ enum ObjectScanProcessor {
             groundY: resolvedGroundY,
             spacing: max(gridSize, 0.02)
         )
-        let aabb = computeAABB(workPoints)
         let obb = computeOBB(workPoints)
         let heightfield = computeHeightfield(workPoints, groundY: resolvedGroundY, gridSize: gridSize)
         let hull = convexHull(workPoints)
         let footprint = footprintArea(workPoints)
-        let voxel = voxelReconstruct(workPoints, planes: planes)
+        let voxel = voxelReconstruct(workPoints, planes: planes, groundY: resolvedGroundY)
         let metrics = ObjectScanMetrics(
             pointCount: points.count,
             processedPointCount: points.count,
             targetPointCount: points.count,
             clusterCount: 1,
             groundY: Double(resolvedGroundY),
-            aabb: aabb,
             obbLengthM: obb.lengthM,
             obbWidthM: obb.widthM,
             obbHeightM: obb.heightM,
@@ -315,10 +308,6 @@ enum ObjectScanProcessor {
                 targetPointCount: 0,
                 clusterCount: 0,
                 groundY: 0,
-                aabb: ObjectScanMetrics.AABB(
-                    minX: 0, minY: 0, minZ: 0,
-                    maxX: 0, maxY: 0, maxZ: 0
-                ),
                 obbLengthM: 0,
                 obbWidthM: 0,
                 obbHeightM: 0,
@@ -337,7 +326,6 @@ enum ObjectScanProcessor {
             groundY: resolvedGroundY,
             spacing: 0.05
         )
-        let aabb = computeAABB(work)
         let obb = computeOBB(work)
         let heightfield = computeHeightfield(work, groundY: resolvedGroundY, gridSize: 0.05)
         let hull = convexHull(work)
@@ -348,7 +336,6 @@ enum ObjectScanProcessor {
             targetPointCount: points.count,
             clusterCount: 1,
             groundY: Double(resolvedGroundY),
-            aabb: aabb,
             obbLengthM: obb.lengthM,
             obbWidthM: obb.widthM,
             obbHeightM: obb.heightM,
@@ -511,7 +498,8 @@ enum ObjectScanProcessor {
     static func voxelReconstruct(
         _ points: [ObjectPoint],
         targetVoxelsPerAxis: Int = 96,
-        planes: [ScanPlaneInfo] = []
+        planes: [ScanPlaneInfo] = [],
+        groundY: Float? = nil
     ) -> VoxelReconstructionResult {
         guard points.count >= 8 else {
             return VoxelReconstructionResult(failureReason: "目标点过少")
@@ -581,13 +569,15 @@ enum ObjectScanProcessor {
         let voxelVolume = Double(filledKeys.count)
             * Double(voxelSize * voxelSize * voxelSize)
         let rawArea = triangleSurfaceArea(meshGL)
+        let resolvedGroundY = groundY ?? Float(aabb.minY)
         let knownColumns = Double(voxelization.knownColumnCount)
         let coverage = min(1, knownColumns / Double(max(voxelization.filledColumnCount, 1)))
         let rawContacts = contactAreas(
             from: meshGL,
             aabb: aabb,
             voxelSize: voxelSize,
-            planes: planes
+            planes: planes,
+            groundY: resolvedGroundY
         )
 
         if let manifold = try? Manifold<HullVector>(meshGL) {
@@ -597,7 +587,8 @@ enum ObjectScanProcessor {
                 from: closedMesh,
                 aabb: aabb,
                 voxelSize: voxelSize,
-                planes: planes
+                planes: planes,
+                groundY: resolvedGroundY
             )
             let volume = max(0, manifold.volume)
             let excludedArea = max(0, totalArea - contacts.ground - contacts.wall)
@@ -619,7 +610,7 @@ enum ObjectScanProcessor {
         let excludedArea = max(0, rawArea - rawContacts.ground - rawContacts.wall)
         return VoxelReconstructionResult(
             succeeded: true,
-            voxelNote: "网格未闭合，体积/表面积按体素近似",
+            voxelNote: "网格未闭合，体积/上表面积按体素近似",
             voxelSizeM: Double(voxelSize),
             volumeM3: voxelVolume,
             totalSurfaceAreaM2: rawArea,
@@ -711,11 +702,12 @@ enum ObjectScanProcessor {
         from mesh: MeshGL<HullVector>,
         aabb: ObjectScanMetrics.AABB,
         voxelSize: Float,
-        planes: [ScanPlaneInfo] = []
+        planes: [ScanPlaneInfo] = [],
+        groundY: Float
     ) -> (ground: Double, wall: Double) {
         let vertices = mesh.vertices
         let tolerance = Double(voxelSize) * 0.75
-        let groundY = aabb.minY + Double(voxelSize) * 0.5
+        let groundPlaneY = Double(groundY) + Double(voxelSize) * 0.5
         let minXPlane = aabb.minX + Double(voxelSize) * 0.5
         let maxXPlane = aabb.maxX + Double(voxelSize) * 0.5
         let minZPlane = aabb.minZ + Double(voxelSize) * 0.5
@@ -734,7 +726,7 @@ enum ObjectScanProcessor {
             let area = simd_length(simd_cross(u, v)) * 0.5
             let centroid = (a + b + c) / 3
 
-            if abs(centroid.y - groundY) <= tolerance && normal.y < -0.5 {
+            if centroid.y <= groundPlaneY + tolerance && normal.y < -0.5 {
                 groundArea += area
                 continue
             }
@@ -1356,6 +1348,9 @@ enum ObjectScanProcessor {
             let h10 = heightAt(ix + 1, iz) ?? h00
             let h01 = heightAt(ix, iz + 1) ?? h00
             let h11 = heightAt(ix + 1, iz + 1) ?? h10
+            let maxHeight = max(h00, h10, h01, h11)
+            let groundThreshold = max(Float(gridSize) * 0.25, 0.005)
+            guard maxHeight > groundThreshold else { continue }
 
             let a = SIMD3<Float>(0, 0, 0)
             let b = SIMD3<Float>(size, h10 - h00, 0)

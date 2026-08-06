@@ -20,8 +20,6 @@ enum ObjectScanExporter {
         formatter.locale = Locale(identifier: "zh_CN")
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
 
-        let aabb = input.metrics.aabb
-        let aabbVolume = aabb.sizeX * aabb.sizeY * aabb.sizeZ
         let obbLength = input.metrics.obbLengthM ?? 0
         let obbWidth = input.metrics.obbWidthM ?? 0
         let obbHeight = input.metrics.obbHeightM ?? 0
@@ -40,14 +38,13 @@ enum ObjectScanExporter {
             "原始点数：\(input.rawPointCount)",
             "目标点数：\(input.metrics.targetPointCount ?? input.metrics.processedPointCount)",
             "已剔除背景点：\(input.metrics.backgroundRemovedCount ?? 0)（\(String(format: "%.1f%%", (input.metrics.backgroundRemovedRatio ?? 0) * 100))）",
-            "AABB 外包围：\(two(aabb.sizeX)) × \(two(aabb.sizeY)) × \(two(aabb.sizeZ)) m",
             "OBB 长宽高：\(two(obbLength)) × \(two(obbWidth)) × \(two(obbHeight)) m",
             voxelOK
                 ? "体素网格体积：\(three(voxelVolume)) m³"
                 : "体素网格体积：未生成（请参考高度场）",
             voxelOK
-                ? "不规则物体表面积：\(three(voxelSurface)) m²"
-                : "不规则物体表面积：未生成（请参考高度场）",
+                ? "上表面积（外露表面）：\(three(voxelSurface)) m²"
+                : "上表面积（外露表面）：未生成（请参考高度场）",
             "点云覆盖率：\(coveragePercent)%",
             "占地面积：\(two(footprint)) m²"
         ].joined(separator: "；")
@@ -72,10 +69,6 @@ enum ObjectScanExporter {
             ])
         }
 
-        add("AABB 长", two(aabb.sizeX), "m")
-        add("AABB 宽", two(aabb.sizeY), "m")
-        add("AABB 高", two(aabb.sizeZ), "m")
-        add("AABB 体积", three(aabbVolume), "m³")
         add("OBB 长", two(obbLength), "m")
         add("OBB 宽", two(obbWidth), "m")
         add("OBB 高", two(obbHeight), "m")
@@ -85,7 +78,7 @@ enum ObjectScanExporter {
         if voxelOK {
             add("体素网格体积（Surface Nets 闭合封口）", three(voxelVolume), "m³")
             add("体素网格总表面积", three(voxelTotalSurface), "m²")
-            add("不规则物体表面积（不含地面/墙面接触）", three(voxelSurface), "m²")
+            add("上表面积（外露表面，不含地面/墙面）", three(voxelSurface), "m²")
             if let voxelSize = input.metrics.voxelSizeM {
                 add("体素尺寸", String(format: "%.4f", voxelSize), "m")
             }
@@ -129,14 +122,14 @@ enum ObjectScanExporter {
             add("网格顶点/三角面", "\(vertexCount) / \(triangleCount)", "个")
         }
         add("高度场体积", three(input.metrics.heightfieldVolumeM3), "m³")
-        add("高度场表面积", three(input.metrics.heightfieldSurfaceAreaM2), "m²")
+        add("高度场表面积（上表面，不含地面）", three(input.metrics.heightfieldSurfaceAreaM2), "m²")
         add("地面接触面积（投影面积）", two(input.metrics.groundContactAreaM2 ?? input.metrics.footprintAreaM2 ?? 0), "m²")
         add("靠墙接触面积", two(input.metrics.wallContactAreaM2 ?? 0), "m²")
         add("占地面积（投影面积）", two(footprint), "m²")
         rows.append([
             XLSXWriter.Cell("备注"),
             XLSXWriter.Cell(
-                "不规则物体表面积按体素表面重建计算，已扣除地面接触面积与靠墙接触面积；空白区域按最近邻点云高度估算，点云覆盖率 \(coveragePercent)%。体素重建失败时请以高度场数据为准。"
+                "上表面积按外露表面计算，已扣除地面接触面积与靠墙接触面积；空白区域按最近邻点云高度估算，点云覆盖率 \(coveragePercent)%。体素重建失败时请以高度场数据为准。"
             )
         ])
 

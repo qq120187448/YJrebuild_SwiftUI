@@ -1,5 +1,19 @@
 import SwiftUI
 
+private enum HistoryPointMode: String, CaseIterable, Identifiable {
+    case all
+    case cropBoxOnly
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all: return "全部点云"
+        case .cropBoxOnly: return "仅裁剪盒内"
+        }
+    }
+}
+
 struct ObjectScanDetailView: View {
     let record: ObjectScanRecord
 
@@ -10,6 +24,7 @@ struct ObjectScanDetailView: View {
     @State private var shareURLs: [URL] = []
     @State private var errorMessage: String?
     @State private var metricsTask: Task<Void, Never>?
+    @State private var historyPointMode: HistoryPointMode = .all
     @AppStorage("objectScanPreviewPointSize") private var previewPointSizeSetting: Double = 4
     @AppStorage("objectScanBoxLineWidth") private var boxLineWidthSetting: Double = 4
     @AppStorage("objectScanRealtimeVoxel") private var realtimeVoxel = false
@@ -18,6 +33,9 @@ struct ObjectScanDetailView: View {
         let voxelOK = metrics?.voxelReconstructionSucceeded
             ?? (metrics?.voxelMeshVolumeM3 != nil)
         let previewPoints = sampled(points, limit: ObjectScanSettings.previewPointLimit)
+        let displayPoints = historyPointMode == .cropBoxOnly
+            ? previewPoints.filter { cropVolume?.contains(worldPoint: $0.position) ?? true }
+            : previewPoints
         List {
             Section("3D 预览") {
                 if points.isEmpty {
@@ -28,9 +46,17 @@ struct ObjectScanDetailView: View {
                     )
                     .frame(height: 200)
                 } else {
+                    Picker("显示点云", selection: $historyPointMode) {
+                        ForEach(HistoryPointMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(cropVolume == nil)
+
                     ObjectCropBox3DView(
-                        points: previewPoints,
-                        targetPoints: previewPoints,
+                        points: displayPoints,
+                        targetPoints: displayPoints,
                         previewMode: .all,
                         cropVolume: cropVolume,
                         placeRequested: false,
@@ -92,15 +118,6 @@ struct ObjectScanDetailView: View {
                     LabeledContent("局部平面剔除", value: "\(value)")
                 }
                 LabeledContent(
-                    "AABB 外包围尺寸",
-                    value: String(
-                        format: "%.2f × %.2f × %.2f m",
-                        metrics?.aabb.sizeX ?? 0,
-                        metrics?.aabb.sizeY ?? 0,
-                        metrics?.aabb.sizeZ ?? 0
-                    )
-                )
-                LabeledContent(
                     "OBB 长×宽×高",
                     value: String(
                         format: "%.2f × %.2f × %.2f m",
@@ -116,8 +133,7 @@ struct ObjectScanDetailView: View {
                         metrics?.footprintAreaM2 ?? 0
                     )
                 )
-                DisclosureGroup("AABB / OBB 说明") {
-                    Text("AABB：沿世界坐标 X/Y/Z 方向的外包围盒。")
+                DisclosureGroup("OBB 说明") {
                     Text("OBB：按物体自身方向拟合的最优外包围盒。")
                 }
             }
@@ -132,7 +148,7 @@ struct ObjectScanDetailView: View {
                         )
                     )
                     LabeledContent(
-                        "不规则物体表面积（不含地面/墙面接触）",
+                        "上表面积（外露表面，不含地面/墙面）",
                         value: String(
                             format: "%.3f m²",
                             metrics?.voxelMeshSurfaceAreaM2 ?? record.heightfieldSurfaceAreaM2
@@ -170,7 +186,7 @@ struct ObjectScanDetailView: View {
                         .foregroundStyle(.secondary)
                 }
                 DisclosureGroup("体素说明") {
-                    Text("用小立方体填充点云后计算体积和表面积。")
+                    Text("用小立方体填充点云后计算体积；上表面积按外露表面计算，已扣除地面和墙面接触。")
                 }
             }
 
@@ -180,11 +196,11 @@ struct ObjectScanDetailView: View {
                     value: String(format: "%.3f m³", record.heightfieldVolumeM3)
                 )
                 LabeledContent(
-                    "高度场表面积（参考）",
+                    "高度场表面积（上表面，不含地面）",
                     value: String(format: "%.3f m²", record.heightfieldSurfaceAreaM2)
                 )
                 DisclosureGroup("高度场说明") {
-                    Text("从上方按网格高度估算体积和表面积。")
+                    Text("按网格最高点估算体积和上表面面积，不包含纯地面面积。")
                 }
             }
 
