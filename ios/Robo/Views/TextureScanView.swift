@@ -21,6 +21,7 @@ struct TextureScanView: View {
     @State private var progress: Double = 0
     @State private var progressText = "准备"
     @State private var originalBrightness: CGFloat = 1
+    @State private var defectMode = false
 
     private enum Phase {
         case instructions
@@ -189,15 +190,27 @@ struct TextureScanView: View {
             TextureScanARContainer(
                 status: $status,
                 stopRequested: $stopRequested,
+                defectMode: $defectMode,
                 onFinish: handleFinish
             )
             .ignoresSafeArea()
 
             VStack {
+                Picker("模式", selection: $defectMode) {
+                    Text("建模扫描").tag(false)
+                    Text("裂缝补拍").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 14)
+                .padding(.top, 6)
+
                 HStack(spacing: 12) {
                     statusPill(icon: "camera.fill", text: "照片 \(status.photoCount)")
                     statusPill(icon: "viewfinder", text: "近距 \(status.closeUpCount)")
                     statusPill(icon: "checkerboard.rectangle", text: "覆盖 \(Int(status.coverage * 100))%")
+                    if defectMode {
+                        statusPill(icon: "exclamationmark.triangle", text: "缺陷 \(status.defectCount)/\(status.defectCapturedCount)")
+                    }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 2) {
                         Text(status.photoResolution)
@@ -240,7 +253,17 @@ struct TextureScanView: View {
                         .font(.headline)
                         .foregroundStyle(.red)
                     }
-                    if status.isCloseUp {
+                    if defectMode {
+                        Label(
+                            "点击疑似裂缝/渗水/发霉位置，自动 48MP 补拍",
+                            systemImage: "hand.tap"
+                        )
+                        .font(.headline)
+                        .foregroundStyle(.yellow)
+                        Text("已标记 \(status.defectCount) 处，已补拍 \(status.defectCapturedCount) 处")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.8))
+                    } else if status.isCloseUp {
                         Label(
                             "近距补拍 \(String(format: "%.2f", status.distance))m",
                             systemImage: "checkmark.circle.fill"
@@ -252,7 +275,7 @@ struct TextureScanView: View {
                             .font(.headline)
                             .foregroundStyle(.white)
                     }
-                    Text("绿色网格为已拍摄覆盖；缓慢移动补齐橙色区域")
+                    Text(defectMode ? "绿点=已补拍，黄点=待补拍" : "绿色网格为已拍摄覆盖；缓慢移动补齐橙色区域")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.8))
                         .multilineTextAlignment(.center)
@@ -333,6 +356,7 @@ struct TextureScanView: View {
 private struct TextureScanARContainer: UIViewRepresentable {
     @Binding var status: TextureScanStatus
     @Binding var stopRequested: Bool
+    @Binding var defectMode: Bool
     let onFinish: (TextureScanData) -> Void
 
     func makeUIView(context: Context) -> TextureScanARView {
@@ -341,6 +365,7 @@ private struct TextureScanARContainer: UIViewRepresentable {
             status = value
         }
         view.onFinish = onFinish
+        view.setDefectMode(defectMode)
         return view
     }
 
@@ -351,6 +376,7 @@ private struct TextureScanARContainer: UIViewRepresentable {
                 stopRequested = false
             }
         }
+        uiView.setDefectMode(defectMode)
     }
 
     static func dismantleUIView(_ uiView: TextureScanARView, coordinator: ()) {
@@ -386,6 +412,9 @@ private final class TextureScanARView: UIView, ARSessionDelegate {
     private var coverageNodes: [UUID: SCNNode] = [:]
     private var lastCoverage: Double = 0
     private let maxPhotos = 400
+    private var defectMode = false
+    private var defectMarkers: [TextureScanDefectMarker] = []
+    private var defectMarkerNodes: [UUID: SCNNode] = [:]
 
     override init(frame: CGRect) {
         photoDirectory = FileManager.default.temporaryDirectory
@@ -413,6 +442,9 @@ private final class TextureScanARView: UIView, ARSessionDelegate {
         sceneView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         sceneView.session.delegate = self
         sceneView.rendersContinuously = true
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleSurfaceTap(_:)))
+        sceneView.addGestureRecognizer(tap)
 
         let configuration = ARWorldTrackingConfiguration()
         if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
@@ -446,7 +478,8 @@ private final class TextureScanARView: UIView, ARSessionDelegate {
             deviceMaxResolution: maxResolution,
             duration: Date().timeIntervalSince(startedAt),
             mesh: mesh,
-            photos: photosSnapshot
+            photos: photosSnapshot,
+            defectMarkers: defectMarkers
         )
         sceneView.session.pause()
         DispatchQueue.main.async { [weak self] in
@@ -456,6 +489,58 @@ private final class TextureScanARView: UIView, ARSessionDelegate {
 
     func pause() {
         sceneView.session.pause()
+    }
+
+    func setDefectMode(_ mode: Bool) {
+        defectMode = mode
+        updateStatus()
+    }
+
+    @objc private func handleSurfaceTap(_ recognizer: UITapGestureRecognizer) {
+        guard defectMode, isScanning else { return }
+        let location = recognizer.location(in: sceneView)
+        guard let query = sceneView.raycastQuery(
+            from: location,
+            allowing: .estimatedPlane,
+            alignment: .any
+        ),
+        let result = sceneView.session.raycast(query).first else {
+            return
+        }
+        let position = SIMD3<Float>(
+            result.worldTransform.columns.3.x,
+            result.worldTransform.columns.3.y,
+            result.worldTransform.columns.3.z
+        )
+        addDefectMarker(at: position)
+    }
+
+    private func addDefectMarker(at position: SIMD3<Float>) {
+        let marker = TextureScanDefectMarker(
+            id: UUID(),
+            position: position,
+            capturedAt: Date(),
+            state: 0,
+            photoID: nil
+        )
+        defectMarkers.append(marker)
+
+        let node = makeMarkerNode(color: .yellow)
+        node.position = SCNVector3(position.x, position.y, position.z)
+        sceneView.scene.rootNode.addChildNode(node)
+        defectMarkerNodes[marker.id] = node
+
+        requestPhoto(isCloseUp: true, defectMarkerID: marker.id)
+        updateStatus()
+    }
+
+    private func makeMarkerNode(color: UIColor) -> SCNNode {
+        let sphere = SCNSphere(radius: 0.012)
+        sphere.firstMaterial?.diffuse.contents = color
+        sphere.firstMaterial?.emission.contents = color
+        let node = SCNNode(geometry: sphere)
+        node.name = "defectMarker"
+        return node
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
@@ -501,7 +586,7 @@ private final class TextureScanARView: UIView, ARSessionDelegate {
         let closeUp = lastDistance > 0.2 && lastDistance < 0.6
         lastCloseUp = closeUp
         let now = Date()
-        if photos.count < maxPhotos {
+        if !defectMode && photos.count < maxPhotos {
             if closeUp {
                 if lastCloseUpPhotoTime == nil ||
                     now.timeIntervalSince(lastCloseUpPhotoTime!) >= 0.6 {
@@ -534,7 +619,7 @@ private final class TextureScanARView: UIView, ARSessionDelegate {
         }
     }
 
-    private func requestPhoto(isCloseUp: Bool) {
+    private func requestPhoto(isCloseUp: Bool, defectMarkerID: UUID? = nil) {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.isScanning, !self.photoInFlight else { return }
             self.photoInFlight = true
@@ -548,28 +633,28 @@ private final class TextureScanARView: UIView, ARSessionDelegate {
             }
             if #available(iOS 26.0, *) {
                 self.sceneView.session.captureHighResolutionFrame(using: nil) { [weak self] frame, _ in
-                    self?.handleCapturedFrame(frame, isCloseUp: isCloseUp)
+                    self?.handleCapturedFrame(frame, isCloseUp: isCloseUp, defectMarkerID: defectMarkerID)
                 }
             } else {
                 self.sceneView.session.captureHighResolutionFrame { [weak self] frame, _ in
-                    self?.handleCapturedFrame(frame, isCloseUp: isCloseUp)
+                    self?.handleCapturedFrame(frame, isCloseUp: isCloseUp, defectMarkerID: defectMarkerID)
                 }
             }
         }
     }
 
-    private func handleCapturedFrame(_ frame: ARFrame?, isCloseUp: Bool) {
+    private func handleCapturedFrame(_ frame: ARFrame?, isCloseUp: Bool, defectMarkerID: UUID? = nil) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             defer {
                 self.photoInFlight = false
             }
             guard let frame else { return }
-            self.savePhoto(frame, isCloseUp: isCloseUp)
+            self.savePhoto(frame, isCloseUp: isCloseUp, defectMarkerID: defectMarkerID)
         }
     }
 
-    private func savePhoto(_ frame: ARFrame, isCloseUp: Bool) {
+    private func savePhoto(_ frame: ARFrame, isCloseUp: Bool, defectMarkerID: UUID? = nil) {
         let ciImage = CIImage(cvPixelBuffer: frame.capturedImage)
         guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else { return }
         let image = UIImage(cgImage: cgImage)
@@ -607,7 +692,19 @@ private final class TextureScanARView: UIView, ARSessionDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.photos.append(photo)
+            if let defectMarkerID,
+               let index = self.defectMarkers.firstIndex(where: { $0.id == defectMarkerID }) {
+                self.defectMarkers[index].state = 1
+                self.defectMarkers[index].photoID = photo.id
+                if let node = self.defectMarkerNodes[defectMarkerID] {
+                    node.geometry?.firstMaterial?.diffuse.contents = UIColor.green
+                    node.geometry?.firstMaterial?.emission.contents = UIColor.green
+                }
+            }
             self.updateStatus()
+            if let nextMarker = self.defectMarkers.first(where: { $0.state == 0 && $0.photoID == nil }) {
+                self.requestPhoto(isCloseUp: true, defectMarkerID: nextMarker.id)
+            }
         }
     }
 
@@ -643,6 +740,9 @@ private final class TextureScanARView: UIView, ARSessionDelegate {
         }
         newStatus.coverage = lastCoverage
         newStatus.speed = lastSpeed
+        newStatus.defectCount = defectMarkers.count
+        newStatus.defectCapturedCount = defectMarkers.filter { $0.state == 1 }.count
+        newStatus.defectMode = defectMode
         onStatus?(newStatus)
     }
 

@@ -29,6 +29,26 @@ enum TextureScanPackageExporter {
         let posesData = try JSONSerialization.data(withJSONObject: poseItems, options: [.prettyPrinted, .sortedKeys])
         try posesData.write(to: posesURL)
 
+        let defectItems = data.defectMarkers.map { marker -> [String: Any] in
+            [
+                "id": marker.id.uuidString,
+                "position": [
+                    Double(marker.position.x),
+                    Double(marker.position.y),
+                    Double(marker.position.z)
+                ],
+                "state": marker.state,
+                "photoID": marker.photoID ?? "",
+                "capturedAt": ISO8601DateFormatter().string(from: marker.capturedAt)
+            ]
+        }
+        let defectsURL = packageDirectory.appendingPathComponent("defects.json")
+        let defectsData = try JSONSerialization.data(
+            withJSONObject: defectItems,
+            options: [.prettyPrinted, .sortedKeys]
+        )
+        try defectsData.write(to: defectsURL)
+
         let meshURL = packageDirectory.appendingPathComponent("mesh.ply")
         try writeMeshPLY(mesh: data.mesh, to: meshURL)
 
@@ -41,6 +61,8 @@ enum TextureScanPackageExporter {
             "maxResolution": data.deviceMaxResolution,
             "photoCount": data.photos.count,
             "closeUpCount": data.photos.filter(\.isCloseUp).count,
+            "defectCount": data.defectMarkers.count,
+            "defectCapturedCount": data.defectMarkers.filter { $0.state == 1 }.count,
             "meshVertexCount": data.mesh.vertices.count,
             "meshFaceCount": data.mesh.faceCount,
             "coordinateSystem": "ARKit world coordinates, meters, y-up"
@@ -61,6 +83,7 @@ enum TextureScanPackageExporter {
             try zip.addFile(at: file, path: "photos/\(file.lastPathComponent)")
         }
         try zip.addFile(at: posesURL, path: "poses.json")
+        try zip.addFile(at: defectsURL, path: "defects.json")
         try zip.addFile(at: meshURL, path: "mesh.ply")
         try zip.addFile(at: manifestURL, path: "manifest.json")
         try zip.finish()

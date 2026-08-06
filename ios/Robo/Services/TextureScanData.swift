@@ -23,6 +23,14 @@ struct TexturePhotoFrame {
     let distance: Float
 }
 
+struct TextureScanDefectMarker {
+    let id: UUID
+    let position: SIMD3<Float>
+    let capturedAt: Date
+    var state: Int
+    var photoID: String?
+}
+
 struct TextureScanData {
     let scanID: UUID
     let capturedAt: Date
@@ -31,6 +39,7 @@ struct TextureScanData {
     let duration: TimeInterval
     var mesh: TextureScanMesh
     var photos: [TexturePhotoFrame]
+    var defectMarkers: [TextureScanDefectMarker]
 }
 
 struct TextureScanStatus {
@@ -43,4 +52,7 @@ struct TextureScanStatus {
     var photoResolution = "自动"
     var coverage: Double = 0
     var speed: Float = 0
+    var defectCount = 0
+    var defectCapturedCount = 0
+    var defectMode = false
 }
