@@ -552,10 +552,8 @@ private final class TextureScanARView: UIView, ARSessionDelegate {
 
     private func savePhoto(_ frame: ARFrame, isCloseUp: Bool) {
         let ciImage = CIImage(cvPixelBuffer: frame.capturedImage)
-        guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent),
-              let image = UIImage(cgImage: cgImage) else {
-            return
-        }
+        guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else { return }
+        let image = UIImage(cgImage: cgImage)
         let id = UUID().uuidString
         var url = photoDirectory.appendingPathComponent("\(id).heic")
         if !writeHEIF(image, to: url) {
@@ -706,13 +704,27 @@ private final class TextureScanARView: UIView, ARSessionDelegate {
             let v1 = localVertices[i1]
             let v2 = localVertices[i2]
             let localNormal = simd_normalize(simd_cross(v1 - v0, v2 - v0))
+            let transformedNormal = anchor.transform * SIMD4<Float>(
+                localNormal.x,
+                localNormal.y,
+                localNormal.z,
+                0
+            )
             let worldNormal = simd_normalize(
-                (anchor.transform * SIMD4<Float>(localNormal.x, localNormal.y, localNormal.z, 0)).xyz
+                SIMD3<Float>(transformedNormal.x, transformedNormal.y, transformedNormal.z)
             )
             let localCentroid = (v0 + v1 + v2) / 3
-            let worldCentroid = (
-                anchor.transform * SIMD4<Float>(localCentroid.x, localCentroid.y, localCentroid.z, 1)
-            ).xyz
+            let transformedCentroid = anchor.transform * SIMD4<Float>(
+                localCentroid.x,
+                localCentroid.y,
+                localCentroid.z,
+                1
+            )
+            let worldCentroid = SIMD3<Float>(
+                transformedCentroid.x,
+                transformedCentroid.y,
+                transformedCentroid.z
+            )
 
             let isCovered = isWorldCovered(worldCentroid, normal: worldNormal)
             if isCovered {
