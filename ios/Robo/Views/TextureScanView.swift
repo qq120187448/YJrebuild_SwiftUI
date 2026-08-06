@@ -84,9 +84,11 @@ struct TextureScanView: View {
                 originalBrightness = UIScreen.main.brightness
             }
             .onChange(of: phase) { _, newPhase in
-                if newPhase == .scanning {
+                if newPhase == .scanning || newPhase == .processing {
                     UIApplication.shared.isIdleTimerDisabled = true
-                    UIScreen.main.brightness = 1
+                    if UIScreen.main.brightness < 0.4 {
+                        UIScreen.main.brightness = 0.4
+                    }
                 } else {
                     UIApplication.shared.isIdleTimerDisabled = false
                     UIScreen.main.brightness = originalBrightness
@@ -579,12 +581,24 @@ private final class TextureScanARView: UIView, ARSessionDelegate {
             try? jpeg.write(to: url)
         }
 
+        var intrinsics = frame.camera.intrinsics
+        let videoWidth = Float(frame.camera.imageResolution.width)
+        let videoHeight = Float(frame.camera.imageResolution.height)
+        if videoWidth > 0, videoHeight > 0 {
+            let scaleX = Float(cgImage.width) / videoWidth
+            let scaleY = Float(cgImage.height) / videoHeight
+            intrinsics.columns.0.x *= scaleX
+            intrinsics.columns.1.y *= scaleY
+            intrinsics.columns.2.x *= scaleX
+            intrinsics.columns.2.y *= scaleY
+        }
+
         let photo = TexturePhotoFrame(
             id: id,
             fileURL: url,
             timestamp: frame.timestamp,
             cameraTransform: frame.camera.transform,
-            intrinsics: frame.camera.intrinsics,
+            intrinsics: intrinsics,
             imageWidth: cgImage.width,
             imageHeight: cgImage.height,
             isCloseUp: isCloseUp,

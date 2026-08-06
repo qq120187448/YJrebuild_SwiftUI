@@ -186,20 +186,25 @@ enum TextureBakeProcessor {
             }
         }
 
-        let previewScene = makePreviewScene(
-            segments: segments,
-            mesh: data.mesh,
-            previewURLs: previewURLs
-        )
-
         progress(0.9, "导出 USDZ / PLY / JSON")
         let usdzURL = outputDirectory.appendingPathComponent("texture-model.usdz")
         let objURL = outputDirectory.appendingPathComponent("texture-model.obj")
         try writeOBJ(segments: segments, mesh: data.mesh, textureURLs: textureURLs, to: objURL)
-        let asset = MDLAsset(url: objURL)
-        do {
-            try asset.export(to: usdzURL)
-        } catch {
+
+        var usdzExported = false
+        let totalFaces = segments.reduce(0) { $0 + $1.faces.count }
+        if totalFaces <= 400_000 {
+            autoreleasepool {
+                let asset = MDLAsset(url: objURL)
+                do {
+                    try asset.export(to: usdzURL)
+                    usdzExported = true
+                } catch {
+                    usdzExported = false
+                }
+            }
+        }
+        if !usdzExported {
             let fallbackScene = makeFallbackScene(
                 segments: segments,
                 mesh: data.mesh,
@@ -237,6 +242,12 @@ enum TextureBakeProcessor {
         ]
         let jsonData = try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys])
         try jsonData.write(to: jsonURL)
+
+        let previewScene = makePreviewScene(
+            segments: segments,
+            mesh: data.mesh,
+            previewURLs: previewURLs
+        )
 
         progress(1, "完成")
         return TextureScanResult(
@@ -636,7 +647,7 @@ enum TextureBakeProcessor {
                 0,
                 [
                     kCGImageSourceCreateThumbnailFromImageAlways: true,
-                    kCGImageSourceThumbnailMaxPixelSize: 2048,
+                    kCGImageSourceThumbnailMaxPixelSize: 1024,
                     kCGImageSourceCreateThumbnailWithTransform: false
                 ] as CFDictionary
               ),
