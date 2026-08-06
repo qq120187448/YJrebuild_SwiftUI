@@ -348,7 +348,7 @@ final class MetalTextureBaker {
         );
         float3 toCamera = normalize(-cam.xyz);
         float cosAngle = dot(normal, toCamera);
-        if (cosAngle <= 0.25) {
+        if (abs(cosAngle) <= 0.25) {
             return float4(0);
         }
         float distance = length(cam.xyz);

@@ -267,6 +267,10 @@ struct TextureScanHistoryDetailView: View {
         URL(fileURLWithPath: record.jsonPath)
     }
 
+    private var packageURL: URL {
+        URL(fileURLWithPath: record.packagePath)
+    }
+
     private var textureURLs: [URL] {
         record.texturePaths.map { URL(fileURLWithPath: $0) }
     }
@@ -286,6 +290,11 @@ struct TextureScanHistoryDetailView: View {
                 Button {
                     showShare = true
                 } label: {
+                    Label("分享扫描包（照片+网格+位姿）", systemImage: "shippingbox")
+                }
+                Button {
+                    showShare = true
+                } label: {
                     Label("分享 USDZ / PLY / JSON / 纹理", systemImage: "square.and.arrow.up")
                 }
             }
@@ -293,7 +302,7 @@ struct TextureScanHistoryDetailView: View {
         .navigationTitle("实景建模记录")
         .sheet(isPresented: $showShare) {
             ActivityView(
-                activityItems: [usdzURL, plyURL, jsonURL] + textureURLs
+                activityItems: [packageURL, usdzURL, plyURL, jsonURL] + textureURLs
             )
         }
     }

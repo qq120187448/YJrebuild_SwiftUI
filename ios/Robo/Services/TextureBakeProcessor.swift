@@ -36,6 +36,7 @@ struct TextureScanResult {
     let objURL: URL
     let plyURL: URL
     let jsonURL: URL
+    let packageURL: URL
     let textureURLs: [URL]
     let previewScene: SCNScene?
 }
@@ -186,6 +187,12 @@ enum TextureBakeProcessor {
             }
         }
 
+        progress(0.86, "导出扫描包")
+        let packageURL = try TextureScanPackageExporter.export(
+            data: data,
+            outputDirectory: outputDirectory
+        )
+
         progress(0.9, "导出 USDZ / PLY / JSON")
         let usdzURL = outputDirectory.appendingPathComponent("texture-model.usdz")
         let objURL = outputDirectory.appendingPathComponent("texture-model.obj")
@@ -228,7 +235,7 @@ enum TextureBakeProcessor {
         let jsonURL = outputDirectory.appendingPathComponent("manifest.json")
         let manifest: [String: Any] = [
             "app": "RoboScan",
-            "version": "0.5.2",
+            "version": "0.5.3",
             "scanID": data.scanID.uuidString,
             "capturedAt": ISO8601DateFormatter().string(from: data.capturedAt),
             "deviceModel": data.deviceModel,
@@ -243,11 +250,13 @@ enum TextureBakeProcessor {
         let jsonData = try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys])
         try jsonData.write(to: jsonURL)
 
-        let previewScene = makePreviewScene(
-            segments: segments,
-            mesh: data.mesh,
-            previewURLs: previewURLs
-        )
+        let previewScene: SCNScene? = segments.count <= 12 && !previewURLs.isEmpty
+            ? makePreviewScene(
+                segments: segments,
+                mesh: data.mesh,
+                previewURLs: previewURLs
+            )
+            : nil
 
         progress(1, "完成")
         return TextureScanResult(
@@ -266,6 +275,7 @@ enum TextureBakeProcessor {
             objURL: objURL,
             plyURL: plyURL,
             jsonURL: jsonURL,
+            packageURL: packageURL,
             textureURLs: textureURLs,
             previewScene: previewScene
         )
@@ -396,7 +406,7 @@ enum TextureBakeProcessor {
         let distance = simd_length(toCamera)
         guard distance > 0.05, distance < 5 else { return nil }
         let cosAngle = simd_dot(normal, simd_normalize(toCamera))
-        guard cosAngle > 0.25 else { return nil }
+        guard abs(cosAngle) > 0.25 else { return nil }
         guard let color = image.sample(x: px, y: py) else { return nil }
 
         var weight = cosAngle * cosAngle / (1 + distance * distance)
@@ -441,7 +451,7 @@ enum TextureBakeProcessor {
                 }
                 let toCamera = SIMD3<Float>(-cameraPoint.x, -cameraPoint.y, -cameraPoint.z)
                 let cosAngle = simd_dot(segment.normal, simd_normalize(toCamera))
-                bestCos = max(bestCos, cosAngle)
+                bestCos = max(bestCos, abs(cosAngle))
             }
 
             guard visible >= 2 else { continue }

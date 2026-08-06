@@ -17,6 +17,7 @@ final class TextureScanRecord {
     var objPath: String
     var plyPath: String
     var jsonPath: String
+    var packagePath: String
     var texturePaths: [String]
 
     init(
@@ -34,6 +35,7 @@ final class TextureScanRecord {
         objPath: String,
         plyPath: String,
         jsonPath: String,
+        packagePath: String,
         texturePaths: [String]
     ) {
         self.scanID = scanID
@@ -50,6 +52,7 @@ final class TextureScanRecord {
         self.objPath = objPath
         self.plyPath = plyPath
         self.jsonPath = jsonPath
+        self.packagePath = packagePath
         self.texturePaths = texturePaths
     }
 }

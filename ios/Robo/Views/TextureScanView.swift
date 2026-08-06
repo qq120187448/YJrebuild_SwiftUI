@@ -835,7 +835,7 @@ private final class TextureScanARView: UIView, ARSessionDelegate {
             let distance = simd_length(toCamera)
             guard distance > 0.05, distance < 3 else { continue }
             let cosAngle = simd_dot(normal, simd_normalize(toCamera))
-            if cosAngle > 0.25 {
+            if abs(cosAngle) > 0.25 {
                 return true
             }
         }
@@ -962,6 +962,7 @@ struct TextureScanResultView: View {
 
     let result: TextureScanResult
     @State private var showShare = false
+    @State private var showPackageShare = false
     @State private var showDiscardConfirm = false
 
     var body: some View {
@@ -1063,6 +1064,19 @@ struct TextureScanResultView: View {
                 .padding(.horizontal, 16)
 
                 Button {
+                    showPackageShare = true
+                } label: {
+                    Label("导出扫描包（照片+网格+位姿）", systemImage: "shippingbox")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.teal)
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .padding(.horizontal, 16)
+
+                Button {
                     saveRecord()
                 } label: {
                     Label("保存历史记录", systemImage: "square.and.arrow.down")
@@ -1104,6 +1118,9 @@ struct TextureScanResultView: View {
                 activityItems: [result.usdzURL, result.plyURL, result.jsonURL] + result.textureURLs
             )
         }
+        .sheet(isPresented: $showPackageShare) {
+            ActivityView(activityItems: [result.packageURL])
+        }
     }
 
     private func saveRecord() {
@@ -1122,6 +1139,7 @@ struct TextureScanResultView: View {
             objPath: result.objURL.path,
             plyPath: result.plyURL.path,
             jsonPath: result.jsonURL.path,
+            packagePath: result.packageURL.path,
             texturePaths: result.textureURLs.map(\.path)
         )
         modelContext.insert(record)

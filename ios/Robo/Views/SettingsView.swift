@@ -23,7 +23,7 @@ struct SettingsView: View {
             Form {
                 Section("关于") {
                     LabeledContent("名称", value: "Robo 工程量扫描")
-                    LabeledContent("版本", value: "0.5.2")
+                    LabeledContent("版本", value: "0.5.3")
                     Text("基于 Robo 精简改造：只保留 LiDAR 房间扫描与工程量清单导出，数据仅保存在本机，不连接任何后端。")
                         .font(.caption)
                         .foregroundStyle(.secondary)

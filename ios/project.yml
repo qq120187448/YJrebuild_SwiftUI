@@ -25,7 +25,7 @@ settings:
     DEVELOPMENT_TEAM: R3Z5CY34Q5
     CODE_SIGN_STYLE: Automatic
     PRODUCT_NAME: RoboScan
-    MARKETING_VERSION: 0.5.2
+    MARKETING_VERSION: 0.5.3
     CURRENT_PROJECT_VERSION: 1
     SWIFT_VERSION: 5.9
     IPHONEOS_DEPLOYMENT_TARGET: 17.0
@@ -63,6 +63,8 @@ targets:
       - path: Robo/Services/TextureScanData.swift
       - path: Robo/Services/TextureBakeProcessor.swift
       - path: Robo/Services/MetalTextureBaker.swift
+      - path: Robo/Services/ZipWriter.swift
+      - path: Robo/Services/TextureScanPackageExporter.swift
       - path: Robo/Views/ActivityView.swift
       - path: Robo/Views/ContentView.swift
       - path: Robo/Views/CaptureHomeView.swift
