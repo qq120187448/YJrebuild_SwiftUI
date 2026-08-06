@@ -7,6 +7,9 @@ struct SettingsView: View {
     @Query(sort: \RoomScanRecord.capturedAt, order: .reverse)
     private var rooms: [RoomScanRecord]
 
+    @Query(sort: \TextureScanRecord.capturedAt, order: .reverse)
+    private var textureScans: [TextureScanRecord]
+
     @State private var showClearConfirm = false
     @State private var showPriceImporter = false
     @State private var priceMessage = ""
@@ -20,7 +23,7 @@ struct SettingsView: View {
             Form {
                 Section("关于") {
                     LabeledContent("名称", value: "Robo 工程量扫描")
-                    LabeledContent("版本", value: "0.5.1")
+                    LabeledContent("版本", value: "0.5.2")
                     Text("基于 Robo 精简改造：只保留 LiDAR 房间扫描与工程量清单导出，数据仅保存在本机，不连接任何后端。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -30,7 +33,7 @@ struct SettingsView: View {
                     Button("清空所有扫描记录", role: .destructive) {
                         showClearConfirm = true
                     }
-                    .disabled(rooms.isEmpty)
+                    .disabled(rooms.isEmpty && textureScans.isEmpty)
                 }
 
                 Section("物体工程扫描") {
@@ -137,6 +140,9 @@ struct SettingsView: View {
                             PhotoStorage.delete(fileName: fileName)
                         }
                         modelContext.delete(room)
+                    }
+                    for record in textureScans {
+                        modelContext.delete(record)
                     }
                     try? modelContext.save()
                 }

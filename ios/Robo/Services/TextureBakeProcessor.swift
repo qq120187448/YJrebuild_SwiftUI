@@ -5,6 +5,7 @@ import ModelIO
 import SceneKit
 import simd
 import UIKit
+import UniformTypeIdentifiers
 
 struct TextureWallSegment {
     let faces: [Int]
@@ -36,6 +37,7 @@ struct TextureScanResult {
     let plyURL: URL
     let jsonURL: URL
     let textureURLs: [URL]
+    let previewScene: SCNScene?
 }
 
 enum TextureScanError: LocalizedError {
@@ -150,6 +152,7 @@ enum TextureBakeProcessor {
         }
 
         var textureURLs: [URL] = []
+        var previewURLs: [URL] = []
         var segmentInfo: [[String: Any]] = []
 
         for (index, segment) in segments.enumerated() {
@@ -164,6 +167,12 @@ enum TextureBakeProcessor {
                     if FileManager.default.fileExists(atPath: textureURL.path) {
                         writtenURL = textureURL
                         textureURLs.append(textureURL)
+                        let previewURL = outputDirectory.appendingPathComponent(
+                            "wall-preview-\(index + 1).jpg"
+                        )
+                        if Self.writePreview(from: textureURL, to: previewURL) {
+                            previewURLs.append(previewURL)
+                        }
                     }
                 }
 
@@ -176,6 +185,12 @@ enum TextureBakeProcessor {
                 ])
             }
         }
+
+        let previewScene = makePreviewScene(
+            segments: segments,
+            mesh: data.mesh,
+            previewURLs: previewURLs
+        )
 
         progress(0.9, "导出 USDZ / PLY / JSON")
         let usdzURL = outputDirectory.appendingPathComponent("texture-model.usdz")
@@ -208,7 +223,7 @@ enum TextureBakeProcessor {
         let jsonURL = outputDirectory.appendingPathComponent("manifest.json")
         let manifest: [String: Any] = [
             "app": "RoboScan",
-            "version": "0.5.1",
+            "version": "0.5.2",
             "scanID": data.scanID.uuidString,
             "capturedAt": ISO8601DateFormatter().string(from: data.capturedAt),
             "deviceModel": data.deviceModel,
@@ -240,7 +255,8 @@ enum TextureBakeProcessor {
             objURL: objURL,
             plyURL: plyURL,
             jsonURL: jsonURL,
-            textureURLs: textureURLs
+            textureURLs: textureURLs,
+            previewScene: previewScene
         )
     }
 
@@ -457,7 +473,7 @@ enum TextureBakeProcessor {
     private static func makeGeometry(
         for segment: TextureWallSegment,
         mesh: TextureScanMesh,
-        textureURL: URL?
+        textureContents: Any?
     ) -> SCNGeometry {
         let soup = triangleSoup(for: segment, mesh: mesh)
         let positions = soup.positions.map {
@@ -487,8 +503,8 @@ enum TextureBakeProcessor {
         let material = SCNMaterial()
         material.lightingModel = .lambert
         material.isDoubleSided = true
-        if let textureURL {
-            material.diffuse.contents = textureURL
+        if let textureContents {
+            material.diffuse.contents = textureContents
         } else {
             material.diffuse.contents = UIColor(red: 0.75, green: 0.8, blue: 0.86, alpha: 1)
         }
@@ -504,30 +520,44 @@ enum TextureBakeProcessor {
         textureURLs: [URL],
         to objURL: URL
     ) throws {
-        var obj = "# RoboScan 0.5.1\n"
+        let mtlURL = objURL.deletingPathExtension().appendingPathExtension("mtl")
         var mtl = "# RoboScan materials\n"
-        var vertexOffset = 0
-
-        for (index, segment) in segments.enumerated() {
-            let soup = triangleSoup(for: segment, mesh: mesh)
-            guard !soup.positions.isEmpty else { continue }
-
+        for (index, _) in segments.enumerated() {
             mtl += "newmtl wall\(index + 1)\n"
             mtl += "Kd 1 1 1\n"
             if index < textureURLs.count {
                 mtl += "map_Kd \(textureURLs[index].lastPathComponent)\n"
             }
             mtl += "\n"
-            obj += "usemtl wall\(index + 1)\n"
+        }
+        try mtl.write(to: mtlURL, atomically: true, encoding: .utf8)
+
+        FileManager.default.createFile(atPath: objURL.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: objURL)
+        defer {
+            try? handle.close()
+        }
+        func write(_ text: String) {
+            handle.write(Data(text.utf8))
+        }
+        write("# RoboScan 0.5.2\n")
+        write("mtllib \(mtlURL.lastPathComponent)\n")
+
+        var buffer = ""
+        var vertexOffset = 0
+        for (index, segment) in segments.enumerated() {
+            let soup = triangleSoup(for: segment, mesh: mesh)
+            guard !soup.positions.isEmpty else { continue }
+            buffer += "usemtl wall\(index + 1)\n"
 
             for position in soup.positions {
-                obj += String(format: "v %.5f %.5f %.5f\n", position.x, position.y, position.z)
+                buffer += String(format: "v %.5f %.5f %.5f\n", position.x, position.y, position.z)
             }
             for normal in soup.normals {
-                obj += String(format: "vn %.5f %.5f %.5f\n", normal.x, normal.y, normal.z)
+                buffer += String(format: "vn %.5f %.5f %.5f\n", normal.x, normal.y, normal.z)
             }
             for uv in soup.uvs {
-                obj += String(format: "vt %.5f %.5f\n", uv.x, 1 - uv.y)
+                buffer += String(format: "vt %.5f %.5f\n", uv.x, 1 - uv.y)
             }
 
             let faceCount = soup.positions.count / 3
@@ -535,14 +565,17 @@ enum TextureBakeProcessor {
                 let a = vertexOffset + face * 3 + 1
                 let b = vertexOffset + face * 3 + 2
                 let c = vertexOffset + face * 3 + 3
-                obj += "f \(a)/\(a)/\(a) \(b)/\(b)/\(b) \(c)/\(c)/\(c)\n"
+                buffer += "f \(a)/\(a)/\(a) \(b)/\(b)/\(b) \(c)/\(c)/\(c)\n"
             }
             vertexOffset += soup.positions.count
+            if buffer.count > 65_536 {
+                write(buffer)
+                buffer = ""
+            }
         }
-
-        let mtlURL = objURL.deletingPathExtension().appendingPathExtension("mtl")
-        try obj.write(to: objURL, atomically: true, encoding: .utf8)
-        try mtl.write(to: mtlURL, atomically: true, encoding: .utf8)
+        if !buffer.isEmpty {
+            write(buffer)
+        }
     }
 
     private static func addLights(to scene: SCNScene) {
@@ -569,12 +602,57 @@ enum TextureBakeProcessor {
         addLights(to: scene)
         for (index, segment) in segments.enumerated() {
             let textureURL = index < textureURLs.count ? textureURLs[index] : nil
-            let geometry = makeGeometry(for: segment, mesh: mesh, textureURL: textureURL)
+            let geometry = makeGeometry(for: segment, mesh: mesh, textureContents: textureURL)
             let node = SCNNode(geometry: geometry)
             node.name = "wall-\(index + 1)"
             scene.rootNode.addChildNode(node)
         }
         return scene
+    }
+
+    private static func makePreviewScene(
+        segments: [TextureWallSegment],
+        mesh: TextureScanMesh,
+        previewURLs: [URL]
+    ) -> SCNScene {
+        let scene = SCNScene()
+        addLights(to: scene)
+        for (index, segment) in segments.enumerated() {
+            let contents: Any? = index < previewURLs.count
+                ? (UIImage(contentsOfFile: previewURLs[index].path) ?? UIColor(red: 0.75, green: 0.8, blue: 0.86, alpha: 1))
+                : UIColor(red: 0.75, green: 0.8, blue: 0.86, alpha: 1)
+            let geometry = makeGeometry(for: segment, mesh: mesh, textureContents: contents)
+            let node = SCNNode(geometry: geometry)
+            node.name = "wall-\(index + 1)"
+            scene.rootNode.addChildNode(node)
+        }
+        return scene
+    }
+
+    private static func writePreview(from sourceURL: URL, to previewURL: URL) -> Bool {
+        guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(
+                source,
+                0,
+                [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 2048,
+                    kCGImageSourceCreateThumbnailWithTransform: false
+                ] as CFDictionary
+              ),
+              let destination = CGImageDestinationCreateWithURL(
+                previewURL as CFURL,
+                UTType.jpeg.identifier as CFString,
+                1,
+                nil
+              ) else {
+            return false
+        }
+        let properties: [CFString: Any] = [
+            kCGImageDestinationLossyCompressionQuality: 0.85
+        ]
+        CGImageDestinationAddImage(destination, image, properties as CFDictionary)
+        return CGImageDestinationFinalize(destination)
     }
 
     private static func writePLY(
@@ -583,13 +661,45 @@ enum TextureBakeProcessor {
         textureURLs: [URL],
         to url: URL
     ) throws {
-        var vertices: [String] = []
-        var faces: [String] = []
+        var vertexCount = 0
+        var faceCount = 0
+        for segment in segments {
+            vertexCount += segment.faces.count * 3
+            faceCount += segment.faces.count
+        }
+        guard vertexCount > 0 else {
+            throw TextureScanError.exportFailed("PLY 没有可导出的几何数据")
+        }
 
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: url)
+        defer {
+            try? handle.close()
+        }
+        func write(_ text: String) {
+            handle.write(Data(text.utf8))
+        }
+
+        var header = "ply\n"
+        header += "format ascii 1.0\n"
+        header += "comment generated by RoboScan 0.5.2\n"
+        header += "element vertex \(vertexCount)\n"
+        header += "property float x\n"
+        header += "property float y\n"
+        header += "property float z\n"
+        header += "property uchar red\n"
+        header += "property uchar green\n"
+        header += "property uchar blue\n"
+        header += "element face \(faceCount)\n"
+        header += "property list uchar int vertex_indices\n"
+        header += "end_header\n"
+        write(header)
+
+        var buffer = ""
+        var vertexCursor = 0
         for (index, segment) in segments.enumerated() {
             let texture = index < textureURLs.count ? RGBAImage(url: textureURLs[index]) : nil
             for face in segment.faces {
-                var local: [Int] = []
                 for offset in 0..<3 {
                     let globalIndex = mesh.indices[face * 3 + offset]
                     let point = mesh.vertices[globalIndex]
@@ -607,35 +717,22 @@ enum TextureBakeProcessor {
                             b = UInt8(min(255, max(0, color.b)))
                         }
                     }
-                    vertices.append(String(
-                        format: "%.5f %.5f %.5f %d %d %d",
+                    buffer += String(
+                        format: "%.5f %.5f %.5f %d %d %d\n",
                         point.x, point.y, point.z, Int32(r), Int32(g), Int32(b)
-                    ))
-                    local.append(vertices.count - 1)
+                    )
                 }
-                faces.append("3 \(local[0]) \(local[1]) \(local[2])")
+                buffer += "3 \(vertexCursor) \(vertexCursor + 1) \(vertexCursor + 2)\n"
+                vertexCursor += 3
+                if buffer.count > 65_536 {
+                    write(buffer)
+                    buffer = ""
+                }
             }
         }
-
-        guard !vertices.isEmpty else {
-            throw TextureScanError.exportFailed("PLY 没有可导出的几何数据")
+        if !buffer.isEmpty {
+            write(buffer)
         }
-        var text = "ply\n"
-        text += "format ascii 1.0\n"
-        text += "comment generated by RoboScan 0.5\n"
-        text += "element vertex \(vertices.count)\n"
-        text += "property float x\n"
-        text += "property float y\n"
-        text += "property float z\n"
-        text += "property uchar red\n"
-        text += "property uchar green\n"
-        text += "property uchar blue\n"
-        text += "element face \(faces.count)\n"
-        text += "property list uchar int vertex_indices\n"
-        text += "end_header\n"
-        text += vertices.joined(separator: "\n") + "\n"
-        text += faces.joined(separator: "\n") + "\n"
-        try text.write(to: url, atomically: true, encoding: .utf8)
     }
 }
 

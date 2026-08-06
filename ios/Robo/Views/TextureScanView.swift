@@ -20,6 +20,7 @@ struct TextureScanView: View {
     @State private var errorMessage: String?
     @State private var progress: Double = 0
     @State private var progressText = "准备"
+    @State private var originalBrightness: CGFloat = 1
 
     private enum Phase {
         case instructions
@@ -79,6 +80,22 @@ struct TextureScanView: View {
                 }
             }
             .preferredColorScheme(.dark)
+            .onAppear {
+                originalBrightness = UIScreen.main.brightness
+            }
+            .onChange(of: phase) { _, newPhase in
+                if newPhase == .scanning {
+                    UIApplication.shared.isIdleTimerDisabled = true
+                    UIScreen.main.brightness = 1
+                } else {
+                    UIApplication.shared.isIdleTimerDisabled = false
+                    UIScreen.main.brightness = originalBrightness
+                }
+            }
+            .onDisappear {
+                UIApplication.shared.isIdleTimerDisabled = false
+                UIScreen.main.brightness = originalBrightness
+            }
         }
     }
 
@@ -894,19 +911,57 @@ private final class TextureScanARView: UIView, ARSessionDelegate {
             guard let value = element.value as? Int8, value != 0 else { return partial }
             return partial + String(UnicodeScalar(UInt8(value)))
         }
-        return identifier.isEmpty ? "iPhone" : identifier
+        let names: [String: String] = [
+            "iPhone12,1": "iPhone 11",
+            "iPhone12,3": "iPhone 11 Pro",
+            "iPhone12,5": "iPhone 11 Pro Max",
+            "iPhone13,1": "iPhone 12 mini",
+            "iPhone13,2": "iPhone 12",
+            "iPhone13,3": "iPhone 12 Pro",
+            "iPhone13,4": "iPhone 12 Pro Max",
+            "iPhone14,2": "iPhone 13 Pro",
+            "iPhone14,3": "iPhone 13 Pro Max",
+            "iPhone14,4": "iPhone 13 mini",
+            "iPhone14,5": "iPhone 13",
+            "iPhone14,7": "iPhone 14",
+            "iPhone14,8": "iPhone 14 Plus",
+            "iPhone15,2": "iPhone 14 Pro",
+            "iPhone15,3": "iPhone 14 Pro Max",
+            "iPhone15,4": "iPhone 15",
+            "iPhone15,5": "iPhone 15 Plus",
+            "iPhone16,1": "iPhone 15 Pro",
+            "iPhone16,2": "iPhone 15 Pro Max",
+            "iPhone17,1": "iPhone 16 Pro",
+            "iPhone17,2": "iPhone 16 Pro Max",
+            "iPhone17,3": "iPhone 16",
+            "iPhone17,4": "iPhone 16 Plus",
+            "iPhone18,1": "iPhone 17 Pro",
+            "iPhone18,2": "iPhone 17 Pro Max"
+        ]
+        return names[identifier] ?? (identifier.isEmpty ? "iPhone" : identifier)
     }
 }
 
 struct TextureScanResultView: View {
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
+
     let result: TextureScanResult
     @State private var showShare = false
+    @State private var showDiscardConfirm = false
 
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
                 GroupBox {
-                    if let scene = try? SCNScene(url: result.objURL, options: nil) {
+                    if let scene = result.previewScene {
+                        SceneView(
+                            scene: scene,
+                            options: [.autoenablesDefaultLighting, .allowsCameraControl]
+                        )
+                        .frame(height: 340)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    } else if let scene = try? SCNScene(url: result.objURL, options: nil) {
                         SceneView(
                             scene: scene,
                             options: [.autoenablesDefaultLighting, .allowsCameraControl]
@@ -949,6 +1004,37 @@ struct TextureScanResultView: View {
                     Label("扫描信息", systemImage: "info.circle")
                 }
 
+                if !result.textureURLs.isEmpty {
+                    GroupBox {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 10) {
+                                ForEach(result.textureURLs.indices, id: \.self) { index in
+                                    let url = result.textureURLs[index]
+                                    VStack(spacing: 4) {
+                                        if let image = UIImage(contentsOfFile: url.path) {
+                                            Image(uiImage: image)
+                                                .resizable()
+                                                .scaledToFill()
+                                                .frame(width: 120, height: 90)
+                                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                        } else {
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .fill(Color.white.opacity(0.1))
+                                                .frame(width: 120, height: 90)
+                                        }
+                                        Text("墙面 \(index + 1)")
+                                            .font(.caption2)
+                                            .foregroundStyle(.white.opacity(0.65))
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    } label: {
+                        Label("墙面纹理", systemImage: "photo.on.rectangle")
+                    }
+                }
+
                 Button {
                     showShare = true
                 } label: {
@@ -961,15 +1047,72 @@ struct TextureScanResultView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 .padding(.horizontal, 16)
+
+                Button {
+                    saveRecord()
+                } label: {
+                    Label("保存历史记录", systemImage: "square.and.arrow.down")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.blue)
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .padding(.horizontal, 16)
+
+                Button(role: .destructive) {
+                    showDiscardConfirm = true
+                } label: {
+                    Label("不保存并退出", systemImage: "trash")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.white.opacity(0.08))
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .padding(.horizontal, 16)
             }
             .padding(.vertical, 16)
         }
         .background(Color(red: 0.04, green: 0.06, blue: 0.11).ignoresSafeArea())
+        .alert("不保存并退出？", isPresented: $showDiscardConfirm) {
+            Button("不保存", role: .destructive) {
+                dismiss()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("当前扫描结果不会被保存到历史记录。")
+        }
         .sheet(isPresented: $showShare) {
             ActivityView(
                 activityItems: [result.usdzURL, result.plyURL, result.jsonURL] + result.textureURLs
             )
         }
+    }
+
+    private func saveRecord() {
+        let record = TextureScanRecord(
+            scanID: result.scanID,
+            capturedAt: result.capturedAt,
+            deviceModel: result.deviceModel,
+            deviceMaxResolution: result.deviceMaxResolution,
+            photoCount: result.photoCount,
+            closeUpCount: result.closeUpCount,
+            wallCount: result.wallCount,
+            atlasSize: result.atlasSize,
+            duration: result.duration,
+            outputDirectoryPath: result.outputDirectory.path,
+            usdzPath: result.usdzURL.path,
+            objPath: result.objURL.path,
+            plyPath: result.plyURL.path,
+            jsonPath: result.jsonURL.path,
+            texturePaths: result.textureURLs.map(\.path)
+        )
+        modelContext.insert(record)
+        try? modelContext.save()
+        dismiss()
     }
 
     private func statCell(value: String, label: String) -> some View {

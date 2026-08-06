@@ -5,6 +5,7 @@ enum ScanHistoryFilter: Hashable {
     case all
     case room
     case object
+    case texture
 }
 
 struct ScanHistoryView: View {
@@ -16,6 +17,9 @@ struct ScanHistoryView: View {
 
     @Query(sort: \ObjectScanRecord.capturedAt, order: .reverse)
     private var objectScans: [ObjectScanRecord]
+
+    @Query(sort: \TextureScanRecord.capturedAt, order: .reverse)
+    private var textureScans: [TextureScanRecord]
 
     @State private var showingLiDAR = false
     @State private var shareURLs: [URL] = []
@@ -55,6 +59,7 @@ struct ScanHistoryView: View {
                         Text("全部").tag(ScanHistoryFilter.all)
                         Text("房间").tag(ScanHistoryFilter.room)
                         Text("物体").tag(ScanHistoryFilter.object)
+                        Text("实景").tag(ScanHistoryFilter.texture)
                     }
                     .pickerStyle(.segmented)
                 }
@@ -139,6 +144,38 @@ struct ScanHistoryView: View {
                         }
                     }
                 }
+
+                if filter == .all || filter == .texture {
+                    if textureScans.isEmpty {
+                        emptyRow("暂无实景建模记录", systemImage: "camera.aperture")
+                    } else {
+                        Section("实景建模") {
+                            ForEach(textureScans) { record in
+                                NavigationLink(value: record) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("实景建模 \(record.capturedAt.formatted(date: .abbreviated, time: .shortened))")
+                                            .font(.headline)
+                                        Text("\(record.deviceModel) · \(record.photoCount) 张照片 · \(record.wallCount) 面墙")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Text("图集 \(record.atlasSize) · 近距 \(record.closeUpCount) 张")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .padding(.vertical, 2)
+                                }
+                                .swipeActions(edge: .trailing) {
+                                    Button(role: .destructive) {
+                                        modelContext.delete(record)
+                                        try? modelContext.save()
+                                    } label: {
+                                        Label("删除", systemImage: "trash")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             .navigationTitle("历史记录")
             .navigationDestination(for: RoomScanRecord.self) { room in
@@ -146,6 +183,9 @@ struct ScanHistoryView: View {
             }
             .navigationDestination(for: ObjectScanRecord.self) { record in
                 ObjectScanDetailView(record: record)
+            }
+            .navigationDestination(for: TextureScanRecord.self) { record in
+                TextureScanHistoryDetailView(record: record)
             }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -179,7 +219,7 @@ struct ScanHistoryView: View {
         .padding(.vertical, 20)
     }
 
-    private func exportBuilding(_ group: BuildingGroup) {
+private func exportBuilding(_ group: BuildingGroup) {
         do {
             let inputs = try group.rooms.map { record -> QuantityTakeoffExporter.RoomExportInput in
                 let baseRoom = try RoomDataProcessor.decodeFullRoom(record.fullRoomDataJSON)
@@ -203,6 +243,58 @@ struct ScanHistoryView: View {
             shareURLs = try QuantityTakeoffExporter.makeMultiRoomExportFiles(inputs: inputs)
         } catch {
             // 导出失败时保持静默，避免打断列表页
+        }
+    }
+}
+
+struct TextureScanHistoryDetailView: View {
+    let record: TextureScanRecord
+    @State private var showShare = false
+
+    private var usdzURL: URL {
+        URL(fileURLWithPath: record.usdzPath)
+    }
+
+    private var objURL: URL {
+        URL(fileURLWithPath: record.objPath)
+    }
+
+    private var plyURL: URL {
+        URL(fileURLWithPath: record.plyPath)
+    }
+
+    private var jsonURL: URL {
+        URL(fileURLWithPath: record.jsonPath)
+    }
+
+    private var textureURLs: [URL] {
+        record.texturePaths.map { URL(fileURLWithPath: $0) }
+    }
+
+    var body: some View {
+        List {
+            Section("扫描信息") {
+                LabeledContent("设备", value: record.deviceModel)
+                LabeledContent("分辨率", value: record.deviceMaxResolution)
+                LabeledContent("照片数", value: "\(record.photoCount)")
+                LabeledContent("近距补拍", value: "\(record.closeUpCount)")
+                LabeledContent("墙面分段", value: "\(record.wallCount)")
+                LabeledContent("纹理图集", value: "\(record.atlasSize)")
+            }
+
+            Section("导出") {
+                Button {
+                    showShare = true
+                } label: {
+                    Label("分享 USDZ / PLY / JSON / 纹理", systemImage: "square.and.arrow.up")
+                }
+            }
+        }
+        .navigationTitle("实景建模记录")
+        .sheet(isPresented: $showShare) {
+            ActivityView(
+                activityItems: [usdzURL, plyURL, jsonURL] + textureURLs
+            )
         }
     }
 }
