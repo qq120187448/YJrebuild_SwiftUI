@@ -13,6 +13,7 @@ struct CaptureHomeView: View {
 
     @State private var showingLiDARScan = false
     @State private var showingObjectScan = false
+    @State private var showingTextureScan = false
 
     var body: some View {
         NavigationStack {
@@ -71,6 +72,16 @@ struct CaptureHomeView: View {
                                 selectedTab = 1
                             }
                         )
+
+                        textureFeatureCard(
+                            title: "实景建模",
+                            subtitle: "ARKit + 主摄最高分辨率拍摄，本机生成 UV 纹理 USDZ",
+                            icon: "camera.aperture",
+                            startTitle: "开始实景建模",
+                            startAction: {
+                                showingTextureScan = true
+                            }
+                        )
                     }
                     .padding(16)
                 }
@@ -84,6 +95,66 @@ struct CaptureHomeView: View {
         .fullScreenCover(isPresented: $showingObjectScan) {
             ObjectScanView()
         }
+        .fullScreenCover(isPresented: $showingTextureScan) {
+            TextureScanView()
+        }
+    }
+
+    private func textureFeatureCard(
+        title: String,
+        subtitle: String,
+        icon: String,
+        startTitle: String,
+        startAction: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 30))
+                    .foregroundColor(.white)
+                    .frame(width: 52, height: 52)
+                    .background(
+                        LinearGradient(
+                            colors: [Color.teal.opacity(0.85), Color.blue.opacity(0.7)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.title3.bold())
+                        .foregroundStyle(.white)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+            }
+
+            Button(action: startAction) {
+                Label(startTitle, systemImage: icon)
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(
+                        LinearGradient(
+                            colors: [Color.teal, Color.blue],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .padding(18)
+        .background(Color(red: 0.08, green: 0.11, blue: 0.18))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(Color.teal.opacity(0.3), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
     private func featureCard(

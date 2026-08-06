@@ -1,0 +1,43 @@
+import Foundation
+import simd
+
+struct TextureScanMesh {
+    var vertices: [SIMD3<Float>] = []
+    var indices: [Int] = []
+    var faceClassifications: [Int] = []
+
+    var faceCount: Int {
+        indices.count / 3
+    }
+}
+
+struct TexturePhotoFrame {
+    let id: String
+    let fileURL: URL
+    let timestamp: TimeInterval
+    let cameraTransform: simd_float4x4
+    let intrinsics: simd_float3x3
+    let imageWidth: Int
+    let imageHeight: Int
+    let isCloseUp: Bool
+    let distance: Float
+}
+
+struct TextureScanData {
+    let scanID: UUID
+    let capturedAt: Date
+    let deviceModel: String
+    let deviceMaxResolution: String
+    let duration: TimeInterval
+    var mesh: TextureScanMesh
+    var photos: [TexturePhotoFrame]
+}
+
+struct TextureScanStatus {
+    var photoCount = 0
+    var closeUpCount = 0
+    var distance: Float = 0
+    var isCloseUp = false
+    var meshFaceCount = 0
+    var maxResolution = "自动"
+}
