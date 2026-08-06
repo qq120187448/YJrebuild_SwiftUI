@@ -1,5 +1,6 @@
 import ARKit
 import CoreImage
+import CoreVideo
 import Darwin
 import SceneKit
 import simd
@@ -403,16 +404,22 @@ private final class TextureScanARView: UIView, ARSessionDelegate {
         frameCount += 1
 
         if let depth = frame.sceneDepth {
-            let width = depth.depthMap.width
-            let height = depth.depthMap.height
+            let depthBuffer = depth.depthMap
+            let width = CVPixelBufferGetWidth(depthBuffer)
+            let height = CVPixelBufferGetHeight(depthBuffer)
             if width > 0, height > 0 {
                 let x = min(width - 1, width / 2)
                 let y = min(height - 1, height / 2)
-                let pointer = depth.depthMap.buffer.contents()
-                    .assumingMemoryBound(to: Float32.self)
-                let value = pointer[y * width + x]
-                if value.isFinite, value > 0 {
-                    lastDistance = value
+                CVPixelBufferLockBaseAddress(depthBuffer, .readOnly)
+                defer {
+                    CVPixelBufferUnlockBaseAddress(depthBuffer, .readOnly)
+                }
+                if let base = CVPixelBufferGetBaseAddress(depthBuffer) {
+                    let pointer = base.assumingMemoryBound(to: Float32.self)
+                    let value = pointer[y * width + x]
+                    if value.isFinite, value > 0 {
+                        lastDistance = value
+                    }
                 }
             }
         }
