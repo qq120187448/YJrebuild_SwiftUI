@@ -108,18 +108,35 @@ enum ObjectBoxVisual {
         addFlow(to: root, extent: extent, radius: max(flowRadius, 0.0005))
     }
 
-    static func addAxes(to root: SCNNode, extent: SIMD3<Float>) {
+    static func addAxes(
+        to root: SCNNode,
+        extent: SIMD3<Float>,
+        cameraPosition: SIMD3<Float>,
+        pixelLineWidth: CGFloat,
+        viewportHeight: CGFloat,
+        fovYDegrees: CGFloat
+    ) {
         let definitions: [(SIMD3<Float>, UIColor, String, Float)] = [
             (SIMD3<Float>(1, 0, 0), .systemRed, "X", extent.x),
             (SIMD3<Float>(0, 0, 1), .systemGreen, "Y", extent.z),
             (SIMD3<Float>(0, 1, 0), .systemBlue, "Z", extent.y)
         ]
 
+        var axisEdges: [Edge] = []
         for (axis, color, label, lengthValue) in definitions {
             let length = max(lengthValue, 0.01)
             guard length > 0.01 else { continue }
 
-            let cylinder = SCNCylinder(radius: 0.005, height: CGFloat(length))
+            let lineRadius = max(
+                lineWorldRadius(
+                    distance: simd_length(cameraPosition - axis * length * 0.5),
+                    pixelLineWidth: pixelLineWidth,
+                    viewportHeight: viewportHeight,
+                    fovYDegrees: fovYDegrees
+                ),
+                0.0005
+            )
+            let cylinder = SCNCylinder(radius: CGFloat(lineRadius), height: CGFloat(length))
             cylinder.firstMaterial = makeMaterial(color: color)
             let lineNode = SCNNode(geometry: cylinder)
             lineNode.position = SCNVector3(
@@ -133,34 +150,53 @@ enum ObjectBoxVisual {
             )
             root.addChildNode(lineNode)
 
-            let cone = SCNCone(topRadius: 0, bottomRadius: 0.03, height: 0.09)
+            let coneRadius = max(lineRadius * 6, 0.0008)
+            let coneHeight = max(coneRadius * 3, 0.002)
+            let cone = SCNCone(topRadius: 0, bottomRadius: CGFloat(coneRadius), height: CGFloat(coneHeight))
             cone.firstMaterial = makeMaterial(color: color)
             let coneNode = SCNNode(geometry: cone)
-            let head = axis * (length + 0.045)
+            let head = axis * (length + coneHeight * 0.5)
             coneNode.position = SCNVector3(head.x, head.y, head.z)
             coneNode.simdOrientation = simd_quatf(
                 from: SIMD3<Float>(0, 1, 0),
                 to: axis
             )
             root.addChildNode(coneNode)
+            axisEdges.append(
+                Edge(
+                    axis: axis,
+                    length: length,
+                    offset: axis * length * 0.5
+                )
+            )
 
             let valueText = SCNText(
                 string: "\(label) \(String(format: "%.2f", length))",
                 extrusionDepth: 0.01
             )
-            valueText.font = UIFont.systemFont(ofSize: 0.12, weight: .semibold)
+            valueText.font = UIFont.systemFont(ofSize: 0.08, weight: .semibold)
             valueText.firstMaterial = makeMaterial(color: color)
             let textNode = SCNNode(geometry: valueText)
-            let labelPosition = axis * (length + 0.16) + SIMD3<Float>(0, 0.06, 0)
+            let labelPosition = axis * (length + coneHeight + 0.06) + SIMD3<Float>(0, 0.04, 0)
             textNode.position = SCNVector3(
                 labelPosition.x,
                 labelPosition.y,
                 labelPosition.z
             )
-            textNode.scale = SCNVector3(0.7, 0.7, 0.7)
+            textNode.scale = SCNVector3(0.5, 0.5, 0.5)
             textNode.constraints = [SCNBillboardConstraint()]
             root.addChildNode(textNode)
         }
+        let flowRadius = max(
+            lineWorldRadius(
+                distance: simd_length(cameraPosition - SIMD3<Float>.zero),
+                pixelLineWidth: pixelLineWidth,
+                viewportHeight: viewportHeight,
+                fovYDegrees: fovYDegrees
+            ),
+            0.0005
+        )
+        addFlowEdges(to: root, edges: axisEdges, radius: flowRadius)
     }
 
     static func makeGroundShadowNode(
@@ -200,10 +236,18 @@ enum ObjectBoxVisual {
         extent: SIMD3<Float>,
         radius: Float
     ) {
-        let duration: TimeInterval = 2.4
+        addFlowEdges(to: root, edges: edges(extent: extent), radius: radius)
+    }
+
+    private static func addFlowEdges(
+        to root: SCNNode,
+        edges: [Edge],
+        radius: Float
+    ) {
+        let duration: TimeInterval = 1.6
         let segmentCount = 24
-        for edge in edges(extent: extent) {
-            let bandSpan = min(max(edge.length * 0.28, 0.12), edge.length)
+        for edge in edges {
+            let bandSpan = min(max(edge.length * 0.42, 0.10), edge.length)
             let segmentHeight = CGFloat(bandSpan) / CGFloat(segmentCount)
             let offsets: [Float] = (0..<segmentCount).map { index in
                 -bandSpan * 0.5 + bandSpan * (Float(index) + 0.5) / Float(segmentCount)
@@ -212,7 +256,7 @@ enum ObjectBoxVisual {
                 let localOffset = offsets[index]
                 let u = (localOffset + bandSpan * 0.5) / bandSpan
                 let smooth = Float(sin(Double(u) * .pi))
-                let gray = 0.45 + 0.55 * smooth
+                let gray = 0.12 + 0.88 * smooth
                 let material = makeMaterial(color: UIColor(white: CGFloat(gray), alpha: 1))
                 let segment = SCNCylinder(radius: CGFloat(radius), height: segmentHeight)
                 segment.firstMaterial = material

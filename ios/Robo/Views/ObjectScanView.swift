@@ -100,6 +100,7 @@ struct ObjectScanView: View {
     @State private var result: ObjectScanProcessResult?
     @State private var selectedClusterIndex = 0
     @State private var isProcessing = false
+    @State private var autoRemoveBackground = false
     @State private var errorMessage: String?
     @State private var shareURLs: [URL] = []
     @State private var showDiscardConfirm = false
@@ -549,6 +550,22 @@ struct ObjectScanView: View {
                 }
             }
 
+            Section("地面/墙面识别") {
+                Toggle("自动剔除地面/墙面", isOn: $autoRemoveBackground)
+                    .onChange(of: autoRemoveBackground) { _, newValue in
+                        reprocess(withBackgroundRemoval: newValue)
+                    }
+                if let ground = current.metrics.recognizedGroundPointCount {
+                    LabeledContent("识别地面点数", value: "\(ground)")
+                }
+                if let wall = current.metrics.recognizedWallPointCount {
+                    LabeledContent("识别墙面点数", value: "\(wall)")
+                }
+                if let removed = current.metrics.backgroundRemovedCount {
+                    LabeledContent("已剔除地面/墙面", value: "\(removed)")
+                }
+            }
+
             Section("对象") {
                 TextField("对象名称", text: $objectName)
                     .textFieldStyle(.roundedBorder)
@@ -750,6 +767,8 @@ struct ObjectScanView: View {
     private func recomputeBoxMetrics(for volume: ObjectCropVolume) {
         guard let result else { return }
         isComputingBoxMetrics = true
+        let recognizedGround = result.metrics.recognizedGroundPointCount
+        let recognizedWall = result.metrics.recognizedWallPointCount
         let filtered = result.allPoints.filter {
             volume.contains(worldPoint: $0.position)
         }
@@ -765,6 +784,8 @@ struct ObjectScanView: View {
         lightweight.obbLengthM = Double(aligned.x)
         lightweight.obbWidthM = Double(alignedZ)
         lightweight.obbHeightM = Double(alignedY)
+        lightweight.recognizedGroundPointCount = recognizedGround
+        lightweight.recognizedWallPointCount = recognizedWall
         boxMetrics = lightweight
         metricsTask?.cancel()
         let useRealtime = realtimeVoxel
@@ -779,6 +800,8 @@ struct ObjectScanView: View {
                 metrics.obbLengthM = Double(alignedX)
                 metrics.obbWidthM = Double(alignedZ)
                 metrics.obbHeightM = Double(alignedY)
+                metrics.recognizedGroundPointCount = recognizedGround
+                metrics.recognizedWallPointCount = recognizedWall
                 self.boxMetrics = metrics
                 self.boxUSDZData = pair.voxelUSDZData
                 self.isComputingBoxMetrics = false
@@ -797,11 +820,13 @@ struct ObjectScanView: View {
         selectedClusterIndex = 0
         let points = capturedPoints
         let planes = capturedPlanes
+        let removeBackground = autoRemoveBackground
         Task.detached(priority: .userInitiated) {
             do {
                 let processed = try ObjectScanProcessor.process(
                     points: points,
-                    planes: planes
+                    planes: planes,
+                    autoRemoveBackground: removeBackground
                 )
                 await MainActor.run {
                     self.result = processed
@@ -816,6 +841,37 @@ struct ObjectScanView: View {
                     self.errorMessage = error.localizedDescription
                     self.isProcessing = false
                     self.phase = .instructions
+                }
+            }
+        }
+    }
+
+    private func reprocess(withBackgroundRemoval remove: Bool) {
+        guard result != nil, !capturedPoints.isEmpty else { return }
+        isProcessing = true
+        let points = capturedPoints
+        let planes = capturedPlanes
+        let volume = cropVolume
+        Task.detached(priority: .userInitiated) {
+            do {
+                let processed = try ObjectScanProcessor.process(
+                    points: points,
+                    planes: planes,
+                    autoRemoveBackground: remove
+                )
+                await MainActor.run {
+                    self.result = processed
+                    self.selectedClusterIndex = 0
+                    self.isProcessing = false
+                    if let volume {
+                        self.cropVolume = volume
+                        self.recomputeBoxMetrics(for: volume)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
+                    self.isProcessing = false
                 }
             }
         }
@@ -1040,6 +1096,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         var count: Float = 0
         var backgroundCount: Float = 0
         var colorSampleCount: Float = 0
+        var classificationVotes: [Int: Int] = [:]
     }
 
     override func viewDidLoad() {
@@ -1535,7 +1592,14 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             viewportHeight: sceneView.bounds.height,
             fovYDegrees: CGFloat(sceneView.pointOfView?.camera?.fieldOfView ?? 60)
         )
-        ObjectBoxVisual.addAxes(to: root, extent: volume.extent)
+        ObjectBoxVisual.addAxes(
+            to: root,
+            extent: volume.extent,
+            cameraPosition: cameraPosition,
+            pixelLineWidth: CGFloat(ObjectScanSettings.boxLineWidth),
+            viewportHeight: sceneView.bounds.height,
+            fovYDegrees: CGFloat(sceneView.pointOfView?.camera?.fieldOfView ?? 60)
+        )
         sceneView.scene.rootNode.addChildNode(root)
         cropBoxNode = root
         let groundY = scanGroundY ?? volume.origin.y
@@ -1819,7 +1883,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                 depthNode.renderingOrder = -20
                 node.addChildNode(depthNode)
             }
-            if let overlayGeometry = makeOverlayGeometry(anchor) {
+            if let overlayGeometry = makeClassifiedOverlayGeometry(anchor) {
                 let overlayNode = SCNNode(geometry: overlayGeometry)
                 overlayNode.renderingOrder = 10
                 node.addChildNode(overlayNode)
@@ -1879,19 +1943,101 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
         return geometry
     }
 
-    private func makeOverlayGeometry(_ anchor: ARMeshAnchor) -> SCNGeometry? {
-        guard let geometry = makeOcclusionGeometry(anchor) else { return nil }
+    private func makeClassifiedOverlayGeometry(_ anchor: ARMeshAnchor) -> SCNGeometry? {
+        let geo = anchor.geometry
+        guard geo.vertices.count > 0, geo.faces.count > 0 else { return nil }
+
+        let vertexBase = geo.vertices.buffer.contents()
+        let vertexStride = geo.vertices.stride
+        let vertexOffset = geo.vertices.offset
+        var vertices: [SCNVector3] = []
+        vertices.reserveCapacity(geo.vertices.count)
+        for i in 0..<geo.vertices.count {
+            let local = (vertexBase + vertexOffset + i * vertexStride)
+                .assumingMemoryBound(to: SIMD3<Float>.self).pointee
+            vertices.append(SCNVector3(local.x, local.y, local.z))
+        }
+
+        var classificationBuffer: UnsafeRawPointer?
+        var classificationStride = 0
+        var classificationOffset = 0
+        if let classificationSource = geo.classification {
+            classificationBuffer = UnsafeRawPointer(classificationSource.buffer.contents())
+            classificationStride = classificationSource.stride
+            classificationOffset = classificationSource.offset
+        }
+
+        let faceBuffer = geo.faces.buffer.contents()
+        let bytesPerIndex = geo.faces.bytesPerIndex
+        let faceCount = geo.faces.count
+        var groundIndices: [Int32] = []
+        var wallIndices: [Int32] = []
+
+        func readIndex(_ faceIndex: Int, _ byteOffset: Int) -> Int {
+            let baseOffset = faceIndex * 3 * bytesPerIndex
+            if bytesPerIndex == 2 {
+                return Int(faceBuffer.load(
+                    fromByteOffset: baseOffset + byteOffset,
+                    as: UInt16.self
+                ))
+            }
+            return Int(faceBuffer.load(
+                fromByteOffset: baseOffset + byteOffset,
+                as: UInt32.self
+            ))
+        }
+
+        for faceIndex in 0..<faceCount {
+            let i0 = readIndex(faceIndex, 0)
+            let i1 = readIndex(faceIndex, bytesPerIndex)
+            let i2 = readIndex(faceIndex, bytesPerIndex * 2)
+            var votes: [Int: Int] = [:]
+            if let classificationBuffer {
+                for vertexIndex in [i0, i1, i2] {
+                    let raw = classificationBuffer.load(
+                        fromByteOffset: classificationOffset + vertexIndex * classificationStride,
+                        as: UInt8.self
+                    )
+                    votes[Int(raw), default: 0] += 1
+                }
+            }
+            let dominant = votes.max { $0.value < $1.value }?.key
+            if dominant == 2 {
+                groundIndices.append(contentsOf: [Int32(i0), Int32(i1), Int32(i2)])
+            } else if dominant == 1 {
+                wallIndices.append(contentsOf: [Int32(i0), Int32(i1), Int32(i2)])
+            }
+        }
+
+        guard !groundIndices.isEmpty || !wallIndices.isEmpty else { return nil }
+        var elements: [SCNGeometryElement] = []
+        var materials: [SCNMaterial] = []
+        if !groundIndices.isEmpty {
+            elements.append(SCNGeometryElement(indices: groundIndices, primitiveType: .triangles))
+            materials.append(makeSurfaceOverlayMaterial(color: UIColor(white: 0.68, alpha: 0.28)))
+        }
+        if !wallIndices.isEmpty {
+            elements.append(SCNGeometryElement(indices: wallIndices, primitiveType: .triangles))
+            materials.append(makeSurfaceOverlayMaterial(color: UIColor(red: 0.32, green: 0.55, blue: 1.0, alpha: 0.28)))
+        }
+
+        let geometry = SCNGeometry(
+            sources: [SCNGeometrySource(vertices: vertices)],
+            elements: elements
+        )
+        geometry.materials = materials
+        return geometry
+    }
+
+    private func makeSurfaceOverlayMaterial(color: UIColor) -> SCNMaterial {
         let material = SCNMaterial()
         material.lightingModel = .constant
-        material.diffuse.contents = UIColor.white
-        material.emission.contents = UIColor.white
-        material.fillMode = .lines
-        material.transparency = 1
+        material.diffuse.contents = color
+        material.emission.contents = color
         material.blendMode = .alpha
         material.writesToDepthBuffer = false
         material.isDoubleSided = true
-        geometry.materials = [material]
-        return geometry
+        return material
     }
 
     private func compactVoxelMap() {
@@ -1907,6 +2053,9 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
             acc.count += accumulator.count
             acc.backgroundCount += accumulator.backgroundCount
             acc.colorSampleCount += accumulator.colorSampleCount
+            for (classification, voteCount) in accumulator.classificationVotes {
+                acc.classificationVotes[classification, default: 0] += voteCount
+            }
             merged[key] = acc
         }
         voxelMap = merged
@@ -1966,6 +2115,9 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                 accumulator.sum += world
                 if let classification, ObjectScanProcessor.isBackgroundClassification(classification) {
                     accumulator.backgroundCount += 1
+                }
+                if let classification {
+                    accumulator.classificationVotes[classification, default: 0] += 1
                 }
                 accumulator.count += 1
                 voxelMap[key] = accumulator
@@ -2059,6 +2211,9 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                 ? accumulator.sumColor / accumulator.colorSampleCount
                 : accumulator.sumColor * inv
             let isBackground = accumulator.backgroundCount >= accumulator.count
+            let bestClassification = accumulator.classificationVotes
+                .max { $0.value < $1.value }?
+                .key
             return ObjectPoint(
                 x: position.x,
                 y: position.y,
@@ -2066,7 +2221,7 @@ private final class ObjectScanARViewController: UIViewController, ARSessionDeleg
                 r: color.x,
                 g: color.y,
                 b: color.z,
-                classification: isBackground ? 2 : nil
+                classification: bestClassification ?? (isBackground ? 2 : nil)
             )
         }
     }

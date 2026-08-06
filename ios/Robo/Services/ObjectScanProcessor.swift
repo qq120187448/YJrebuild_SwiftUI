@@ -106,6 +106,9 @@ struct ObjectScanMetrics: Codable, Sendable {
     var localPlaneRemovedCount: Int?
     var backgroundRemovedCount: Int?
     var backgroundRemovedRatio: Double?
+    var recognizedGroundPointCount: Int?
+    var recognizedWallPointCount: Int?
+    var wallRemovedCount: Int?
 }
 
 struct ObjectScanProcessResult: Sendable {
@@ -168,19 +171,80 @@ enum ObjectScanProcessor {
         var count: Float = 0
     }
 
+    private struct BackgroundIdentification {
+        var groundPoints: [ObjectPoint] = []
+        var wallPoints: [ObjectPoint] = []
+        var objectPoints: [ObjectPoint] = []
+    }
+
+    private static func identifyGroundAndWall(
+        _ points: [ObjectPoint],
+        planes: [ScanPlaneInfo]
+    ) -> BackgroundIdentification {
+        var result = BackgroundIdentification()
+        let minY = points.map { $0.y }.min() ?? 0
+        for point in points {
+            let classification = point.classification
+            if classification == 2 {
+                result.groundPoints.append(point)
+                continue
+            }
+            if classification == 1 {
+                result.wallPoints.append(point)
+                continue
+            }
+            if let plane = matchingPlane(point, planes: planes) {
+                let verticalness = abs(Double(plane.normalY))
+                if verticalness > 0.7 && point.y <= minY + 0.15 {
+                    result.groundPoints.append(point)
+                    continue
+                }
+                if verticalness < 0.4 {
+                    result.wallPoints.append(point)
+                    continue
+                }
+            }
+            result.objectPoints.append(point)
+        }
+        return result
+    }
+
+    private static func matchingPlane(
+        _ point: ObjectPoint,
+        planes: [ScanPlaneInfo]
+    ) -> ScanPlaneInfo? {
+        for plane in planes {
+            let center = SIMD3<Float>(plane.centerX, plane.centerY, plane.centerZ)
+            var normal = SIMD3<Float>(plane.normalX, plane.normalY, plane.normalZ)
+            let normalLength = simd_length(normal)
+            guard normalLength > 1e-6 else { continue }
+            normal /= normalLength
+            let distance = abs(simd_dot(point.position - center, normal))
+            if distance <= 0.05
+                && planeContains(point.position, plane: plane, normal: normal, margin: 0.15) {
+                return plane
+            }
+        }
+        return nil
+    }
+
     static func process(
         points: [ObjectPoint],
         voxelSize: Float = 0.02,
         gridSize: Float = 0.05,
-        planes: [ScanPlaneInfo] = []
+        planes: [ScanPlaneInfo] = [],
+        autoRemoveBackground: Bool = false
     ) throws -> ObjectScanProcessResult {
         let effectiveVoxelSize = points.count > 180_000
             ? max(voxelSize * 2, 0.03)
             : voxelSize
         let downsampled = voxelDownsample(points, voxelSize: effectiveVoxelSize)
         let keptPoints = downsampled
-        let groundY = keptPoints.map { $0.y }.min() ?? 0
-        let candidates: [[ObjectPoint]] = [keptPoints]
+        let identification = identifyGroundAndWall(keptPoints, planes: planes)
+        let workingPoints = autoRemoveBackground ? identification.objectPoints : keptPoints
+        let groundY = workingPoints.map { $0.y }.min() ?? keptPoints.map { $0.y }.min() ?? 0
+        let removedCount = identification.groundPoints.count + identification.wallPoints.count
+        let candidates: [[ObjectPoint]] = [workingPoints]
 
         var options: [ObjectScanClusterOption] = []
         for cluster in candidates {
@@ -188,19 +252,32 @@ enum ObjectScanProcessor {
                 for: cluster,
                 groundY: groundY,
                 gridSize: gridSize,
-                planes: [],
-                backgroundRemovedCount: 0,
-                backgroundRemovedRatio: 0
+                planes: planes,
+                backgroundRemovedCount: autoRemoveBackground ? removedCount : nil,
+                backgroundRemovedRatio: autoRemoveBackground && !keptPoints.isEmpty
+                    ? Double(removedCount) / Double(keptPoints.count)
+                    : nil
             )
             var metrics = pair.metrics
             metrics.pointCount = points.count
             metrics.processedPointCount = keptPoints.count
             metrics.clusterCount = 1
-            metrics.classificationRemovedCount = 0
+            metrics.backgroundRemovedCount = autoRemoveBackground ? removedCount : nil
+            metrics.backgroundRemovedRatio = autoRemoveBackground && !keptPoints.isEmpty
+                ? Double(removedCount) / Double(keptPoints.count)
+                : nil
+            metrics.classificationRemovedCount = autoRemoveBackground ? removedCount : nil
             metrics.planeAnchorRemovedCount = 0
-            metrics.groundRemovedCount = 0
+            metrics.groundRemovedCount = autoRemoveBackground
+                ? identification.groundPoints.count
+                : nil
+            metrics.wallRemovedCount = autoRemoveBackground
+                ? identification.wallPoints.count
+                : nil
             metrics.ransacRemovedCount = 0
             metrics.localPlaneRemovedCount = 0
+            metrics.recognizedGroundPointCount = identification.groundPoints.count
+            metrics.recognizedWallPointCount = identification.wallPoints.count
             options.append(
                 ObjectScanClusterOption(
                     points: cluster,

@@ -117,6 +117,15 @@ enum ObjectScanExporter {
         if let value = input.metrics.localPlaneRemovedCount {
             add("局部平面剔除", "\(value)", "点")
         }
+        if let value = input.metrics.recognizedGroundPointCount {
+            add("识别地面点数", "\(value)", "点")
+        }
+        if let value = input.metrics.recognizedWallPointCount {
+            add("识别墙面点数", "\(value)", "点")
+        }
+        if let value = input.metrics.wallRemovedCount {
+            add("已剔除墙面点数", "\(value)", "点")
+        }
         if let vertexCount = input.metrics.voxelMeshVertexCount,
            let triangleCount = input.metrics.voxelMeshTriangleCount {
             add("网格顶点/三角面", "\(vertexCount) / \(triangleCount)", "个")

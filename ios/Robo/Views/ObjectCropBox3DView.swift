@@ -165,21 +165,30 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                     let targetSet = Set(parent.targetPoints)
                     let displayPoints: [ObjectPoint]
                     let colorTransform: ((ObjectPoint) -> SIMD4<Float>)?
+                    let classificationTransform: (ObjectPoint) -> SIMD4<Float> = { point in
+                        if point.classification == 2 {
+                            return SIMD4(0.62, 0.62, 0.62, 1)
+                        }
+                        if point.classification == 1 {
+                            return SIMD4(0.32, 0.55, 1.0, 1)
+                        }
+                        return SIMD4(point.r, point.g, point.b, 1)
+                    }
                     switch parent.previewMode {
                     case .all:
                         displayPoints = parent.points
-                        colorTransform = nil
+                        colorTransform = classificationTransform
                     case .highlightTarget:
                         displayPoints = parent.points
                         colorTransform = { point in
                             if targetSet.contains(point) {
-                                return SIMD4(point.r, point.g, point.b, 1)
+                                return classificationTransform(point)
                             }
                             return SIMD4(0.45, 0.48, 0.52, 0.16)
                         }
                     case .targetOnly:
                         displayPoints = parent.points.filter { targetSet.contains($0) }
-                        colorTransform = nil
+                        colorTransform = classificationTransform
                     }
                     let geometry = SCNGeometry.objectPointCloud(
                         points: displayPoints,
@@ -224,7 +233,14 @@ struct ObjectCropBox3DView: UIViewRepresentable {
                 viewportHeight: scnView.bounds.height,
                 fovYDegrees: CGFloat(scnView.pointOfView?.camera?.fieldOfView ?? 60)
             )
-            ObjectBoxVisual.addAxes(to: root, extent: volume.extent)
+            ObjectBoxVisual.addAxes(
+                to: root,
+                extent: volume.extent,
+                cameraPosition: cameraPosition,
+                pixelLineWidth: CGFloat(ObjectScanSettings.boxLineWidth),
+                viewportHeight: scnView.bounds.height,
+                fovYDegrees: CGFloat(scnView.pointOfView?.camera?.fieldOfView ?? 60)
+            )
             scene.rootNode.addChildNode(root)
             let groundY = parent.points.map { $0.y }.min() ?? volume.origin.y
             scene.rootNode.addChildNode(

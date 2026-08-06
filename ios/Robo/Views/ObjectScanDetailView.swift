@@ -116,6 +116,15 @@ struct ObjectScanDetailView: View {
                 if let value = metrics?.localPlaneRemovedCount {
                     LabeledContent("局部平面剔除", value: "\(value)")
                 }
+                if let value = metrics?.recognizedGroundPointCount {
+                    LabeledContent("识别地面点数", value: "\(value)")
+                }
+                if let value = metrics?.recognizedWallPointCount {
+                    LabeledContent("识别墙面点数", value: "\(value)")
+                }
+                if let value = metrics?.wallRemovedCount {
+                    LabeledContent("已剔除墙面点数", value: "\(value)")
+                }
                 LabeledContent(
                     "OBB 长×宽×高",
                     value: String(
@@ -340,6 +349,8 @@ struct ObjectScanDetailView: View {
     }
 
     private func recomputeMetrics(for volume: ObjectCropVolume) {
+        let recognizedGround = metrics?.recognizedGroundPointCount
+        let recognizedWall = metrics?.recognizedWallPointCount
         let filtered = points.filter { volume.contains(worldPoint: $0.position) }
         let groundY = filtered.map { $0.y }.min() ?? volume.origin.y
         var lightweight = ObjectScanProcessor.lightweightMetrics(
@@ -353,6 +364,8 @@ struct ObjectScanDetailView: View {
         lightweight.obbLengthM = Double(alignedX)
         lightweight.obbWidthM = Double(alignedZ)
         lightweight.obbHeightM = Double(alignedY)
+        lightweight.recognizedGroundPointCount = recognizedGround
+        lightweight.recognizedWallPointCount = recognizedWall
         metrics = lightweight
         metricsTask?.cancel()
         let useRealtime = realtimeVoxel
@@ -367,6 +380,8 @@ struct ObjectScanDetailView: View {
                 metrics.obbLengthM = Double(alignedX)
                 metrics.obbWidthM = Double(alignedZ)
                 metrics.obbHeightM = Double(alignedY)
+                metrics.recognizedGroundPointCount = recognizedGround
+                metrics.recognizedWallPointCount = recognizedWall
                 self.metrics = metrics
             }
         }
