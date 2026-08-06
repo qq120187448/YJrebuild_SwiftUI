@@ -40,4 +40,7 @@ struct TextureScanStatus {
     var isCloseUp = false
     var meshFaceCount = 0
     var maxResolution = "自动"
+    var photoResolution = "自动"
+    var coverage: Double = 0
+    var speed: Float = 0
 }

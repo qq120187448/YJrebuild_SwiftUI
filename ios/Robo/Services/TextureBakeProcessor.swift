@@ -183,7 +183,7 @@ enum TextureBakeProcessor {
         let jsonURL = outputDirectory.appendingPathComponent("manifest.json")
         let manifest: [String: Any] = [
             "app": "RoboScan",
-            "version": "0.5",
+            "version": "0.5.1",
             "scanID": data.scanID.uuidString,
             "capturedAt": ISO8601DateFormatter().string(from: data.capturedAt),
             "deviceModel": data.deviceModel,
@@ -219,6 +219,22 @@ enum TextureBakeProcessor {
     }
 
     private static func bakeTexture(
+        for segment: TextureWallSegment,
+        mesh: TextureScanMesh,
+        photos: [TexturePhotoFrame]
+    ) -> UIImage? {
+        if let image = MetalTextureBaker.shared.bake(
+            segment: segment,
+            mesh: mesh,
+            photos: photos,
+            size: Self.atlasSize
+        ) {
+            return image
+        }
+        return bakeTextureCPU(for: segment, mesh: mesh, photos: photos)
+    }
+
+    private static func bakeTextureCPU(
         for segment: TextureWallSegment,
         mesh: TextureScanMesh,
         photos: [TexturePhotoFrame]
@@ -337,7 +353,7 @@ enum TextureBakeProcessor {
         return (color.r, color.g, color.b, weight)
     }
 
-    private static func selectPhotos(
+    static func selectPhotos(
         for segment: TextureWallSegment,
         mesh: TextureScanMesh,
         photos: [TexturePhotoFrame],
