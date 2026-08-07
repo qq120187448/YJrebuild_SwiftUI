@@ -188,12 +188,32 @@ enum CrackRecognitionEngine {
     private static func loadModel(size: String) throws -> LoadedModel {
         let name = size == "n" ? "crack_seg_n" : "crack_seg_s"
         let mlModel: MLModel
-        if let url = Bundle.main.url(forResource: name, withExtension: "mlmodelc") {
+        if let url = Bundle.main.url(
+            forResource: name,
+            withExtension: "mlmodelc",
+            subdirectory: "Models"
+        ) {
             mlModel = try MLModel(contentsOf: url)
-        } else if let url = Bundle.main.url(forResource: name, withExtension: "mlmodel") {
+        } else if let url = Bundle.main.url(
+            forResource: name,
+            withExtension: "mlpackage",
+            subdirectory: "Models"
+        ) {
             let compiled = try MLModel.compileModel(at: url)
             mlModel = try MLModel(contentsOf: compiled)
+        } else if let url = Bundle.main.url(
+            forResource: name,
+            withExtension: "mlmodel",
+            subdirectory: "Models"
+        ) {
+            let compiled = try MLModel.compileModel(at: url)
+            mlModel = try MLModel(contentsOf: compiled)
+        } else if let url = Bundle.main.url(forResource: name, withExtension: "mlmodelc") {
+            mlModel = try MLModel(contentsOf: url)
         } else if let url = Bundle.main.url(forResource: name, withExtension: "mlpackage") {
+            let compiled = try MLModel.compileModel(at: url)
+            mlModel = try MLModel(contentsOf: compiled)
+        } else if let url = Bundle.main.url(forResource: name, withExtension: "mlmodel") {
             let compiled = try MLModel.compileModel(at: url)
             mlModel = try MLModel(contentsOf: compiled)
         } else {
