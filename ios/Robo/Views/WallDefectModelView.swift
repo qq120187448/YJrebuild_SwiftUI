@@ -59,7 +59,9 @@ struct WallDefectModelView: View {
                     Label(
                         realtimeDetector.detectionCount > 0
                             ? "实时裂缝 \(realtimeDetector.detectionCount) 处"
-                            : "实时识别中",
+                            : (realtimeDetector.statusMessage.isEmpty
+                                ? "实时识别中"
+                                : realtimeDetector.statusMessage),
                         systemImage: "waveform.path.ecg"
                     )
                     .font(.caption.bold())
@@ -322,8 +324,10 @@ private struct RoomMiniMapView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView()
-        view.backgroundColor = UIColor(white: 0, alpha: 0.42)
-        view.allowsCameraControl = false
+        view.backgroundColor = .clear
+        view.isOpaque = false
+        view.autoenablesDefaultLighting = true
+        view.allowsCameraControl = true
         view.antialiasingMode = .multisampling4X
 
         let scene = loadScene()
@@ -338,10 +342,7 @@ private struct RoomMiniMapView: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_ uiView: SCNView, context: Context) {
-        guard let camera = uiView.pointOfView else { return }
-        update(camera: camera)
-    }
+    func updateUIView(_ uiView: SCNView, context: Context) {}
 
     private func loadScene() -> SCNScene {
         let tempURL = FileManager.default.temporaryDirectory

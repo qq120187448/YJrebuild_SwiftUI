@@ -52,7 +52,10 @@ final class CrackRealtimeDetector: ObservableObject {
                     self.detectionCount = mask.detectionCount
                 }
             } catch {
-                // 实时识别失败时静默降级，不打断扫描
+                let message = error.localizedDescription
+                DispatchQueue.main.async {
+                    self.statusMessage = "识别出错：\(message)"
+                }
             }
         }
     }

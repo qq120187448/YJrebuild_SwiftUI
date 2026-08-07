@@ -197,18 +197,13 @@ struct WallDefectScanView: View {
                 onCaptureComplete: { room in
                     capturedRoom = room
                     surfaces = WallDefectGeometry.surfaces(from: room)
-                    if let defectARSession {
-                        saveWorldMap(defectARSession)
-                    }
                     phase = .model
                 },
                 onCaptureError: { error in
                     errorMessage = error.localizedDescription
                 },
-                initialWorldMap: WallDefectARSessionStore.load(),
                 onARSessionReady: { session in
                     defectARSession = session
-                    saveWorldMap(session)
                 },
                 keepARSessionAlive: true
             )
@@ -229,6 +224,7 @@ struct WallDefectScanView: View {
     }
 
     private func startScan() {
+        WallDefectARSessionStore.clear()
         scanID = UUID()
         capturedRoom = nil
         surfaces = []
@@ -237,13 +233,6 @@ struct WallDefectScanView: View {
         errorMessage = nil
         savedPath = nil
         phase = .scanning
-    }
-
-    private func saveWorldMap(_ session: ARSession) {
-        session.getCurrentWorldMap { worldMap, _ in
-            guard let worldMap else { return }
-            try? WallDefectARSessionStore.save(worldMap)
-        }
     }
 
     private func handlePhoto(

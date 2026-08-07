@@ -43,7 +43,21 @@ jobs:
           python -m pip install --quiet --upgrade pip
           python -m pip install --quiet "ultralytics>=8.2" "coremltools>=8,<9"
           python tools/coreml_export/export_yolo_seg.py
-          ls -lh ios/Robo/Resources/Models
+          mkdir -p ios/Robo/Resources/Models/compiled
+          xcrun coremlcompiler compile \
+            ios/Robo/Resources/Models/crack_seg_n.mlpackage \
+            ios/Robo/Resources/Models/compiled
+          xcrun coremlcompiler compile \
+            ios/Robo/Resources/Models/crack_seg_s.mlpackage \
+            ios/Robo/Resources/Models/compiled
+          rm -rf ios/Robo/Resources/Models/crack_seg_n.mlpackage
+          rm -rf ios/Robo/Resources/Models/crack_seg_s.mlpackage
+          mv ios/Robo/Resources/Models/compiled/crack_seg_n.mlmodelc \
+            ios/Robo/Resources/Models/
+          mv ios/Robo/Resources/Models/compiled/crack_seg_s.mlmodelc \
+            ios/Robo/Resources/Models/
+          rmdir ios/Robo/Resources/Models/compiled
+          ls -lhR ios/Robo/Resources/Models
 
       - name: Generate Xcode project
         working-directory: ios

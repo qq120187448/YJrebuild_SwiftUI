@@ -50,9 +50,13 @@ enum CrackRecognitionEngine {
         config: CrackRecognitionConfig
     ) throws -> CrackRecognitionOutput {
         let model = try loadModel(size: config.modelSize)
+        let hairlineMaxSide = min(
+            4096,
+            max(config.tileSize * 2, 2048)
+        )
         let analysisImage = resizedUIImage(
             image,
-            maxSide: config.mode == "hairline" ? 4096 : 2048
+            maxSide: config.mode == "hairline" ? CGFloat(hairlineMaxSide) : 2048
         )
         guard let cgImage = analysisImage.cgImage else {
             throw CrackRecognitionError.invalidImage

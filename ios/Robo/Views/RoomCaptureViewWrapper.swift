@@ -19,12 +19,6 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
 
     func makeUIView(context: Context) -> RoomCaptureView {
         let arSession = ARSession()
-        let arConfiguration = ARWorldTrackingConfiguration()
-        if let initialWorldMap {
-            arConfiguration.initialWorldMap = initialWorldMap
-        }
-        arSession.run(arConfiguration)
-
         let captureView = RoomCaptureView(frame: .zero, arSession: arSession)
         captureView.captureSession.delegate = context.coordinator
         captureView.delegate = context.coordinator
