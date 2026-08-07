@@ -14,7 +14,7 @@ struct CrackResolutionValidationResult: Identifiable {
     let resolution: Int
     let detectionCount: Int
     let confidence: Double
-    let totalPixelLength: Double
+    let maskPixelCount: Int
     let annotatedImage: UIImage?
     let errorMessage: String?
 }
@@ -145,21 +145,24 @@ enum CrackRecognitionEngine {
 
     static func validateResolutions(
         image: UIImage,
-        resolutions: [Int] = [640, 800, 960, 1280]
+        resolutions: [Int] = [640, 800, 960, 1280],
+        progress: ((String, [CrackResolutionValidationResult]) -> Void)? = nil
     ) -> [CrackResolutionValidationResult] {
         let analysisImage = resizedUIImage(image, maxSide: 4096)
         guard let cgImage = analysisImage.cgImage else {
-            return resolutions.enumerated().map { index, resolution in
+            let results = resolutions.enumerated().map { index, resolution in
                 CrackResolutionValidationResult(
                     id: index,
                     resolution: resolution,
                     detectionCount: 0,
                     confidence: 0,
-                    totalPixelLength: 0,
+                    maskPixelCount: 0,
                     annotatedImage: nil,
                     errorMessage: CrackRecognitionError.invalidImage.localizedDescription
                 )
             }
+            progress?("图片读取失败", results)
+            return results
         }
 
         var config = CrackRecognitionConfig.defaultConfig
@@ -177,9 +180,13 @@ enum CrackRecognitionEngine {
 
         let width = cgImage.width
         let height = cgImage.height
-        return resolutions.enumerated().map { index, resolution in
+        var results: [CrackResolutionValidationResult] = []
+        for (index, resolution) in resolutions.enumerated() {
+            let modelName = "crack_seg_n_\(resolution)"
+            progress?("正在加载 \(modelName)", results)
             do {
-                let model = try loadModel(named: "crack_seg_n_\(resolution)")
+                let model = try loadModel(named: modelName)
+                progress?("模型已加载，正在 \(resolution)×\(resolution) 推理", results)
                 let detections = try runSingleDetection(
                     cgImage: cgImage,
                     model: model,
@@ -188,46 +195,38 @@ enum CrackRecognitionEngine {
                     tileSize: CGSize(width: width, height: height),
                     config: config
                 )
+                progress?("\(resolution) 推理完成，正在合并掩码", results)
                 let mask = mergedMask(
                     detections: detections,
                     width: width,
                     height: height
                 )
-                let skeleton = CrackSkeleton.analyze(
-                    mask: mask,
-                    width: width,
-                    height: height,
-                    config: config
-                )
-                return CrackResolutionValidationResult(
+                let result = CrackResolutionValidationResult(
                     id: index,
                     resolution: resolution,
                     detectionCount: detections.count,
                     confidence: Double(detections.map(\.score).max() ?? 0),
-                    totalPixelLength: skeleton.totalPixelLength,
-                    annotatedImage: resizedUIImage(
-                        annotatedImage(
-                            from: analysisImage,
-                            mask: skeleton.mask ?? mask,
-                            width: width,
-                            height: height
-                        ),
-                        maxSide: 320
-                    ),
+                    maskPixelCount: mask.filter { $0 }.count,
+                    annotatedImage: nil,
                     errorMessage: nil
                 )
+                results.append(result)
+                progress?("\(resolution) 完成，检测到 \(detections.count) 处裂缝", results)
             } catch {
-                return CrackResolutionValidationResult(
+                let result = CrackResolutionValidationResult(
                     id: index,
                     resolution: resolution,
                     detectionCount: 0,
                     confidence: 0,
-                    totalPixelLength: 0,
+                    maskPixelCount: 0,
                     annotatedImage: nil,
                     errorMessage: error.localizedDescription
                 )
+                results.append(result)
+                progress?("\(resolution) 出错：\(error.localizedDescription)", results)
             }
         }
+        return results
     }
 
     private static func loadModel(size: String) throws -> LoadedModel {

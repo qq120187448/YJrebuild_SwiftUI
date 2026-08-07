@@ -8,6 +8,7 @@ struct CrackModelValidationView: View {
     @State private var results: [CrackResolutionValidationResult] = []
     @State private var isWorking = false
     @State private var errorMessage: String?
+    @State private var progressMessage = ""
 
     private let resolutions = [640, 800, 960, 1280]
 
@@ -52,6 +53,12 @@ struct CrackModelValidationView: View {
                     }
                     .disabled(isWorking)
 
+                    if isWorking, !progressMessage.isEmpty {
+                        Text(progressMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
                     if let errorMessage {
                         Text(errorMessage)
                             .font(.caption)
@@ -89,9 +96,9 @@ struct CrackModelValidationView: View {
                                         .font(.subheadline)
                                     Text(
                                         String(
-                                            format: "置信度 %.2f · 骨架 %.1f px",
+                                            format: "置信度 %.2f · 掩码 %d px",
                                             result.confidence,
-                                            result.totalPixelLength
+                                            result.maskPixelCount
                                         )
                                     )
                                     .font(.caption)
@@ -116,6 +123,7 @@ struct CrackModelValidationView: View {
                 image = loaded
                 results = []
                 errorMessage = nil
+                progressMessage = ""
             } else {
                 errorMessage = "无法读取所选照片"
             }
@@ -126,13 +134,20 @@ struct CrackModelValidationView: View {
         guard let image else { return }
         isWorking = true
         errorMessage = nil
+        progressMessage = "准备验证..."
         DispatchQueue.global(qos: .userInitiated).async {
             let output = CrackRecognitionEngine.validateResolutions(
                 image: image,
                 resolutions: resolutions
-            )
+            ) { status, partialResults in
+                DispatchQueue.main.async {
+                    self.progressMessage = status
+                    self.results = partialResults
+                }
+            }
             DispatchQueue.main.async {
                 self.results = output
+                self.progressMessage = "验证完成"
                 self.isWorking = false
             }
         }
