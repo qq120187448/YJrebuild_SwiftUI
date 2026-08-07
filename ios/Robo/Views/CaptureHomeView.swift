@@ -13,7 +13,7 @@ struct CaptureHomeView: View {
 
     @State private var showingLiDARScan = false
     @State private var showingObjectScan = false
-    @State private var showingTextureScan = false
+    @State private var showingWallDefectScan = false
     @State private var showingToyBox = false
 
     var body: some View {
@@ -75,18 +75,18 @@ struct CaptureHomeView: View {
                         )
 
                         textureFeatureCard(
-                            title: "实景建模",
-                            subtitle: "iOS 18 区域模式：扫描墙面、天面或地面，本机生成带纹理 USDZ",
-                            icon: "camera.aperture",
-                            startTitle: "开始实景建模",
+                            title: "墙地面缺陷扫描",
+                            subtitle: "RoomPlan 全屋建模 + 手动定点拍照 + 本地缺陷识别",
+                            icon: "paintbrush.pointed",
+                            startTitle: "开始墙地面扫描",
                             startAction: {
-                                showingTextureScan = true
+                                showingWallDefectScan = true
                             }
                         )
 
                         textureFeatureCard(
                             title: "玩具箱",
-                            subtitle: "趣味物体建模：生成带纹理 USDZ，不输出工程量",
+                            subtitle: "趣味物体建模 + 区域实景建模",
                             icon: "puzzlepiece",
                             startTitle: "打开玩具箱",
                             startAction: {
@@ -106,11 +106,11 @@ struct CaptureHomeView: View {
         .fullScreenCover(isPresented: $showingObjectScan) {
             ObjectScanView()
         }
-        .fullScreenCover(isPresented: $showingTextureScan) {
-            ObjectCaptureTextureScanView(mode: .area)
+        .fullScreenCover(isPresented: $showingWallDefectScan) {
+            WallDefectScanView()
         }
         .fullScreenCover(isPresented: $showingToyBox) {
-            ObjectCaptureTextureScanView(mode: .object)
+            ToyBoxView()
         }
     }
 

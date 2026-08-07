@@ -48,6 +48,7 @@ targets:
       - path: Robo/Models/ObjectScanRecord.swift
       - path: Robo/Models/TextureScanRecord.swift
       - path: Robo/Models/ObjectCropVolume.swift
+      - path: Robo/Models/WallDefectModels.swift
       - path: Robo/Services/RoomDataProcessor.swift
       - path: Robo/Services/QuantityTakeoffExporter.swift
       - path: Robo/Services/PhotoStorage.swift
@@ -60,6 +61,8 @@ targets:
       - path: Robo/Services/ObjectScanProcessor.swift
       - path: Robo/Services/ObjectScanSettings.swift
       - path: Robo/Services/ObjectScanExporter.swift
+      - path: Robo/Services/WallDefectGeometry.swift
+      - path: Robo/Services/WallDefectStore.swift
       - path: Robo/Views/ActivityView.swift
       - path: Robo/Views/ContentView.swift
       - path: Robo/Views/CaptureHomeView.swift
@@ -80,6 +83,10 @@ targets:
       - path: Robo/Views/ObjectCropBox3DView.swift
       - path: Robo/Views/ObjectBoxVisual.swift
       - path: Robo/Views/ObjectCaptureTextureScanView.swift
+      - path: Robo/Views/ARKitDefectCameraView.swift
+      - path: Robo/Views/ToyBoxView.swift
+      - path: Robo/Views/WallDefectPhotoCaptureView.swift
+      - path: Robo/Views/WallDefectScanView.swift
     dependencies:
       - package: Voxels
       - package: iTriangle
