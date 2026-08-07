@@ -23,6 +23,11 @@ struct CrackRecognitionSettingsView: View {
                     Text("MobileSAM").tag("mobilesam")
                 }
                 .pickerStyle(.segmented)
+                if config.engine == "mobilesam" {
+                    Text("MobileSAM CoreML 尚未内置，暂用 YOLO 分割")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             }
 
             Section("检测参数") {
