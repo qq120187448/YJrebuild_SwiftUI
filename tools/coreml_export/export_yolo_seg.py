@@ -34,9 +34,7 @@ def main() -> int:
             print(f"Missing model: {path}")
             return 1
         command = [
-            sys.executable,
-            "-m",
-            "ultralytics",
+            "yolo",
             "export",
             f"model={path}",
             "format=coreml",
