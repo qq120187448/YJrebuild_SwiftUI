@@ -5,16 +5,22 @@ import simd
 import SwiftUI
 import UIKit
 
+struct WallDefectPhotoRecognitionResult {
+    let result: CrackRecognitionResult
+    let annotatedImage: UIImage
+}
+
 struct WallDefectModelView: View {
     let room: CapturedRoom
     let surfaces: [WallDefectSurface]
     let arSession: ARSession
+    let latestRecognition: WallDefectPhotoRecognitionResult?
+    let isRecognizing: Bool
     let onPhoto: ([WallDefectSurfaceAssociation], DefectCameraCapture) -> Void
     let onSave: () -> Void
     let onDiscard: () -> Void
 
     @StateObject private var cameraModel = DefectCameraModel()
-    @StateObject private var realtimeDetector = CrackRealtimeDetector()
     @State private var cameraSurfaceID: UUID?
     @State private var photoCount = 0
     @State private var showSaveConfirm = false
@@ -29,64 +35,14 @@ struct WallDefectModelView: View {
                 surfaces: surfaces,
                 arSession: arSession,
                 cameraModel: cameraModel,
-                realtimeDetector: realtimeDetector,
                 cameraSurfaceID: $cameraSurfaceID
             )
             .ignoresSafeArea()
 
-            if realtimeDetector.isAvailable,
-               !realtimeDetector.normalizedPoints.isEmpty
-                || !realtimeDetector.normalizedBoxes.isEmpty {
-                Canvas { context, size in
-                    for point in realtimeDetector.normalizedPoints {
-                        let rect = CGRect(
-                            x: point.x * size.width - 3,
-                            y: point.y * size.height - 3,
-                            width: 6,
-                            height: 6
-                        )
-                        context.fill(
-                            Path(ellipseIn: rect),
-                            with: .color(.red.opacity(0.9))
-                        )
-                    }
-                    for box in realtimeDetector.normalizedBoxes {
-                        let rect = CGRect(
-                            x: box.minX * size.width,
-                            y: box.minY * size.height,
-                            width: box.width * size.width,
-                            height: box.height * size.height
-                        )
-                        context.stroke(
-                            Path(rect),
-                            with: .color(.yellow.opacity(0.95)),
-                            lineWidth: 2
-                        )
-                    }
-                }
-                .allowsHitTesting(false)
-            }
-
             VStack(spacing: 0) {
                 topBar
-                if realtimeDetector.isAvailable {
-                    Label(
-                        realtimeDetector.detectionCount > 0
-                            ? "实时裂缝 \(realtimeDetector.detectionCount) 处"
-                            : (realtimeDetector.statusMessage.isEmpty
-                                ? "实时识别中"
-                                : realtimeDetector.statusMessage),
-                        systemImage: "waveform.path.ecg"
-                    )
-                    .font(.caption.bold())
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(.black.opacity(0.45))
-                    .clipShape(Capsule())
-                    .padding(.top, 6)
-                }
                 Spacer()
+                recognitionResultCard
                 RoomMiniMapView(
                     room: room,
                     surfaces: surfaces,
@@ -97,9 +53,6 @@ struct WallDefectModelView: View {
                 .padding(.horizontal, 10)
                 bottomBar
             }
-        }
-        .onAppear {
-            realtimeDetector.prepare(config: CrackRecognitionSettings.load())
         }
         .alert("保存扫描包？", isPresented: $showSaveConfirm) {
             Button("保存") {
@@ -188,8 +141,8 @@ struct WallDefectModelView: View {
                             .frame(width: 52, height: 52)
                     }
                 }
-                .disabled(cameraSurface == nil)
-                .opacity(cameraSurface == nil ? 0.45 : 1)
+                .disabled(cameraSurface == nil || isRecognizing)
+                .opacity(cameraSurface == nil || isRecognizing ? 0.45 : 1)
 
                 Button {
                     showSaveConfirm = true
@@ -210,13 +163,52 @@ struct WallDefectModelView: View {
         .padding(.horizontal, 12)
         .padding(.bottom, 10)
     }
+
+    @ViewBuilder
+    private var recognitionResultCard: some View {
+        if isRecognizing {
+            HStack(spacing: 12) {
+                ProgressView()
+                Text("照片识别中...")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.white)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.black.opacity(0.55))
+            .clipShape(Capsule())
+        } else if let latestRecognition {
+            HStack(spacing: 12) {
+                Image(uiImage: latestRecognition.annotatedImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(latestRecognition.result.detectedClass)
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Text(
+                        "裂缝 \(latestRecognition.result.components.count) 条 · 总长 \(String(format: "%.3f m", latestRecognition.result.totalLengthM))"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.8))
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .background(.black.opacity(0.55))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, 12)
+        }
+    }
 }
 
 private struct WallDefectARView: UIViewRepresentable {
     let surfaces: [WallDefectSurface]
     let arSession: ARSession
     let cameraModel: DefectCameraModel
-    let realtimeDetector: CrackRealtimeDetector
     @Binding var cameraSurfaceID: UUID?
 
     func makeUIView(context: Context) -> ARSCNView {
@@ -247,29 +239,23 @@ private struct WallDefectARView: UIViewRepresentable {
         Coordinator(
             surfaces: surfaces,
             cameraModel: cameraModel,
-            cameraSurfaceID: $cameraSurfaceID,
-            realtimeDetector: realtimeDetector
+            cameraSurfaceID: $cameraSurfaceID
         )
     }
 
     final class Coordinator: NSObject, ARSessionDelegate {
         let surfaces: [WallDefectSurface]
         let cameraModel: DefectCameraModel
-        let realtimeDetector: CrackRealtimeDetector
-        private let realtimeConfig: CrackRecognitionConfig
         var cameraSurfaceID: Binding<UUID?>
 
         init(
             surfaces: [WallDefectSurface],
             cameraModel: DefectCameraModel,
-            cameraSurfaceID: Binding<UUID?>,
-            realtimeDetector: CrackRealtimeDetector
+            cameraSurfaceID: Binding<UUID?>
         ) {
             self.surfaces = surfaces
             self.cameraModel = cameraModel
             self.cameraSurfaceID = cameraSurfaceID
-            self.realtimeDetector = realtimeDetector
-            self.realtimeConfig = CrackRecognitionSettings.load()
         }
 
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
@@ -286,10 +272,6 @@ private struct WallDefectARView: UIViewRepresentable {
             )
             DispatchQueue.main.async {
                 self.cameraModel.update(frame: frame)
-                self.realtimeDetector.process(
-                    frame: frame,
-                    config: self.realtimeConfig
-                )
                 self.updateCameraSurface(
                     pose: pose,
                     intrinsics: intrinsics,

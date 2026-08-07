@@ -4,12 +4,6 @@ import Foundation
 import UIKit
 import Vision
 
-struct CrackRealtimeMask {
-    let points: [CGPoint]
-    let detectionCount: Int
-    let boxes: [CGRect]
-}
-
 struct CrackRecognitionOutput {
     let result: CrackRecognitionResult
     let annotatedImage: UIImage
@@ -127,78 +121,6 @@ enum CrackRecognitionEngine {
             height: height
         )
         return CrackRecognitionOutput(result: result, annotatedImage: annotated)
-    }
-
-    static func realtimeMaskPoints(
-        cgImage: CGImage,
-        model: VNCoreMLModel,
-        config: CrackRecognitionConfig
-    ) throws -> CrackRealtimeMask {
-        let inputSize = 640
-        let resized = resizedCGImage(
-            cgImage,
-            width: inputSize,
-            height: inputSize
-        )
-        let request = VNCoreMLRequest(model: model)
-        request.imageCropAndScaleOption = .scaleFill
-        request.usesCPUOnly = false
-        try VNImageRequestHandler(cgImage: resized, orientation: .up)
-            .perform([request])
-
-        guard let (prediction, protos) = featureArrays(from: request.results) else {
-            throw CrackRecognitionError.noModelOutput
-        }
-        var detections = CrackYOLODecoder.decode(
-            prediction: prediction,
-            protos: protos,
-            confidence: Float(config.confidence)
-        )
-        detections = CrackYOLODecoder.nms(
-            detections,
-            iouThreshold: Float(config.iou)
-        )
-        for index in detections.indices {
-            CrackYOLODecoder.decodeMask(for: &detections[index], protos: protos)
-            detections[index].tileRect = CGRect(
-                x: 0,
-                y: 0,
-                width: inputSize,
-                height: inputSize
-            )
-        }
-
-        let mask = mergedMask(
-            detections: detections,
-            width: inputSize,
-            height: inputSize
-        )
-        var points: [CGPoint] = []
-        points.reserveCapacity(1200)
-        for y in stride(from: 0, to: inputSize, by: 2) {
-            for x in stride(from: 0, to: inputSize, by: 2) {
-                if mask[y * inputSize + x] {
-                    points.append(
-                        CGPoint(
-                            x: CGFloat(x) / CGFloat(inputSize),
-                            y: CGFloat(y) / CGFloat(inputSize)
-                        )
-                    )
-                }
-            }
-        }
-        return CrackRealtimeMask(
-            points: points,
-            detectionCount: detections.count,
-            boxes: detections.map { detection in
-                CGRect(
-                    x: detection.box.minX / CGFloat(inputSize),
-                    y: detection.box.minY / CGFloat(inputSize),
-                    width: detection.box.width / CGFloat(inputSize),
-                    height: detection.box.height / CGFloat(inputSize)
-                )
-            }
-        )
     }
 
     private static func loadModel(size: String) throws -> LoadedModel {

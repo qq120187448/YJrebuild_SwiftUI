@@ -21,6 +21,8 @@ struct WallDefectScanView: View {
     @State private var stopRequested = false
     @State private var errorMessage: String?
     @State private var savedPath: String?
+    @State private var latestRecognition: WallDefectPhotoRecognitionResult?
+    @State private var isPhotoAnalyzing = false
 
     var body: some View {
         NavigationStack {
@@ -43,6 +45,8 @@ struct WallDefectScanView: View {
                                 room: capturedRoom,
                                 surfaces: surfaces,
                                 arSession: defectARSession,
+                                latestRecognition: latestRecognition,
+                                isRecognizing: isPhotoAnalyzing,
                                 onPhoto: { associations, capture in
                                     handlePhoto(associations: associations, capture: capture)
                                 },
@@ -232,6 +236,8 @@ struct WallDefectScanView: View {
         defectARSession = nil
         errorMessage = nil
         savedPath = nil
+        latestRecognition = nil
+        isPhotoAnalyzing = false
         phase = .scanning
     }
 
@@ -240,6 +246,8 @@ struct WallDefectScanView: View {
         capture: DefectCameraCapture
     ) {
         guard let primary = associations.first else { return }
+        isPhotoAnalyzing = true
+        latestRecognition = nil
         let photoID = UUID()
         do {
             let stored = try WallDefectStore.savePhoto(
@@ -297,6 +305,11 @@ struct WallDefectScanView: View {
                         self.photos[index].note = output.result.isEmpty
                             ? "未识别到裂缝"
                             : "裂缝 \(output.result.components.count) 条 · 总长 \(String(format: "%.3f m", output.result.totalLengthM))"
+                        self.latestRecognition = WallDefectPhotoRecognitionResult(
+                            result: output.result,
+                            annotatedImage: output.annotatedImage
+                        )
+                        self.isPhotoAnalyzing = false
                     }
                 } catch {
                     DispatchQueue.main.async {
@@ -306,10 +319,13 @@ struct WallDefectScanView: View {
                             return
                         }
                         self.photos[index].note = "识别失败：\(error.localizedDescription)"
+                        self.latestRecognition = nil
+                        self.isPhotoAnalyzing = false
                     }
                 }
             }
         } catch {
+            isPhotoAnalyzing = false
             errorMessage = error.localizedDescription
         }
     }

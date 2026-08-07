@@ -73,7 +73,6 @@ targets:
       - path: Robo/Services/CrackSkeleton.swift
       - path: Robo/Services/CrackYOLODecoder.swift
       - path: Robo/Services/CrackRecognitionEngine.swift
-      - path: Robo/Services/CrackRealtimeDetector.swift
       - path: Robo/Views/ActivityView.swift
       - path: Robo/Views/ContentView.swift
       - path: Robo/Views/CaptureHomeView.swift
