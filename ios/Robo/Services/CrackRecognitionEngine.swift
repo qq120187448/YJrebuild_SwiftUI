@@ -210,6 +210,10 @@ enum CrackRecognitionEngine {
                 ).0
                 let canvasWidth = canvas.width
                 let canvasHeight = canvas.height
+                progress?(
+                    "\(resolution) 输入图已生成，开始 CoreML 推理",
+                    results
+                )
                 let detections = try runSingleDetection(
                     cgImage: canvas,
                     model: model,
@@ -280,35 +284,37 @@ enum CrackRecognitionEngine {
     }
 
     private static func makeModel(name: String) throws -> LoadedModel {
+        let configuration = MLModelConfiguration()
+        configuration.computeUnits = .cpuOnly
         let mlModel: MLModel
         if let url = Bundle.main.url(
             forResource: name,
             withExtension: "mlmodelc",
             subdirectory: "Models"
         ) {
-            mlModel = try MLModel(contentsOf: url)
+            mlModel = try MLModel(contentsOf: url, configuration: configuration)
         } else if let url = Bundle.main.url(
             forResource: name,
             withExtension: "mlpackage",
             subdirectory: "Models"
         ) {
             let compiled = try MLModel.compileModel(at: url)
-            mlModel = try MLModel(contentsOf: compiled)
+            mlModel = try MLModel(contentsOf: compiled, configuration: configuration)
         } else if let url = Bundle.main.url(
             forResource: name,
             withExtension: "mlmodel",
             subdirectory: "Models"
         ) {
             let compiled = try MLModel.compileModel(at: url)
-            mlModel = try MLModel(contentsOf: compiled)
+            mlModel = try MLModel(contentsOf: compiled, configuration: configuration)
         } else if let url = Bundle.main.url(forResource: name, withExtension: "mlmodelc") {
-            mlModel = try MLModel(contentsOf: url)
+            mlModel = try MLModel(contentsOf: url, configuration: configuration)
         } else if let url = Bundle.main.url(forResource: name, withExtension: "mlpackage") {
             let compiled = try MLModel.compileModel(at: url)
-            mlModel = try MLModel(contentsOf: compiled)
+            mlModel = try MLModel(contentsOf: compiled, configuration: configuration)
         } else if let url = Bundle.main.url(forResource: name, withExtension: "mlmodel") {
             let compiled = try MLModel.compileModel(at: url)
-            mlModel = try MLModel(contentsOf: compiled)
+            mlModel = try MLModel(contentsOf: compiled, configuration: configuration)
         } else {
             throw CrackRecognitionError.modelNotFound
         }
