@@ -79,7 +79,7 @@ final class ZipWriter {
         for byte in data {
             crc ^= UInt32(byte)
             for _ in 0..<8 {
-                let mask = (crc & 1) == 1 ? 0xedb8_8320 : 0
+                let mask: UInt32 = (crc & 1) == 1 ? 0xedb8_8320 : 0
                 crc = (crc >> 1) ^ mask
             }
         }
