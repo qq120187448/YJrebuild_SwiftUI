@@ -280,7 +280,7 @@ struct TextureScanHistoryDetailView: View {
                     Button {
                         showShare = true
                     } label: {
-                        Label("分享 USDZ", systemImage: "square.and.arrow.up")
+                        Label("导出 USDZ", systemImage: "square.and.arrow.up")
                     }
                 } else {
                     Text("模型文件不存在")
@@ -290,7 +290,19 @@ struct TextureScanHistoryDetailView: View {
         }
         .navigationTitle("实景建模记录")
         .sheet(isPresented: $showPreview) {
-            QuickLookPreview(url: usdzURL)
+            NavigationStack {
+                USDZSceneView(url: usdzURL)
+                    .ignoresSafeArea()
+                    .background(Color.black)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("完成") {
+                                showPreview = false
+                            }
+                        }
+                    }
+            }
+            .preferredColorScheme(.dark)
         }
         .sheet(isPresented: $showShare) {
             ActivityView(activityItems: [usdzURL])

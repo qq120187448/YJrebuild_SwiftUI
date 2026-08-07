@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import QuickLook
 import RealityKit
+import SceneKit
 import SwiftData
 import SwiftUI
 import UIKit
@@ -27,6 +28,8 @@ struct ObjectCaptureTextureScanView: View {
                     }
                 case .reconstructing:
                     reconstructionView
+                case .failed:
+                    reconstructionFailedView
                 case .result:
                     if let result = coordinator.result {
                         ObjectCaptureResultView(
@@ -50,14 +53,10 @@ struct ObjectCaptureTextureScanView: View {
                     }
                 }
             }
-            .alert("实景建模失败", isPresented: .constant(coordinator.errorMessage != nil)) {
-                Button("好") {
-                    coordinator.clearError()
-                }
+            .alert("实景建模失败", isPresented: $coordinator.showErrorAlert) {
+                Button("好") { coordinator.clearError() }
             } message: {
-                if let errorMessage = coordinator.errorMessage {
-                    Text(errorMessage)
-                }
+                Text(coordinator.errorMessage ?? "发生未知错误")
             }
             .preferredColorScheme(.dark)
             .onAppear {
@@ -80,6 +79,7 @@ struct ObjectCaptureTextureScanView: View {
         case .instructions: return "实景建模"
         case .capturing: return "官方 Object Capture"
         case .reconstructing: return "生成 USDZ"
+        case .failed: return "生成失败"
         case .result: return "建模结果"
         }
     }
@@ -165,9 +165,6 @@ struct ObjectCaptureTextureScanView: View {
                     statusPill(icon: "photo", text: "\(coordinator.photoCount) 张")
                     statusPill(icon: "cube", text: "USDZ")
                     Spacer()
-                    if coordinator.usesAreaMode {
-                        statusPill(icon: "square.dashed", text: "区域模式")
-                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.top, 8)
@@ -178,15 +175,13 @@ struct ObjectCaptureTextureScanView: View {
                     if let state = coordinator.captureState {
                         switch state {
                         case .ready:
-                            Text(coordinator.usesAreaMode
-                                 ? "对准墙面、地面或天面后开始扫描"
-                                 : "将目标物体置于取景器中央")
+                            Text("将目标物体置于取景器中央，开始检测")
                                 .font(.headline)
                                 .foregroundStyle(.white)
                             Button {
                                 coordinator.beginCaptureFlow()
                             } label: {
-                                Label("开始扫描", systemImage: "camera.fill")
+                                Label("检测物体", systemImage: "viewfinder")
                                     .font(.headline)
                                     .padding(.horizontal, 28)
                                     .padding(.vertical, 14)
@@ -264,14 +259,8 @@ struct ObjectCaptureTextureScanView: View {
 
     @ViewBuilder
     private func objectCaptureView(session: ObjectCaptureSession) -> some View {
-        if #available(iOS 18.0, *) {
-            ObjectCaptureView(session: session)
-                .hideObjectReticle(coordinator.usesAreaMode)
-                .ignoresSafeArea()
-        } else {
-            ObjectCaptureView(session: session)
-                .ignoresSafeArea()
-        }
+        ObjectCaptureView(session: session)
+            .ignoresSafeArea()
     }
 
     private func statusPill(icon: String, text: String) -> some View {
@@ -305,6 +294,60 @@ struct ObjectCaptureTextureScanView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(red: 0.04, green: 0.06, blue: 0.11).ignoresSafeArea())
     }
+
+    private var reconstructionFailedView: some View {
+        ScrollView {
+            VStack(spacing: 18) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 52))
+                    .foregroundStyle(.orange)
+
+                Text("生成 USDZ 失败")
+                    .font(.title2.bold())
+                    .foregroundStyle(.white)
+
+                Text("扫描已完成，共拍摄 \(coordinator.photoCount) 张照片，但模型生成没有成功。")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.65))
+                    .multilineTextAlignment(.center)
+
+                Text(coordinator.errorMessage ?? "未知错误")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.white.opacity(0.75))
+                    .multilineTextAlignment(.center)
+                    .padding(14)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.white.opacity(0.07))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+
+                Button {
+                    coordinator.retryReconstruction()
+                } label: {
+                    Label("重试生成 USDZ", systemImage: "arrow.clockwise")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.cyan)
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+
+                Button {
+                    coordinator.clearError()
+                } label: {
+                    Label("返回", systemImage: "chevron.left")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.white.opacity(0.08))
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+            }
+            .padding(20)
+        }
+        .background(Color(red: 0.04, green: 0.06, blue: 0.11).ignoresSafeArea())
+    }
 }
 
 @MainActor
@@ -313,6 +356,7 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
         case instructions
         case capturing
         case reconstructing
+        case failed
         case result
     }
 
@@ -320,6 +364,7 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
     @Published var session: ObjectCaptureSession?
     @Published var captureState: ObjectCaptureSession.CaptureState?
     @Published var errorMessage: String?
+    @Published var showErrorAlert = false
     @Published var progress: Double = 0
     @Published var stageText = "准备生成模型"
     @Published var photoCount = 0
@@ -332,16 +377,10 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
     private var captureTask: Task<Void, Never>?
     private var photogrammetrySession: PhotogrammetrySession?
 
-    var usesAreaMode: Bool {
-        if #available(iOS 18.0, *) {
-            return true
-        }
-        return false
-    }
-
     func startCapture() {
         guard ObjectCaptureSession.isSupported else {
             errorMessage = "当前设备不支持 Object Capture，需要 iPhone 12 Pro 或更新机型。"
+            showErrorAlert = true
             return
         }
 
@@ -359,6 +398,7 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
             try FileManager.default.createDirectory(at: models, withIntermediateDirectories: true)
         } catch {
             errorMessage = "无法创建扫描目录：\(error.localizedDescription)"
+            showErrorAlert = true
             return
         }
 
@@ -375,6 +415,7 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
         configuration.isOverCaptureEnabled = true
         newSession.start(imagesDirectory: images, configuration: configuration)
 
+        errorMessage = nil
         captureState = newSession.state
         photoCount = newSession.numberOfShotsTaken
         imagesDirectory = images
@@ -386,10 +427,13 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
 
     func beginCaptureFlow() {
         guard let session else { return }
-        if usesAreaMode {
-            session.startCapturing()
-        } else {
+        switch session.state {
+        case .ready:
             _ = session.startDetecting()
+        case .detecting:
+            session.startCapturing()
+        default:
+            break
         }
     }
 
@@ -418,6 +462,7 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
 
     func clearError() {
         errorMessage = nil
+        showErrorAlert = false
         phase = .instructions
     }
 
@@ -444,7 +489,7 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
                 return
             case .failed(let error):
                 errorMessage = "扫描失败：\(error.localizedDescription)"
-                phase = .instructions
+                phase = .failed
                 return
             default:
                 break
@@ -454,6 +499,7 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
 
     private func beginReconstruction() async {
         guard let imagesDirectory, let outputURL else { return }
+        errorMessage = nil
         session = nil
         captureTask = nil
         phase = .reconstructing
@@ -491,7 +537,7 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
                     return
                 case .requestError(_, let requestError):
                     errorMessage = "生成 USDZ 失败：\(requestError.localizedDescription)"
-                    phase = .instructions
+                    phase = .failed
                     return
                 case .stitchingIncomplete:
                     stageText = "网格连接不完整，将使用当前已生成的数据"
@@ -506,7 +552,14 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
             }
         } catch {
             errorMessage = "生成 USDZ 失败：\(error.localizedDescription)"
-            phase = .instructions
+            phase = .failed
+        }
+    }
+
+    func retryReconstruction() {
+        guard phase == .failed else { return }
+        Task { [weak self] in
+            await self?.beginReconstruction()
         }
     }
 
@@ -604,9 +657,18 @@ struct ObjectCaptureResultView: View {
         ScrollView {
             VStack(spacing: 16) {
                 GroupBox {
-                    QuickLookPreview(url: result.usdzURL)
-                        .frame(height: 360)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    if FileManager.default.fileExists(atPath: result.usdzURL.path) {
+                        USDZSceneView(url: result.usdzURL)
+                            .frame(height: 360)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    } else {
+                        ContentUnavailableView(
+                            "模型文件不存在",
+                            systemImage: "exclamationmark.triangle",
+                            description: Text("USDZ 文件可能已被移动或删除。")
+                        )
+                        .frame(height: 260)
+                    }
                 } label: {
                     Label("带纹理 USDZ 模型", systemImage: "cube.transparent")
                 }
@@ -639,7 +701,7 @@ struct ObjectCaptureResultView: View {
                 Button {
                     showShare = true
                 } label: {
-                    Label("分享 USDZ", systemImage: "square.and.arrow.up")
+                    Label("导出 USDZ", systemImage: "square.and.arrow.up")
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                         .padding()
@@ -731,6 +793,58 @@ struct ObjectCaptureResultView: View {
                 .foregroundStyle(.white.opacity(0.6))
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+struct USDZSceneView: UIViewRepresentable {
+    let url: URL
+
+    func makeUIView(context: Context) -> SCNView {
+        let view = SCNView()
+        view.backgroundColor = .black
+        view.autoenablesDefaultLighting = true
+        view.allowsCameraControl = true
+        view.antialiasingMode = .multisampling4X
+        loadScene(into: view)
+        return view
+    }
+
+    func updateUIView(_ uiView: SCNView, context: Context) {
+        if uiView.scene == nil {
+            loadScene(into: uiView)
+        }
+    }
+
+    private func loadScene(into view: SCNView) {
+        guard let scene = try? SCNScene(url: url) else { return }
+        view.scene = scene
+
+        let min = scene.rootNode.boundingBox.min
+        let max = scene.rootNode.boundingBox.max
+        guard min.x < max.x, min.y < max.y, min.z < max.z else { return }
+
+        let center = SCNVector3(
+            (min.x + max.x) / 2,
+            (min.y + max.y) / 2,
+            (min.z + max.z) / 2
+        )
+        let size = SCNVector3(
+            max.x - min.x,
+            max.y - min.y,
+            max.z - min.z
+        )
+        let distance = max(max(size.x, size.y), 0.6) * 1.8 + 0.6
+
+        let cameraNode = SCNNode()
+        cameraNode.camera = SCNCamera()
+        cameraNode.camera?.automaticallyAdjustsZRange = true
+        cameraNode.position = SCNVector3(
+            center.x,
+            center.y + size.y * 0.25,
+            center.z + distance
+        )
+        cameraNode.look(at: center)
+        view.pointOfView = cameraNode
     }
 }
 
