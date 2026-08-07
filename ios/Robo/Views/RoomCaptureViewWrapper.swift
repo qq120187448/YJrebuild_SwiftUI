@@ -13,18 +13,37 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
     var onComponentCaptured: (UIImage, String, String) -> Void = { _, _, _ in }
     var onStatusUpdate: (Int, Int) -> Void = { _, _ in }
     var onPendingUpdate: ([String]) -> Void = { _ in }
+    var initialWorldMap: ARWorldMap? = nil
+    var onARSessionReady: ((ARSession) -> Void)? = { _ in }
+    var keepARSessionAlive = false
 
     func makeUIView(context: Context) -> RoomCaptureView {
-        let captureView = RoomCaptureView(frame: .zero)
+        let arSession = ARSession()
+        let arConfiguration = ARWorldTrackingConfiguration()
+        if let initialWorldMap {
+            arConfiguration.initialWorldMap = initialWorldMap
+        }
+        arSession.run(arConfiguration)
+
+        let captureView = RoomCaptureView(frame: .zero, arSession: arSession)
         captureView.captureSession.delegate = context.coordinator
         captureView.delegate = context.coordinator
         captureView.captureSession.run(configuration: .init())
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak arSession] in
+            guard let arSession else { return }
+            onARSessionReady?(arSession)
+        }
         return captureView
     }
 
     func updateUIView(_ uiView: RoomCaptureView, context: Context) {
         if stopRequested {
-            uiView.captureSession.stop()
+            if keepARSessionAlive, #available(iOS 17.0, *) {
+                uiView.captureSession.stop(pauseARSession: false)
+            } else {
+                uiView.captureSession.stop()
+            }
             DispatchQueue.main.async {
                 stopRequested = false
             }
@@ -32,7 +51,11 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ uiView: RoomCaptureView, coordinator: Coordinator) {
-        uiView.captureSession.stop()
+        if coordinator.keepARSessionAlive, #available(iOS 17.0, *) {
+            uiView.captureSession.stop(pauseARSession: false)
+        } else {
+            uiView.captureSession.stop()
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -41,7 +64,8 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
             onCaptureError: onCaptureError,
             onComponentCaptured: onComponentCaptured,
             onStatusUpdate: onStatusUpdate,
-            onPendingUpdate: onPendingUpdate
+            onPendingUpdate: onPendingUpdate,
+            keepARSessionAlive: keepARSessionAlive
         )
     }
 
@@ -52,6 +76,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
         let onComponentCaptured: (UIImage, String, String) -> Void
         let onStatusUpdate: (Int, Int) -> Void
         let onPendingUpdate: ([String]) -> Void
+        let keepARSessionAlive: Bool
         private var seenComponentIDs: Set<String> = []
         private var deliveredComponentIDs: Set<String> = []
         private var pendingComponents: [String: PendingComponent] = [:]
@@ -104,13 +129,15 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
             onCaptureError: @escaping (Error) -> Void,
             onComponentCaptured: @escaping (UIImage, String, String) -> Void,
             onStatusUpdate: @escaping (Int, Int) -> Void,
-            onPendingUpdate: @escaping ([String]) -> Void = { _ in }
+            onPendingUpdate: @escaping ([String]) -> Void = { _ in },
+            keepARSessionAlive: Bool = false
         ) {
             self.onCaptureComplete = onCaptureComplete
             self.onCaptureError = onCaptureError
             self.onComponentCaptured = onComponentCaptured
             self.onStatusUpdate = onStatusUpdate
             self.onPendingUpdate = onPendingUpdate
+            self.keepARSessionAlive = keepARSessionAlive
             super.init()
         }
 

@@ -63,6 +63,7 @@ targets:
       - path: Robo/Services/ObjectScanExporter.swift
       - path: Robo/Services/WallDefectGeometry.swift
       - path: Robo/Services/WallDefectStore.swift
+      - path: Robo/Services/WallDefectARSessionStore.swift
       - path: Robo/Views/ActivityView.swift
       - path: Robo/Views/ContentView.swift
       - path: Robo/Views/CaptureHomeView.swift
@@ -85,8 +86,8 @@ targets:
       - path: Robo/Views/ObjectCaptureTextureScanView.swift
       - path: Robo/Views/ARKitDefectCameraView.swift
       - path: Robo/Views/ToyBoxView.swift
-      - path: Robo/Views/WallDefectPhotoCaptureView.swift
       - path: Robo/Views/WallDefectScanView.swift
+      - path: Robo/Views/WallDefectModelView.swift
     dependencies:
       - package: Voxels
       - package: iTriangle

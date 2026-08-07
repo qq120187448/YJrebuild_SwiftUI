@@ -1,3 +1,4 @@
+import ARKit
 import RoomPlan
 import SwiftUI
 import UIKit
@@ -8,7 +9,7 @@ struct WallDefectScanView: View {
     private enum Phase {
         case instructions
         case scanning
-        case walls
+        case model
     }
 
     @State private var phase: Phase = .instructions
@@ -16,8 +17,7 @@ struct WallDefectScanView: View {
     @State private var capturedRoom: CapturedRoom?
     @State private var surfaces: [WallDefectSurface] = []
     @State private var photos: [WallDefectPhoto] = []
-    @State private var selectedSurface: WallDefectSurface?
-    @State private var showCapture = false
+    @State private var defectARSession: ARSession?
     @State private var stopRequested = false
     @State private var errorMessage: String?
     @State private var savedPath: String?
@@ -37,9 +37,21 @@ struct WallDefectScanView: View {
                         instructionsView
                     case .scanning:
                         scanningView
-                    case .walls:
-                        if let capturedRoom {
-                            wallsView(room: capturedRoom)
+                    case .model:
+                        if let capturedRoom, let defectARSession {
+                            WallDefectModelView(
+                                surfaces: surfaces,
+                                arSession: defectARSession,
+                                onPhoto: { wallID, capture in
+                                    handlePhoto(wallID: wallID, capture: capture)
+                                },
+                                onSave: {
+                                    saveDocument()
+                                },
+                                onDiscard: {
+                                    dismiss()
+                                }
+                            )
                         }
                     }
                 }
@@ -90,13 +102,6 @@ struct WallDefectScanView: View {
                     Text("扫描包已保存：\(savedPath)")
                 }
             }
-            .sheet(isPresented: $showCapture) {
-                if let selectedSurface {
-                    WallDefectPhotoCaptureView(surface: selectedSurface) { capture in
-                        handlePhoto(capture)
-                    }
-                }
-            }
             .preferredColorScheme(.dark)
         }
     }
@@ -105,7 +110,7 @@ struct WallDefectScanView: View {
         switch phase {
         case .instructions: return "墙地面缺陷扫描"
         case .scanning: return "RoomPlan 建模"
-        case .walls: return "墙体底座"
+        case .model: return "墙体补拍"
         }
     }
 
@@ -191,11 +196,20 @@ struct WallDefectScanView: View {
                 onCaptureComplete: { room in
                     capturedRoom = room
                     surfaces = WallDefectGeometry.surfaces(from: room)
-                    phase = .walls
+                    if let defectARSession {
+                        saveWorldMap(defectARSession)
+                    }
+                    phase = .model
                 },
                 onCaptureError: { error in
                     errorMessage = error.localizedDescription
-                }
+                },
+                initialWorldMap: WallDefectARSessionStore.load(),
+                onARSessionReady: { session in
+                    defectARSession = session
+                    saveWorldMap(session)
+                },
+                keepARSessionAlive: true
             )
             .ignoresSafeArea()
 
@@ -213,150 +227,25 @@ struct WallDefectScanView: View {
         }
     }
 
-    private func wallsView(room: CapturedRoom) -> some View {
-        ScrollView {
-            VStack(spacing: 14) {
-                summaryHeader(room: room)
-
-                ForEach(surfaces) { surface in
-                    surfaceCard(surface)
-                }
-
-                Button {
-                    saveDocument()
-                } label: {
-                    Label(
-                        photos.isEmpty ? "保存墙体底座" : "保存扫描包（\(photos.count) 张照片）",
-                        systemImage: "square.and.arrow.down"
-                    )
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.cyan)
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                .padding(.horizontal, 16)
-
-                Button(role: .destructive) {
-                    dismiss()
-                } label: {
-                    Label("不保存退出", systemImage: "trash")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.white.opacity(0.08))
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 24)
-            }
-            .padding(.vertical, 12)
-        }
-        .background(
-            LinearGradient(
-                colors: [
-                    Color(red: 0.03, green: 0.07, blue: 0.10),
-                    Color(red: 0.07, green: 0.12, blue: 0.18)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-        )
-    }
-
-    private func summaryHeader(room: CapturedRoom) -> some View {
-        HStack(spacing: 14) {
-            Image(systemName: "cube.transparent")
-                .font(.system(size: 30))
-                .foregroundStyle(.white)
-                .frame(width: 50, height: 50)
-                .background(Color.teal.opacity(0.75))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("墙体底座")
-                    .font(.title3.bold())
-                    .foregroundStyle(.white)
-                Text("\(room.walls.count) 面墙 · \(room.floors.count) 块地面")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.65))
-            }
-            Spacer()
-        }
-        .padding(16)
-        .background(Color.white.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, 16)
-    }
-
-    private func surfaceCard(_ surface: WallDefectSurface) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Image(
-                    systemName: surface.kind == .wall
-                        ? "square.split.2x1"
-                        : "rectangle.split.2x1"
-                )
-                .foregroundStyle(.cyan)
-                Text(surface.label)
-                    .font(.headline)
-                    .foregroundStyle(.white)
-                Spacer()
-                Text(surface.id.uuidString.prefix(8).uppercased())
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.white.opacity(0.45))
-            }
-
-            Text(surface.uvDescription)
-                .font(.subheadline.monospacedDigit())
-                .foregroundStyle(.white.opacity(0.75))
-
-            HStack(spacing: 10) {
-                Button {
-                    selectedSurface = surface
-                    showCapture = true
-                } label: {
-                    Label("拍摄缺陷", systemImage: "camera.viewfinder")
-                        .font(.subheadline.bold())
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(Color.cyan.opacity(0.9))
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                }
-
-                Text("\(photoCount(for: surface.id)) 张")
-                    .font(.subheadline.bold().monospacedDigit())
-                    .foregroundStyle(.white)
-                    .frame(width: 58)
-            }
-        }
-        .padding(14)
-        .background(Color.white.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, 16)
-    }
-
-    private func photoCount(for surfaceID: UUID) -> Int {
-        photos.filter { $0.wallID == surfaceID }.count
-    }
-
     private func startScan() {
         scanID = UUID()
         capturedRoom = nil
         surfaces = []
         photos = []
-        selectedSurface = nil
+        defectARSession = nil
         errorMessage = nil
         savedPath = nil
         phase = .scanning
     }
 
-    private func handlePhoto(_ capture: DefectCameraCapture) {
-        guard let selectedSurface else { return }
+    private func saveWorldMap(_ session: ARSession) {
+        session.getCurrentWorldMap { worldMap, _ in
+            guard let worldMap else { return }
+            try? WallDefectARSessionStore.save(worldMap)
+        }
+    }
+
+    private func handlePhoto(wallID: UUID, capture: DefectCameraCapture) {
         let photoID = UUID()
         do {
             let stored = try WallDefectStore.savePhoto(
@@ -367,7 +256,7 @@ struct WallDefectScanView: View {
             )
             let photo = WallDefectPhoto(
                 id: photoID,
-                wallID: selectedSurface.id,
+                wallID: wallID,
                 imageFileName: stored.imageFileName,
                 pose: capture.pose,
                 intrinsics: capture.intrinsics,
