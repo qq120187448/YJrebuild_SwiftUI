@@ -1,8 +1,8 @@
 import CoreGraphics
+import CoreVideo
 import CoreML
 import Foundation
 import UIKit
-import Vision
 
 struct CrackRecognitionOutput {
     let result: CrackRecognitionResult
@@ -46,19 +46,10 @@ enum CrackRecognitionEngine {
 
     private struct LoadedModel {
         let mlModel: MLModel
-        let visionModel: VNCoreMLModel
     }
 
     private static var modelCache: [String: LoadedModel] = [:]
     private static let modelLock = NSLock()
-
-    static func makeVisionModel(size: String) throws -> VNCoreMLModel {
-        try loadModel(size: size).visionModel
-    }
-
-    static func makeVisionModel(named: String) throws -> VNCoreMLModel {
-        try loadModel(named: named).visionModel
-    }
 
     static func analyze(
         image: UIImage,
@@ -321,10 +312,7 @@ enum CrackRecognitionEngine {
         } else {
             throw CrackRecognitionError.modelNotFound
         }
-        return LoadedModel(
-            mlModel: mlModel,
-            visionModel: try VNCoreMLModel(for: mlModel)
-        )
+        return LoadedModel(mlModel: mlModel)
     }
 
     private static func runDetections(
@@ -393,15 +381,10 @@ enum CrackRecognitionEngine {
             cgImage,
             canvasSize: inputSize
         )
-        let request = VNCoreMLRequest(model: model.visionModel)
-        request.imageCropAndScaleOption = .scaleFill
-        request.usesCPUOnly = false
-        try VNImageRequestHandler(cgImage: resized, orientation: .up)
-            .perform([request])
-
-        guard let (prediction, protos) = featureArrays(from: request.results) else {
-            throw CrackRecognitionError.noModelOutput
-        }
+        let (prediction, protos) = try predict(
+            model: model,
+            cgImage: resized
+        )
         var detections = CrackYOLODecoder.decode(
             prediction: prediction,
             protos: protos,
@@ -443,16 +426,26 @@ enum CrackRecognitionEngine {
         return detections
     }
 
-    private static func featureArrays(
-        from results: [VNObservation]?
-    ) -> (prediction: MLMultiArray, protos: MLMultiArray)? {
-        guard let observations = results as? [VNCoreMLFeatureValueObservation] else {
-            return nil
+    private static func predict(
+        model: LoadedModel,
+        cgImage: CGImage
+    ) throws -> (prediction: MLMultiArray, protos: MLMultiArray) {
+        let pixelBuffer = try makePixelBuffer(from: cgImage)
+        guard let inputName = model.mlModel.modelDescription
+            .inputDescriptionsByName.keys.first else {
+            throw CrackRecognitionError.noModelOutput
         }
+        let inputValue = MLFeatureValue(pixelBuffer: pixelBuffer)
+        let provider = MLDictionaryFeatureProvider(
+            dictionary: [inputName: inputValue]
+        )
+        let output = try model.mlModel.prediction(from: provider)
+
         var prediction: MLMultiArray?
         var protos: MLMultiArray?
-        for observation in observations {
-            guard let array = observation.featureValue.multiArrayValue else {
+        for name in output.featureNames {
+            guard let value = output.featureValue(for: name),
+                  let array = value.multiArrayValue else {
                 continue
             }
             if array.shape.count == 3,
@@ -468,7 +461,51 @@ enum CrackRecognitionEngine {
         if let prediction, let protos {
             return (prediction, protos)
         }
-        return nil
+        throw CrackRecognitionError.noModelOutput
+    }
+
+    private static func makePixelBuffer(from image: CGImage) throws -> CVPixelBuffer {
+        let width = image.width
+        let height = image.height
+        var pixelBuffer: CVPixelBuffer?
+        let attributes: [CFString: Any] = [
+            kCVPixelBufferCGImageCompatibilityKey: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: true
+        ]
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            width,
+            height,
+            kCVPixelFormatType_32BGRA,
+            attributes as CFDictionary,
+            &pixelBuffer
+        )
+        guard status == kCVReturnSuccess, let pixelBuffer else {
+            throw CrackRecognitionError.invalidImage
+        }
+
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        defer {
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+        }
+        guard let context = CGContext(
+            data: CVPixelBufferGetBaseAddress(pixelBuffer),
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: CVPixelBufferGetBytesPerRow(pixelBuffer),
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+                | CGBitmapInfo.byteOrder32Little.rawValue
+        ) else {
+            throw CrackRecognitionError.invalidImage
+        }
+        context.interpolationQuality = .high
+        context.draw(
+            image,
+            in: CGRect(x: 0, y: 0, width: width, height: height)
+        )
+        return pixelBuffer
     }
 
     private static func modelInputSize(_ model: MLModel) -> Int {
