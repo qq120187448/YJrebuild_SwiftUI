@@ -819,19 +819,21 @@ struct USDZSceneView: UIViewRepresentable {
         guard let scene = try? SCNScene(url: url) else { return }
         view.scene = scene
 
-        let min = scene.rootNode.boundingBox.min
-        let max = scene.rootNode.boundingBox.max
-        guard min.x < max.x, min.y < max.y, min.z < max.z else { return }
+        let minBounds = scene.rootNode.boundingBox.min
+        let maxBounds = scene.rootNode.boundingBox.max
+        guard minBounds.x < maxBounds.x,
+              minBounds.y < maxBounds.y,
+              minBounds.z < maxBounds.z else { return }
 
         let center = SCNVector3(
-            (min.x + max.x) / 2,
-            (min.y + max.y) / 2,
-            (min.z + max.z) / 2
+            (minBounds.x + maxBounds.x) / 2,
+            (minBounds.y + maxBounds.y) / 2,
+            (minBounds.z + maxBounds.z) / 2
         )
         let size = SCNVector3(
-            max.x - min.x,
-            max.y - min.y,
-            max.z - min.z
+            maxBounds.x - minBounds.x,
+            maxBounds.y - minBounds.y,
+            maxBounds.z - minBounds.z
         )
         let distance = max(max(size.x, size.y), 0.6) * 1.8 + 0.6
 
