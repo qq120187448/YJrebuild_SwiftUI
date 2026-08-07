@@ -217,21 +217,21 @@ enum WallDefectProjection {
 
         init(pose: [Float], intrinsics: [Float]) {
             if pose.count == 16, intrinsics.count == 9 {
-                matrix = simd_float4x4(columns: (
+                self.matrix = simd_float4x4(columns: (
                     SIMD4<Float>(pose[0], pose[1], pose[2], pose[3]),
                     SIMD4<Float>(pose[4], pose[5], pose[6], pose[7]),
                     SIMD4<Float>(pose[8], pose[9], pose[10], pose[11]),
                     SIMD4<Float>(pose[12], pose[13], pose[14], pose[15])
                 ))
-                intrinsics = simd_float3x3(columns: (
+                self.intrinsics = simd_float3x3(columns: (
                     SIMD3<Float>(intrinsics[0], intrinsics[1], intrinsics[2]),
                     SIMD3<Float>(intrinsics[3], intrinsics[4], intrinsics[5]),
                     SIMD3<Float>(intrinsics[6], intrinsics[7], intrinsics[8])
                 ))
                 isValid = true
             } else {
-                matrix = matrix_identity_float4x4
-                intrinsics = matrix_identity_float3x3
+                self.matrix = matrix_identity_float4x4
+                self.intrinsics = matrix_identity_float3x3
                 isValid = false
             }
         }

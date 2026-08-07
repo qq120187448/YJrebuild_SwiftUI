@@ -27,8 +27,8 @@ struct WallDefectModelView: View {
                 surfaces: surfaces,
                 arSession: arSession,
                 cameraModel: cameraModel,
-                cameraSurfaceID: $cameraSurfaceID,
-                realtimeDetector: realtimeDetector
+                realtimeDetector: realtimeDetector,
+                cameraSurfaceID: $cameraSurfaceID
             )
             .ignoresSafeArea()
 
