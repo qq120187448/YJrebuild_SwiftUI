@@ -33,8 +33,11 @@ jobs:
 
       - name: Export crack CoreML models
         run: |
-          python3 -m pip install --quiet "ultralytics>=8.2" coremltools
-          python3 tools/coreml_export/export_yolo_seg.py
+          python3 -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet "ultralytics>=8.2" coremltools
+          python tools/coreml_export/export_yolo_seg.py
           ls -lh ios/Robo/Resources/Models
 
       - name: Generate Xcode project
