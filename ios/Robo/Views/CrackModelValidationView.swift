@@ -11,6 +11,7 @@ struct CrackModelValidationView: View {
     @State private var progressMessage = ""
     @State private var nextIndex = 0
     @State private var modelStatus = "未检查"
+    @State private var timeoutWorkItem: DispatchWorkItem?
 
     private let resolutions = [640, 800, 960, 1280, 1600, 1920, 2240]
 
@@ -169,6 +170,19 @@ struct CrackModelValidationView: View {
         isWorking = true
         errorMessage = nil
         progressMessage = "准备 \(resolution)×\(resolution)"
+        timeoutWorkItem?.cancel()
+        let timeout = DispatchWorkItem {
+            DispatchQueue.main.async {
+                guard self.isWorking else { return }
+                self.progressMessage = "推理超时（>30秒），模型可能无法在当前 iOS 上运行"
+                self.isWorking = false
+            }
+        }
+        timeoutWorkItem = timeout
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + 30,
+            execute: timeout
+        )
         DispatchQueue.global(qos: .userInitiated).async {
             let output = CrackRecognitionEngine.validateResolutions(
                 image: image,
@@ -185,6 +199,7 @@ struct CrackModelValidationView: View {
                 self.nextIndex += 1
                 self.progressMessage = "\(resolution) 完成"
                 self.isWorking = false
+                self.timeoutWorkItem?.cancel()
             }
         }
     }

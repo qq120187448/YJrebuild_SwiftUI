@@ -445,7 +445,12 @@ enum CrackRecognitionEngine {
         let provider = try MLDictionaryFeatureProvider(
             dictionary: [inputName: inputValue]
         )
-        let output = try model.mlModel.prediction(from: provider)
+        let options = MLPredictionOptions()
+        options.usesCPUOnly = true
+        let output = try model.mlModel.prediction(
+            from: provider,
+            options: options
+        )
 
         var prediction: MLMultiArray?
         var protos: MLMultiArray?
