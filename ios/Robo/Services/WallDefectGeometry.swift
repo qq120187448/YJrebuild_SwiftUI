@@ -75,7 +75,11 @@ enum WallDefectGeometry {
         worldPoint: SIMD3<Float>,
         surface: WallDefectSurface
     ) -> SIMD2<Double>? {
-        let point = SIMD3<Double>(worldPoint.x, worldPoint.y, worldPoint.z)
+        let point = SIMD3<Double>(
+            Double(worldPoint.x),
+            Double(worldPoint.y),
+            Double(worldPoint.z)
+        )
         let origin = planeOrigin(for: surface)
         let uAxis = planeUAxis(for: surface)
         let vAxis = planeVAxis(for: surface)
@@ -103,9 +107,21 @@ enum WallDefectGeometry {
         width: Double,
         height: Double
     ) -> WallDefectSurface {
-        let center = transform.columns.3
-        let uDir = simd_normalize(transform.columns.0)
-        let vDir = simd_normalize(transform.columns.1)
+        let center = SIMD3<Float>(
+            transform.columns.3.x,
+            transform.columns.3.y,
+            transform.columns.3.z
+        )
+        let uDir = simd_normalize(SIMD3<Float>(
+            transform.columns.0.x,
+            transform.columns.0.y,
+            transform.columns.0.z
+        ))
+        let vDir = simd_normalize(SIMD3<Float>(
+            transform.columns.1.x,
+            transform.columns.1.y,
+            transform.columns.1.z
+        ))
         let normalDir = simd_cross(uDir, vDir)
 
         let origin = center - uDir * Float(width / 2) - vDir * Float(height / 2)
@@ -133,9 +149,21 @@ enum WallDefectGeometry {
         dimensions: simd_float3,
         area: Double
     ) -> WallDefectSurface {
-        let center = transform.columns.3
-        let uDir = simd_normalize(transform.columns.0)
-        let vDir = simd_normalize(transform.columns.1)
+        let center = SIMD3<Float>(
+            transform.columns.3.x,
+            transform.columns.3.y,
+            transform.columns.3.z
+        )
+        let uDir = simd_normalize(SIMD3<Float>(
+            transform.columns.0.x,
+            transform.columns.0.y,
+            transform.columns.0.z
+        ))
+        let vDir = simd_normalize(SIMD3<Float>(
+            transform.columns.1.x,
+            transform.columns.1.y,
+            transform.columns.1.z
+        ))
         let normalDir = simd_cross(uDir, vDir)
         let width = Double(dimensions.x)
         let depth = Double(dimensions.y)
