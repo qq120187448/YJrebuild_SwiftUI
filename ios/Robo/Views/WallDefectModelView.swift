@@ -257,23 +257,32 @@ private struct WallDefectARView: UIViewRepresentable {
         }
 
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
+            let pose = flatten(matrix: frame.camera.transform)
+            let intrinsics = flatten(matrix: frame.camera.intrinsics)
+            let buffer = frame.capturedImage
+            let imageSize = CGSize(
+                width: CGFloat(CVPixelBufferGetHeight(buffer)),
+                height: CGFloat(CVPixelBufferGetWidth(buffer))
+            )
             DispatchQueue.main.async {
                 self.cameraModel.update(frame: frame)
                 self.realtimeDetector.process(
                     frame: frame,
                     config: self.realtimeConfig
                 )
-                self.updateCameraSurface()
+                self.updateCameraSurface(
+                    pose: pose,
+                    intrinsics: intrinsics,
+                    imageSize: imageSize
+                )
             }
         }
 
-        private func updateCameraSurface() {
-            guard let frame = cameraModel.latestFrame,
-                  let pose = cameraModel.poseArray(),
-                  let intrinsics = cameraModel.intrinsicsArray(),
-                  let imageSize = cameraModel.capturedImageSize() else {
-                return
-            }
+        private func updateCameraSurface(
+            pose: [Float],
+            intrinsics: [Float],
+            imageSize: CGSize
+        ) {
             let associations = WallDefectProjection.associations(
                 pose: pose,
                 intrinsics: intrinsics,
@@ -284,6 +293,23 @@ private struct WallDefectARView: UIViewRepresentable {
             if cameraSurfaceID.wrappedValue != nextID {
                 cameraSurfaceID.wrappedValue = nextID
             }
+        }
+
+        private func flatten(matrix: simd_float4x4) -> [Float] {
+            [
+                matrix.columns.0.x, matrix.columns.0.y, matrix.columns.0.z, matrix.columns.0.w,
+                matrix.columns.1.x, matrix.columns.1.y, matrix.columns.1.z, matrix.columns.1.w,
+                matrix.columns.2.x, matrix.columns.2.y, matrix.columns.2.z, matrix.columns.2.w,
+                matrix.columns.3.x, matrix.columns.3.y, matrix.columns.3.z, matrix.columns.3.w
+            ]
+        }
+
+        private func flatten(matrix: simd_float3x3) -> [Float] {
+            [
+                matrix.columns.0.x, matrix.columns.0.y, matrix.columns.0.z,
+                matrix.columns.1.x, matrix.columns.1.y, matrix.columns.1.z,
+                matrix.columns.2.x, matrix.columns.2.y, matrix.columns.2.z
+            ]
         }
     }
 }
