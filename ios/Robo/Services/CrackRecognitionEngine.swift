@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreImage
 import CoreML
 import Foundation
 import UIKit
@@ -7,6 +8,12 @@ import Vision
 struct CrackRecognitionOutput {
     let result: CrackRecognitionResult
     let annotatedImage: UIImage
+}
+
+private struct LetterboxTransform {
+    let scale: CGFloat
+    let offsetX: CGFloat
+    let offsetY: CGFloat
 }
 
 enum CrackRecognitionError: LocalizedError {
@@ -52,10 +59,10 @@ enum CrackRecognitionEngine {
             4096,
             max(config.tileSize * 2, 2048)
         )
-        let analysisImage = resizedUIImage(
+        let analysisImage = enhanceImage(resizedUIImage(
             image,
             maxSide: config.mode == "hairline" ? CGFloat(hairlineMaxSide) : 2048
-        )
+        ))
         guard let cgImage = analysisImage.cgImage else {
             throw CrackRecognitionError.invalidImage
         }
@@ -240,10 +247,9 @@ enum CrackRecognitionEngine {
         tileSize: CGSize,
         config: CrackRecognitionConfig
     ) throws -> [YOLOSegDetection] {
-        let resized = resizedCGImage(
+        let (resized, transform) = letterboxedCGImage(
             cgImage,
-            width: inputSize,
-            height: inputSize
+            canvasSize: inputSize
         )
         let request = VNCoreMLRequest(model: model.visionModel)
         request.imageCropAndScaleOption = .scaleFill
@@ -264,22 +270,32 @@ enum CrackRecognitionEngine {
             iouThreshold: Float(config.iou)
         )
 
-        let scaleX = tileSize.width / CGFloat(inputSize)
-        let scaleY = tileSize.height / CGFloat(inputSize)
         for index in detections.indices {
+            let box = detections[index].box
             detections[index].box = CGRect(
-                x: offset.x + detections[index].box.minX * scaleX,
-                y: offset.y + detections[index].box.minY * scaleY,
-                width: detections[index].box.width * scaleX,
-                height: detections[index].box.height * scaleY
-            )
-            detections[index].tileRect = CGRect(
-                origin: offset,
-                size: tileSize
+                x: offset.x + (box.minX - transform.offsetX) / transform.scale,
+                y: offset.y + (box.minY - transform.offsetY) / transform.scale,
+                width: box.width / transform.scale,
+                height: box.height / transform.scale
             )
             CrackYOLODecoder.decodeMask(
                 for: &detections[index],
                 protos: protos
+            )
+            detections[index].mask = resampleMask(
+                protoMask: detections[index].mask ?? [],
+                protoWidth: detections[index].maskWidth,
+                protoHeight: detections[index].maskHeight,
+                tileWidth: Int(tileSize.width),
+                tileHeight: Int(tileSize.height),
+                canvasSize: inputSize,
+                transform: transform
+            )
+            detections[index].maskWidth = Int(tileSize.width)
+            detections[index].maskHeight = Int(tileSize.height)
+            detections[index].tileRect = CGRect(
+                origin: offset,
+                size: tileSize
             )
         }
         return detections
@@ -529,6 +545,135 @@ enum CrackRecognitionEngine {
             [maxU, maxV],
             [minU, maxV]
         ]
+    }
+
+    private static func enhanceImage(_ image: UIImage) -> UIImage {
+        guard let cgImage = image.cgImage else { return image }
+        let ciImage = CIImage(cgImage: cgImage)
+        let context = CIContext()
+        var output = ciImage
+
+        if let filter = CIFilter(name: "CIColorControls") {
+            filter.setValue(output, forKey: kCIInputImageKey)
+            filter.setValue(1.12, forKey: kCIInputContrastKey)
+            filter.setValue(0.92, forKey: kCIInputSaturationKey)
+            filter.setValue(0.0, forKey: kCIInputBrightnessKey)
+            if let result = filter.outputImage {
+                output = result
+            }
+        }
+        if let filter = CIFilter(name: "CINoiseReduction") {
+            filter.setValue(output, forKey: kCIInputImageKey)
+            filter.setValue(0.02, forKey: "inputNoiseLevel")
+            filter.setValue(0.4, forKey: "inputSharpness")
+            if let result = filter.outputImage {
+                output = result
+            }
+        }
+        if let filter = CIFilter(name: "CIUnsharpMask") {
+            filter.setValue(output, forKey: kCIInputImageKey)
+            filter.setValue(1.6, forKey: kCIInputRadiusKey)
+            filter.setValue(0.6, forKey: kCIInputIntensityKey)
+            if let result = filter.outputImage {
+                output = result
+            }
+        }
+
+        guard let rendered = context.createCGImage(output, from: output.extent) else {
+            return image
+        }
+        return UIImage(cgImage: rendered)
+    }
+
+    private static func letterboxedCGImage(
+        _ image: CGImage,
+        canvasSize: Int
+    ) -> (CGImage, LetterboxTransform) {
+        guard image.width > 0, image.height > 0 else {
+            return (image, LetterboxTransform(scale: 1, offsetX: 0, offsetY: 0))
+        }
+        let canvas = CGFloat(canvasSize)
+        let scale = min(
+            canvas / CGFloat(image.width),
+            canvas / CGFloat(image.height)
+        )
+        let drawWidth = max(1, Int(CGFloat(image.width) * scale))
+        let drawHeight = max(1, Int(CGFloat(image.height) * scale))
+        let offsetX = (canvasSize - drawWidth) / 2
+        let offsetY = (canvasSize - drawHeight) / 2
+
+        guard let context = CGContext(
+            data: nil,
+            width: canvasSize,
+            height: canvasSize,
+            bitsPerComponent: 8,
+            bytesPerRow: canvasSize * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return (image, LetterboxTransform(scale: 1, offsetX: 0, offsetY: 0))
+        }
+        context.setFillColor(gray: 0, alpha: 1)
+        context.fill(
+            CGRect(x: 0, y: 0, width: canvasSize, height: canvasSize)
+        )
+        context.interpolationQuality = .high
+        context.draw(
+            image,
+            in: CGRect(
+                x: offsetX,
+                y: offsetY,
+                width: drawWidth,
+                height: drawHeight
+            )
+        )
+        let result = context.makeImage() ?? image
+        return (
+            result,
+            LetterboxTransform(
+                scale: scale,
+                offsetX: CGFloat(offsetX),
+                offsetY: CGFloat(offsetY)
+            )
+        )
+    }
+
+    private static func resampleMask(
+        protoMask: [Float],
+        protoWidth: Int,
+        protoHeight: Int,
+        tileWidth: Int,
+        tileHeight: Int,
+        canvasSize: Int,
+        transform: LetterboxTransform
+    ) -> [Float] {
+        guard protoWidth > 0, protoHeight > 0,
+              protoMask.count == protoWidth * protoHeight,
+              tileWidth > 0, tileHeight > 0 else {
+            return []
+        }
+        var output = [Float](repeating: 0, count: tileWidth * tileHeight)
+        for ty in 0..<tileHeight {
+            for tx in 0..<tileWidth {
+                let canvasX = transform.offsetX
+                    + (CGFloat(tx) + 0.5) * transform.scale
+                let canvasY = transform.offsetY
+                    + (CGFloat(ty) + 0.5) * transform.scale
+                let px = Int(
+                    canvasX * CGFloat(protoWidth) / CGFloat(canvasSize)
+                )
+                let py = Int(
+                    canvasY * CGFloat(protoHeight) / CGFloat(canvasSize)
+                )
+                guard px >= 0, py >= 0,
+                      px < protoWidth, py < protoHeight else {
+                    continue
+                }
+                output[ty * tileWidth + tx] =
+                    protoMask[py * protoWidth + px]
+            }
+        }
+        return output
     }
 
     private static func resizedUIImage(
