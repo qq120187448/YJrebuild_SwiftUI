@@ -155,10 +155,10 @@ struct ScanHistoryView: View {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text("实景建模 \(record.capturedAt.formatted(date: .abbreviated, time: .shortened))")
                                             .font(.headline)
-                                        Text("\(record.deviceModel) · \(record.photoCount) 张照片 · \(record.wallCount) 面墙")
+                                        Text("\(record.deviceModel) · \(record.photoCount) 张照片 · USDZ")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
-                                        Text("图集 \(record.atlasSize) · 近距 \(record.closeUpCount) 张")
+                                        Text(String(format: "扫描时长 %.0f 秒", record.duration))
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
                                     }
@@ -249,61 +249,51 @@ private func exportBuilding(_ group: BuildingGroup) {
 
 struct TextureScanHistoryDetailView: View {
     let record: TextureScanRecord
+    @State private var showPreview = false
     @State private var showShare = false
 
     private var usdzURL: URL {
         URL(fileURLWithPath: record.usdzPath)
     }
 
-    private var objURL: URL {
-        URL(fileURLWithPath: record.objPath)
-    }
-
-    private var plyURL: URL {
-        URL(fileURLWithPath: record.plyPath)
-    }
-
-    private var jsonURL: URL {
-        URL(fileURLWithPath: record.jsonPath)
-    }
-
-    private var packageURL: URL {
-        URL(fileURLWithPath: record.packagePath)
-    }
-
-    private var textureURLs: [URL] {
-        record.texturePaths.map { URL(fileURLWithPath: $0) }
+    private var usdzExists: Bool {
+        !record.usdzPath.isEmpty &&
+        FileManager.default.fileExists(atPath: record.usdzPath)
     }
 
     var body: some View {
         List {
             Section("扫描信息") {
                 LabeledContent("设备", value: record.deviceModel)
-                LabeledContent("分辨率", value: record.deviceMaxResolution)
                 LabeledContent("照片数", value: "\(record.photoCount)")
-                LabeledContent("近距补拍", value: "\(record.closeUpCount)")
-                LabeledContent("墙面分段", value: "\(record.wallCount)")
-                LabeledContent("纹理图集", value: "\(record.atlasSize)")
+                LabeledContent("扫描时长", value: String(format: "%.0f 秒", record.duration))
+                LabeledContent("模型格式", value: "USDZ")
             }
 
-            Section("导出") {
-                Button {
-                    showShare = true
-                } label: {
-                    Label("分享扫描包（照片+网格+位姿）", systemImage: "shippingbox")
-                }
-                Button {
-                    showShare = true
-                } label: {
-                    Label("分享 USDZ / PLY / JSON / 纹理", systemImage: "square.and.arrow.up")
+            Section("模型") {
+                if usdzExists {
+                    Button {
+                        showPreview = true
+                    } label: {
+                        Label("预览 3D 模型", systemImage: "arkit")
+                    }
+                    Button {
+                        showShare = true
+                    } label: {
+                        Label("分享 USDZ", systemImage: "square.and.arrow.up")
+                    }
+                } else {
+                    Text("模型文件不存在")
+                        .foregroundStyle(.secondary)
                 }
             }
         }
         .navigationTitle("实景建模记录")
+        .sheet(isPresented: $showPreview) {
+            QuickLookPreview(url: usdzURL)
+        }
         .sheet(isPresented: $showShare) {
-            ActivityView(
-                activityItems: [packageURL, usdzURL, plyURL, jsonURL] + textureURLs
-            )
+            ActivityView(activityItems: [usdzURL])
         }
     }
 }

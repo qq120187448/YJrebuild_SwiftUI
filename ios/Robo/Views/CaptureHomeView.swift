@@ -75,7 +75,7 @@ struct CaptureHomeView: View {
 
                         textureFeatureCard(
                             title: "实景建模",
-                            subtitle: "ARKit + 主摄最高分辨率拍摄，本机生成 UV 纹理 USDZ",
+                            subtitle: "苹果官方 Object Capture 引导扫描，本机生成带纹理 USDZ",
                             icon: "camera.aperture",
                             startTitle: "开始实景建模",
                             startAction: {
@@ -96,7 +96,7 @@ struct CaptureHomeView: View {
             ObjectScanView()
         }
         .fullScreenCover(isPresented: $showingTextureScan) {
-            TextureScanView()
+            ObjectCaptureTextureScanView()
         }
     }
 
