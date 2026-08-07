@@ -22,23 +22,29 @@ def main() -> int:
         "--output",
         default="ios/Robo/Resources/Models",
     )
-    parser.add_argument("--imgsz", type=int, default=640)
+    parser.add_argument(
+        "--imgsz",
+        type=int,
+        default=640,
+        help="Base export resolution (kept for compatibility)",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for model_path in args.input:
-        path = Path(model_path).resolve()
+    paths = {Path(p).resolve(): Path(p).stem for p in args.input}
+
+    def export_one(path: Path, imgsz: int, output_name: str) -> None:
         if not path.exists():
             print(f"Missing model: {path}")
-            return 1
+            raise FileNotFoundError(path)
         command = [
             "yolo",
             "export",
             f"model={path}",
             "format=coreml",
-            f"imgsz={args.imgsz}",
+            f"imgsz={imgsz}",
             "nms=True",
             "half=False",
         ]
@@ -47,13 +53,20 @@ def main() -> int:
 
         package_dir = path.with_suffix(".mlpackage")
         if not package_dir.exists():
-            print(f"Export did not create {package_dir}")
-            return 1
-        target = output_dir / package_dir.name
+            raise FileNotFoundError(f"Export did not create {package_dir}")
+        target = output_dir / f"{output_name}.mlpackage"
         if target.exists():
             shutil.rmtree(target)
         shutil.copytree(package_dir, target)
         print(f"Copied {package_dir} -> {target}")
+
+    for path, stem in paths.items():
+        if stem == "crack_seg_n":
+            export_one(path, 640, "crack_seg_n")
+            for imgsz in (640, 800, 960, 1280):
+                export_one(path, imgsz, f"crack_seg_n_{imgsz}")
+        else:
+            export_one(path, 640, stem)
 
     print("Done. Add the .mlpackage files to the Xcode project resources.")
     return 0

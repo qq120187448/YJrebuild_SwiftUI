@@ -327,7 +327,7 @@ private struct RoomMiniMapView: UIViewRepresentable {
         view.backgroundColor = .clear
         view.isOpaque = false
         view.autoenablesDefaultLighting = true
-        view.allowsCameraControl = true
+        view.allowsCameraControl = false
         view.antialiasingMode = .multisampling4X
 
         let scene = loadScene()
@@ -342,7 +342,10 @@ private struct RoomMiniMapView: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_ uiView: SCNView, context: Context) {}
+    func updateUIView(_ uiView: SCNView, context: Context) {
+        guard let camera = uiView.pointOfView else { return }
+        update(camera: camera)
+    }
 
     private func loadScene() -> SCNScene {
         let tempURL = FileManager.default.temporaryDirectory

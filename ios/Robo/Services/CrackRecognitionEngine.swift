@@ -1,5 +1,4 @@
 import CoreGraphics
-import CoreImage
 import CoreML
 import Foundation
 import UIKit
@@ -8,6 +7,16 @@ import Vision
 struct CrackRecognitionOutput {
     let result: CrackRecognitionResult
     let annotatedImage: UIImage
+}
+
+struct CrackResolutionValidationResult: Identifiable {
+    let id: Int
+    let resolution: Int
+    let detectionCount: Int
+    let confidence: Double
+    let totalPixelLength: Double
+    let annotatedImage: UIImage?
+    let errorMessage: String?
 }
 
 private struct LetterboxTransform {
@@ -47,6 +56,10 @@ enum CrackRecognitionEngine {
         try loadModel(size: size).visionModel
     }
 
+    static func makeVisionModel(named: String) throws -> VNCoreMLModel {
+        try loadModel(named: named).visionModel
+    }
+
     static func analyze(
         image: UIImage,
         pose: [Float],
@@ -59,10 +72,10 @@ enum CrackRecognitionEngine {
             4096,
             max(config.tileSize * 2, 2048)
         )
-        let analysisImage = enhanceImage(resizedUIImage(
+        let analysisImage = resizedUIImage(
             image,
             maxSide: config.mode == "hairline" ? CGFloat(hairlineMaxSide) : 2048
-        ))
+        )
         guard let cgImage = analysisImage.cgImage else {
             throw CrackRecognitionError.invalidImage
         }
@@ -130,8 +143,99 @@ enum CrackRecognitionEngine {
         return CrackRecognitionOutput(result: result, annotatedImage: annotated)
     }
 
+    static func validateResolutions(
+        image: UIImage,
+        resolutions: [Int] = [640, 800, 960, 1280]
+    ) -> [CrackResolutionValidationResult] {
+        let analysisImage = resizedUIImage(image, maxSide: 4096)
+        guard let cgImage = analysisImage.cgImage else {
+            return resolutions.enumerated().map { index, resolution in
+                CrackResolutionValidationResult(
+                    id: index,
+                    resolution: resolution,
+                    detectionCount: 0,
+                    confidence: 0,
+                    totalPixelLength: 0,
+                    annotatedImage: nil,
+                    errorMessage: CrackRecognitionError.invalidImage.localizedDescription
+                )
+            }
+        }
+
+        var config = CrackRecognitionConfig.defaultConfig
+        config.confidence = 0.15
+        config.iou = 0.5
+        config.mode = "normal"
+        config.modelSize = "n"
+        config.minMaskArea = 50
+        config.skeletonMode = "main"
+        config.topCracks = 3
+        config.minSpurLength = 30
+        config.minSkeletonLength = 80
+        config.lengthUnit = "pixel"
+        config.mmPerPixel = 0
+
+        let width = cgImage.width
+        let height = cgImage.height
+        return resolutions.enumerated().map { index, resolution in
+            do {
+                let model = try loadModel(named: "crack_seg_n_\(resolution)")
+                let detections = try runSingleDetection(
+                    cgImage: cgImage,
+                    model: model,
+                    inputSize: resolution,
+                    offset: .zero,
+                    tileSize: CGSize(width: width, height: height),
+                    config: config
+                )
+                let mask = mergedMask(
+                    detections: detections,
+                    width: width,
+                    height: height
+                )
+                let skeleton = CrackSkeleton.analyze(
+                    mask: mask,
+                    width: width,
+                    height: height,
+                    config: config
+                )
+                return CrackResolutionValidationResult(
+                    id: index,
+                    resolution: resolution,
+                    detectionCount: detections.count,
+                    confidence: Double(detections.map(\.score).max() ?? 0),
+                    totalPixelLength: skeleton.totalPixelLength,
+                    annotatedImage: resizedUIImage(
+                        annotatedImage(
+                            from: analysisImage,
+                            mask: skeleton.mask ?? mask,
+                            width: width,
+                            height: height
+                        ),
+                        maxSide: 320
+                    ),
+                    errorMessage: nil
+                )
+            } catch {
+                return CrackResolutionValidationResult(
+                    id: index,
+                    resolution: resolution,
+                    detectionCount: 0,
+                    confidence: 0,
+                    totalPixelLength: 0,
+                    annotatedImage: nil,
+                    errorMessage: error.localizedDescription
+                )
+            }
+        }
+    }
+
     private static func loadModel(size: String) throws -> LoadedModel {
         let name = size == "n" ? "crack_seg_n" : "crack_seg_s"
+        return try loadModel(named: name)
+    }
+
+    private static func loadModel(named name: String) throws -> LoadedModel {
         modelLock.lock()
         if let cached = modelCache[name] {
             modelLock.unlock()
@@ -545,44 +649,6 @@ enum CrackRecognitionEngine {
             [maxU, maxV],
             [minU, maxV]
         ]
-    }
-
-    private static func enhanceImage(_ image: UIImage) -> UIImage {
-        guard let cgImage = image.cgImage else { return image }
-        let ciImage = CIImage(cgImage: cgImage)
-        let context = CIContext()
-        var output = ciImage
-
-        if let filter = CIFilter(name: "CIColorControls") {
-            filter.setValue(output, forKey: kCIInputImageKey)
-            filter.setValue(1.12, forKey: kCIInputContrastKey)
-            filter.setValue(0.92, forKey: kCIInputSaturationKey)
-            filter.setValue(0.0, forKey: kCIInputBrightnessKey)
-            if let result = filter.outputImage {
-                output = result
-            }
-        }
-        if let filter = CIFilter(name: "CINoiseReduction") {
-            filter.setValue(output, forKey: kCIInputImageKey)
-            filter.setValue(0.02, forKey: "inputNoiseLevel")
-            filter.setValue(0.4, forKey: "inputSharpness")
-            if let result = filter.outputImage {
-                output = result
-            }
-        }
-        if let filter = CIFilter(name: "CIUnsharpMask") {
-            filter.setValue(output, forKey: kCIInputImageKey)
-            filter.setValue(1.6, forKey: kCIInputRadiusKey)
-            filter.setValue(0.6, forKey: kCIInputIntensityKey)
-            if let result = filter.outputImage {
-                output = result
-            }
-        }
-
-        guard let rendered = context.createCGImage(output, from: output.extent) else {
-            return image
-        }
-        return UIImage(cgImage: rendered)
     }
 
     private static func letterboxedCGImage(

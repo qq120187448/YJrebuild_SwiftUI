@@ -40,6 +40,11 @@ struct SettingsView: View {
                     } label: {
                         Label("裂缝照片检测", systemImage: "photo.on.rectangle")
                     }
+                    NavigationLink {
+                        CrackModelValidationView()
+                    } label: {
+                        Label("模型分辨率验证", systemImage: "checkmark.seal")
+                    }
                 }
 
                 Section("数据") {
