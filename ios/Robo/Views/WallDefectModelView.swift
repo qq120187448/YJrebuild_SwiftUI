@@ -35,7 +35,8 @@ struct WallDefectModelView: View {
             .ignoresSafeArea()
 
             if realtimeDetector.isAvailable,
-               !realtimeDetector.normalizedPoints.isEmpty {
+               !realtimeDetector.normalizedPoints.isEmpty
+                || !realtimeDetector.normalizedBoxes.isEmpty {
                 Canvas { context, size in
                     for point in realtimeDetector.normalizedPoints {
                         let rect = CGRect(
@@ -47,6 +48,19 @@ struct WallDefectModelView: View {
                         context.fill(
                             Path(ellipseIn: rect),
                             with: .color(.red.opacity(0.9))
+                        )
+                    }
+                    for box in realtimeDetector.normalizedBoxes {
+                        let rect = CGRect(
+                            x: box.minX * size.width,
+                            y: box.minY * size.height,
+                            width: box.width * size.width,
+                            height: box.height * size.height
+                        )
+                        context.stroke(
+                            Path(rect),
+                            with: .color(.yellow.opacity(0.95)),
+                            lineWidth: 2
                         )
                     }
                 }
@@ -260,8 +274,12 @@ private struct WallDefectARView: UIViewRepresentable {
 
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
             let pose = flatten(matrix: frame.camera.transform)
-            let intrinsics = flatten(matrix: frame.camera.intrinsics)
             let buffer = frame.capturedImage
+            let intrinsics = WallDefectProjection.portraitIntrinsics(
+                intrinsics: flatten(matrix: frame.camera.intrinsics),
+                rawWidth: CVPixelBufferGetWidth(buffer),
+                rawHeight: CVPixelBufferGetHeight(buffer)
+            )
             let imageSize = CGSize(
                 width: CGFloat(CVPixelBufferGetHeight(buffer)),
                 height: CGFloat(CVPixelBufferGetWidth(buffer))
@@ -327,7 +345,7 @@ private struct RoomMiniMapView: UIViewRepresentable {
         view.backgroundColor = .clear
         view.isOpaque = false
         view.autoenablesDefaultLighting = true
-        view.allowsCameraControl = true
+        view.allowsCameraControl = false
         view.antialiasingMode = .multisampling4X
 
         let scene = loadScene()
@@ -342,7 +360,10 @@ private struct RoomMiniMapView: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_ uiView: SCNView, context: Context) {}
+    func updateUIView(_ uiView: SCNView, context: Context) {
+        guard let camera = uiView.pointOfView else { return }
+        update(camera: camera)
+    }
 
     private func loadScene() -> SCNScene {
         let tempURL = FileManager.default.temporaryDirectory

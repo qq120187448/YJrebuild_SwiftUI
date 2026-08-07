@@ -9,6 +9,7 @@ struct CrackPhotoLabView: View {
     @State private var annotatedImage: UIImage?
     @State private var isWorking = false
     @State private var errorMessage: String?
+    private var timeoutWorkItem: DispatchWorkItem?
 
     private var config: CrackRecognitionConfig {
         CrackRecognitionSettings.load()
@@ -98,6 +99,16 @@ struct CrackPhotoLabView: View {
         guard let image else { return }
         isWorking = true
         errorMessage = nil
+        timeoutWorkItem?.cancel()
+        let timeout = DispatchWorkItem { [weak self] in
+            DispatchQueue.main.async {
+                guard let self, self.isWorking else { return }
+                self.errorMessage = "识别超时，请缩小照片或改用 n 模型"
+                self.isWorking = false
+            }
+        }
+        timeoutWorkItem = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 90, execute: timeout)
         let config = self.config
         DispatchQueue.global(qos: .userInitiated).async {
             do {
@@ -112,11 +123,13 @@ struct CrackPhotoLabView: View {
                     self.result = output.result
                     self.annotatedImage = output.annotatedImage
                     self.isWorking = false
+                    self.timeoutWorkItem?.cancel()
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.errorMessage = error.localizedDescription
                     self.isWorking = false
+                    self.timeoutWorkItem?.cancel()
                 }
             }
         }

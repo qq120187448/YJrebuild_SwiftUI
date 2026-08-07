@@ -8,6 +8,7 @@ import Vision
 
 final class CrackRealtimeDetector: ObservableObject {
     @Published var normalizedPoints: [CGPoint] = []
+    @Published var normalizedBoxes: [CGRect] = []
     @Published var detectionCount = 0
     @Published var isAvailable = false
     @Published var statusMessage = ""
@@ -32,7 +33,7 @@ final class CrackRealtimeDetector: ObservableObject {
     func process(frame: ARFrame, config: CrackRecognitionConfig) {
         guard model != nil else { return }
         let now = frame.timestamp
-        guard now - lastRunAt >= 0.8 else { return }
+        guard now - lastRunAt >= 2.0 else { return }
         lastRunAt = now
         guard let image = snapshot(from: frame),
               let cgImage = image.cgImage else {
@@ -49,6 +50,7 @@ final class CrackRealtimeDetector: ObservableObject {
                 )
                 DispatchQueue.main.async {
                     self.normalizedPoints = mask.points
+                    self.normalizedBoxes = mask.boxes
                     self.detectionCount = mask.detectionCount
                 }
             } catch {

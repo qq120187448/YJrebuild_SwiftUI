@@ -2,7 +2,7 @@ import Foundation
 
 struct CrackRecognitionConfig: Codable, Equatable {
     var mode: String = "hairline"          // normal / hairline
-    var modelSize: String = "s"            // n / s
+    var modelSize: String = "n"            // n / s
     var engine: String = "yolo"            // yolo / mobilesam
     var confidence: Double = 0.15
     var iou: Double = 0.5

@@ -4,6 +4,25 @@ import simd
 
 enum WallDefectProjection {
 
+    static func portraitIntrinsics(
+        intrinsics: [Float],
+        rawWidth: Int,
+        rawHeight: Int
+    ) -> [Float] {
+        guard intrinsics.count == 9, rawWidth > 0, rawHeight > 0 else {
+            return intrinsics
+        }
+        let fx = intrinsics[0]
+        let fy = intrinsics[4]
+        let cx = intrinsics[2]
+        let cy = intrinsics[5]
+        return [
+            fy, 0, Float(rawHeight) - cy,
+            0, fx, cx,
+            0, 0, 1
+        ]
+    }
+
     static func associations(
         pose: [Float],
         intrinsics: [Float],

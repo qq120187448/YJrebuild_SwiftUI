@@ -35,7 +35,12 @@ final class DefectCameraModel: ObservableObject {
 
     func intrinsicsArray() -> [Float]? {
         guard let frame = latestFrame else { return nil }
-        return flatten(matrix: frame.camera.intrinsics)
+        let buffer = frame.capturedImage
+        return WallDefectProjection.portraitIntrinsics(
+            intrinsics: flatten(matrix: frame.camera.intrinsics),
+            rawWidth: CVPixelBufferGetWidth(buffer),
+            rawHeight: CVPixelBufferGetHeight(buffer)
+        )
     }
 
     func capturedImageSize() -> CGSize? {
@@ -58,7 +63,12 @@ final class DefectCameraModel: ObservableObject {
         }
 
         let pose = flatten(matrix: frame.camera.transform)
-        let intrinsics = flatten(matrix: frame.camera.intrinsics)
+        let buffer = frame.capturedImage
+        let intrinsics = WallDefectProjection.portraitIntrinsics(
+            intrinsics: flatten(matrix: frame.camera.intrinsics),
+            rawWidth: CVPixelBufferGetWidth(buffer),
+            rawHeight: CVPixelBufferGetHeight(buffer)
+        )
 
         var depth: Data?
         var depthWidth: Int?

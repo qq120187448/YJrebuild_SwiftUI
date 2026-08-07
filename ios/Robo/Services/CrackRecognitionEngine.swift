@@ -7,6 +7,7 @@ import Vision
 struct CrackRealtimeMask {
     let points: [CGPoint]
     let detectionCount: Int
+    let boxes: [CGRect]
 }
 
 struct CrackRecognitionOutput {
@@ -37,6 +38,9 @@ enum CrackRecognitionEngine {
         let mlModel: MLModel
         let visionModel: VNCoreMLModel
     }
+
+    private static var modelCache: [String: LoadedModel] = [:]
+    private static let modelLock = NSLock()
 
     static func makeVisionModel(size: String) throws -> VNCoreMLModel {
         try loadModel(size: size).visionModel
@@ -185,12 +189,35 @@ enum CrackRecognitionEngine {
         }
         return CrackRealtimeMask(
             points: points,
-            detectionCount: detections.count
+            detectionCount: detections.count,
+            boxes: detections.map { detection in
+                CGRect(
+                    x: detection.box.minX / CGFloat(inputSize),
+                    y: detection.box.minY / CGFloat(inputSize),
+                    width: detection.box.width / CGFloat(inputSize),
+                    height: detection.box.height / CGFloat(inputSize)
+                )
+            }
         )
     }
 
     private static func loadModel(size: String) throws -> LoadedModel {
         let name = size == "n" ? "crack_seg_n" : "crack_seg_s"
+        modelLock.lock()
+        if let cached = modelCache[name] {
+            modelLock.unlock()
+            return cached
+        }
+        modelLock.unlock()
+
+        let loaded = try makeModel(name: name)
+        modelLock.lock()
+        modelCache[name] = loaded
+        modelLock.unlock()
+        return loaded
+    }
+
+    private static func makeModel(name: String) throws -> LoadedModel {
         let mlModel: MLModel
         if let url = Bundle.main.url(
             forResource: name,
