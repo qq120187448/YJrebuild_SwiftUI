@@ -154,7 +154,7 @@ struct ObjectCaptureTextureScanView: View {
     private func captureView(session: ObjectCaptureSession) -> some View {
         ZStack {
             ObjectCaptureView(session: session)
-                .hideObjectReticle(coordinator.usesAreaMode)
+                .modifier(ObjectCaptureReticleModifier(hide: coordinator.usesAreaMode))
                 .ignoresSafeArea()
 
             VStack {
@@ -289,6 +289,19 @@ struct ObjectCaptureTextureScanView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(red: 0.04, green: 0.06, blue: 0.11).ignoresSafeArea())
+    }
+}
+
+private struct ObjectCaptureReticleModifier: ViewModifier {
+    let hide: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.hideObjectReticle(hide)
+        } else {
+            content
+        }
     }
 }
 
