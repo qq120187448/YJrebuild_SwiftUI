@@ -1,10 +1,12 @@
 import ARKit
+import RoomPlan
 import SceneKit
 import simd
 import SwiftUI
 import UIKit
 
 struct WallDefectModelView: View {
+    let room: CapturedRoom
     let surfaces: [WallDefectSurface]
     let arSession: ARSession
     let onPhoto: ([WallDefectSurfaceAssociation], DefectCameraCapture) -> Void
@@ -37,14 +39,14 @@ struct WallDefectModelView: View {
                 Canvas { context, size in
                     for point in realtimeDetector.normalizedPoints {
                         let rect = CGRect(
-                            x: point.x * size.width - 2,
-                            y: point.y * size.height - 2,
-                            width: 4,
-                            height: 4
+                            x: point.x * size.width - 3,
+                            y: point.y * size.height - 3,
+                            width: 6,
+                            height: 6
                         )
                         context.fill(
                             Path(ellipseIn: rect),
-                            with: .color(.red.opacity(0.85))
+                            with: .color(.red.opacity(0.9))
                         )
                     }
                 }
@@ -53,8 +55,24 @@ struct WallDefectModelView: View {
 
             VStack(spacing: 0) {
                 topBar
+                if realtimeDetector.isAvailable {
+                    Label(
+                        realtimeDetector.detectionCount > 0
+                            ? "实时裂缝 \(realtimeDetector.detectionCount) 处"
+                            : "实时识别中",
+                        systemImage: "waveform.path.ecg"
+                    )
+                    .font(.caption.bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.black.opacity(0.45))
+                    .clipShape(Capsule())
+                    .padding(.top, 6)
+                }
                 Spacer()
                 RoomMiniMapView(
+                    room: room,
                     surfaces: surfaces,
                     yaw: cameraModel.yaw,
                     selectedSurfaceID: cameraSurfaceID
@@ -190,7 +208,6 @@ private struct WallDefectARView: UIViewRepresentable {
         view.session = arSession
         view.session.delegate = context.coordinator
         view.automaticallyUpdatesLighting = true
-        context.coordinator.sceneView = view
 
         let configuration = ARWorldTrackingConfiguration()
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
@@ -201,16 +218,10 @@ private struct WallDefectARView: UIViewRepresentable {
         }
         arSession.run(configuration, options: [])
 
-        addNodes(to: view.scene.rootNode)
         return view
     }
 
-    func updateUIView(_ uiView: ARSCNView, context: Context) {
-        context.coordinator.updateSelection(
-            in: uiView.scene.rootNode,
-            selectedID: cameraSurfaceID
-        )
-    }
+    func updateUIView(_ uiView: ARSCNView, context: Context) {}
 
     static func dismantleUIView(_ uiView: ARSCNView, coordinator: Coordinator) {
         uiView.session.pause()
@@ -218,39 +229,27 @@ private struct WallDefectARView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
+            surfaces: surfaces,
             cameraModel: cameraModel,
             cameraSurfaceID: $cameraSurfaceID,
             realtimeDetector: realtimeDetector
         )
     }
 
-    private func addNodes(to root: SCNNode) {
-        for surface in surfaces {
-            let plane = SCNPlane(width: surface.width, height: surface.height)
-            let material = SCNMaterial()
-            material.diffuse.contents = UIColor.cyan.withAlphaComponent(0.32)
-            material.isDoubleSided = true
-            plane.firstMaterial = material
-
-            let node = SCNNode(geometry: plane)
-            node.name = surface.id.uuidString
-            node.transform = SCNMatrix4(surfaceTransform(surface))
-            root.addChildNode(node)
-        }
-    }
-
     final class Coordinator: NSObject, ARSessionDelegate {
+        let surfaces: [WallDefectSurface]
         let cameraModel: DefectCameraModel
         let realtimeDetector: CrackRealtimeDetector
         private let realtimeConfig: CrackRecognitionConfig
         var cameraSurfaceID: Binding<UUID?>
-        weak var sceneView: ARSCNView?
 
         init(
+            surfaces: [WallDefectSurface],
             cameraModel: DefectCameraModel,
             cameraSurfaceID: Binding<UUID?>,
             realtimeDetector: CrackRealtimeDetector
         ) {
+            self.surfaces = surfaces
             self.cameraModel = cameraModel
             self.cameraSurfaceID = cameraSurfaceID
             self.realtimeDetector = realtimeDetector
@@ -269,38 +268,28 @@ private struct WallDefectARView: UIViewRepresentable {
         }
 
         private func updateCameraSurface() {
-            guard let view = sceneView else { return }
-            let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-            let results = view.hitTest(
-                center,
-                options: [.rootNode: view.scene.rootNode]
-            )
-            var nextID: UUID?
-            if let name = results.first?.node.name {
-                nextID = UUID(uuidString: name)
+            guard let frame = cameraModel.latestFrame,
+                  let pose = cameraModel.poseArray(),
+                  let intrinsics = cameraModel.intrinsicsArray(),
+                  let imageSize = cameraModel.capturedImageSize() else {
+                return
             }
+            let associations = WallDefectProjection.associations(
+                pose: pose,
+                intrinsics: intrinsics,
+                imageSize: imageSize,
+                surfaces: surfaces
+            )
+            let nextID = associations.first?.surfaceID
             if cameraSurfaceID.wrappedValue != nextID {
                 cameraSurfaceID.wrappedValue = nextID
-            }
-        }
-
-        func updateSelection(in root: SCNNode, selectedID: UUID?) {
-            for node in root.childNodes {
-                guard let name = node.name,
-                      let id = UUID(uuidString: name) else {
-                    continue
-                }
-                let selected = id == selectedID
-                let color = selected
-                    ? UIColor.orange.withAlphaComponent(0.58)
-                    : UIColor.cyan.withAlphaComponent(0.32)
-                node.geometry?.firstMaterial?.diffuse.contents = color
             }
         }
     }
 }
 
 private struct RoomMiniMapView: UIViewRepresentable {
+    let room: CapturedRoom
     let surfaces: [WallDefectSurface]
     let yaw: Float
     let selectedSurfaceID: UUID?
@@ -311,9 +300,8 @@ private struct RoomMiniMapView: UIViewRepresentable {
         view.allowsCameraControl = false
         view.antialiasingMode = .multisampling4X
 
-        let scene = SCNScene()
+        let scene = loadScene()
         view.scene = scene
-        addNodes(to: scene.rootNode)
 
         let camera = SCNNode()
         camera.camera = SCNCamera()
@@ -327,21 +315,21 @@ private struct RoomMiniMapView: UIViewRepresentable {
     func updateUIView(_ uiView: SCNView, context: Context) {
         guard let camera = uiView.pointOfView else { return }
         update(camera: camera)
-        updateSelection(in: uiView.scene?.rootNode)
     }
 
-    private func addNodes(to root: SCNNode) {
-        for surface in surfaces {
-            let plane = SCNPlane(width: surface.width, height: surface.height)
-            let material = SCNMaterial()
-            material.diffuse.contents = UIColor.cyan.withAlphaComponent(0.55)
-            material.isDoubleSided = true
-            plane.firstMaterial = material
-
-            let node = SCNNode(geometry: plane)
-            node.name = surface.id.uuidString
-            node.transform = SCNMatrix4(surfaceTransform(surface))
-            root.addChildNode(node)
+    private func loadScene() -> SCNScene {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).usdz")
+        do {
+            try room.export(to: tempURL, exportOptions: .model)
+            let scene = try SCNScene(url: tempURL, options: [
+                .checkConsistency: true
+            ])
+            try? FileManager.default.removeItem(at: tempURL)
+            return scene
+        } catch {
+            try? FileManager.default.removeItem(at: tempURL)
+            return SCNScene()
         }
     }
 
@@ -358,21 +346,6 @@ private struct RoomMiniMapView: UIViewRepresentable {
             center.z + horizontal * cos(yaw)
         )
         camera.look(at: SCNVector3(center.x, center.y, center.z))
-    }
-
-    private func updateSelection(in root: SCNNode?) {
-        guard let root else { return }
-        for node in root.childNodes {
-            guard let name = node.name,
-                  let id = UUID(uuidString: name) else {
-                continue
-            }
-            let selected = id == selectedSurfaceID
-            let color = selected
-                ? UIColor.orange.withAlphaComponent(0.85)
-                : UIColor.cyan.withAlphaComponent(0.55)
-            node.geometry?.firstMaterial?.diffuse.contents = color
-        }
     }
 
     private var roomCenter: SCNVector3 {

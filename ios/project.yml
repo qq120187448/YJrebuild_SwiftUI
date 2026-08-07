@@ -39,7 +39,10 @@ targets:
     type: application
     platform: iOS
     sources:
-      - path: Robo/Resources
+      - path: Robo/Resources/Assets.xcassets
+      - path: Robo/Resources/Models
+        type: folder
+        buildPhase: resources
       - path: Robo/RoboApp.swift
       - path: Robo/Models/AppStrings.swift
       - path: Robo/Models/PhotoAttachment.swift

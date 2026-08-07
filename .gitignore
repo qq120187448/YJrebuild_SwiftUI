@@ -6,3 +6,6 @@ ios/Robo.xcodeproj/
 crack-recognition/models/
 crack-recognition/data/
 tools/wall-defect-inspector/
+ios/Robo/Resources/Models/*.mlpackage/
+ios/Robo/Resources/Models/*.mlmodelc/
+ios/Robo/Resources/Models/*.mlmodel

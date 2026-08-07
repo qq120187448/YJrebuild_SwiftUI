@@ -22,6 +22,21 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Download crack YOLO weights
+        run: |
+          mkdir -p crack-recognition/models
+          curl -sSL --retry 5 -o crack-recognition/models/crack_seg_n.pt \
+            https://huggingface.co/OpenSistemas/YOLOv8-crack-seg/resolve/main/yolov8n/weights/best.pt
+          curl -sSL --retry 5 -o crack-recognition/models/crack_seg_s.pt \
+            https://huggingface.co/OpenSistemas/YOLOv8-crack-seg/resolve/main/yolov8s/weights/best.pt
+          ls -lh crack-recognition/models
+
+      - name: Export crack CoreML models
+        run: |
+          python3 -m pip install --quiet "ultralytics>=8.2" coremltools
+          python3 tools/coreml_export/export_yolo_seg.py
+          ls -lh ios/Robo/Resources/Models
+
       - name: Generate Xcode project
         working-directory: ios
         run: xcodegen generate

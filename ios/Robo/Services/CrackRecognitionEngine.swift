@@ -152,6 +152,12 @@ enum CrackRecognitionEngine {
         )
         for index in detections.indices {
             CrackYOLODecoder.decodeMask(for: &detections[index], protos: protos)
+            detections[index].tileRect = CGRect(
+                x: 0,
+                y: 0,
+                width: inputSize,
+                height: inputSize
+            )
         }
 
         let mask = mergedMask(

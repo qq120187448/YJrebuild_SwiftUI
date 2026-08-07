@@ -28,6 +28,25 @@ final class DefectCameraModel: ObservableObject {
         yaw = frame.camera.eulerAngles.y
     }
 
+    func poseArray() -> [Float]? {
+        guard let frame = latestFrame else { return nil }
+        return flatten(matrix: frame.camera.transform)
+    }
+
+    func intrinsicsArray() -> [Float]? {
+        guard let frame = latestFrame else { return nil }
+        return flatten(matrix: frame.camera.intrinsics)
+    }
+
+    func capturedImageSize() -> CGSize? {
+        guard let frame = latestFrame else { return nil }
+        let buffer = frame.capturedImage
+        return CGSize(
+            width: CGFloat(CVPixelBufferGetHeight(buffer)),
+            height: CGFloat(CVPixelBufferGetWidth(buffer))
+        )
+    }
+
     func capture() -> DefectCameraCapture? {
         guard let frame = latestFrame else {
             lastError = "尚未获取 ARKit 画面"

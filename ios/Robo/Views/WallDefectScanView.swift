@@ -40,6 +40,7 @@ struct WallDefectScanView: View {
                     case .model:
                         if let capturedRoom, let defectARSession {
                             WallDefectModelView(
+                                room: capturedRoom,
                                 surfaces: surfaces,
                                 arSession: defectARSession,
                                 onPhoto: { associations, capture in
