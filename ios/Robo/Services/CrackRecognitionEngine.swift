@@ -143,6 +143,15 @@ enum CrackRecognitionEngine {
         return CrackRecognitionOutput(result: result, annotatedImage: annotated)
     }
 
+    static func checkModelLoad() -> String {
+        do {
+            _ = try loadModel(named: "crack_seg_n")
+            return "模型加载成功"
+        } catch {
+            return "模型加载失败：\(error.localizedDescription)"
+        }
+    }
+
     static func validateResolutions(
         image: UIImage,
         resolutions: [Int] = [640, 800, 960, 1280, 1600, 1920, 2240],
@@ -178,28 +187,58 @@ enum CrackRecognitionEngine {
         config.lengthUnit = "pixel"
         config.mmPerPixel = 0
 
-        let width = cgImage.width
-        let height = cgImage.height
+        let model: LoadedModel
+        do {
+            progress?("正在加载 crack_seg_n 模型", [])
+            model = try loadModel(named: "crack_seg_n")
+            progress?("模型加载成功，等待推理", [])
+        } catch {
+            let errorMessage = error.localizedDescription
+            let results = resolutions.enumerated().map { index, resolution in
+                CrackResolutionValidationResult(
+                    id: index,
+                    resolution: resolution,
+                    detectionCount: 0,
+                    confidence: 0,
+                    maskPixelCount: 0,
+                    annotatedImage: nil,
+                    errorMessage: errorMessage
+                )
+            }
+            progress?("模型加载失败：\(errorMessage)", results)
+            return results
+        }
+
         var results: [CrackResolutionValidationResult] = []
         for (index, resolution) in resolutions.enumerated() {
-            let modelName = "crack_seg_n_\(resolution)"
-            progress?("正在加载 \(modelName)", results)
             do {
-                let model = try loadModel(named: modelName)
-                progress?("模型已加载，正在 \(resolution)×\(resolution) 推理", results)
+                progress?("正在准备 \(resolution)×\(resolution) 输入", results)
+                let canvas = letterboxedCGImage(
+                    cgImage,
+                    canvasSize: resolution
+                ).0
+                let canvasWidth = canvas.width
+                let canvasHeight = canvas.height
                 let detections = try runSingleDetection(
-                    cgImage: cgImage,
+                    cgImage: canvas,
                     model: model,
-                    inputSize: resolution,
+                    inputSize: 640,
                     offset: .zero,
-                    tileSize: CGSize(width: width, height: height),
+                    tileSize: CGSize(width: canvasWidth, height: canvasHeight),
                     config: config
                 )
-                progress?("\(resolution) 推理完成，正在合并掩码", results)
+                progress?("\(resolution) 推理完成，正在生成标注图", results)
                 let mask = mergedMask(
                     detections: detections,
-                    width: width,
-                    height: height
+                    width: canvasWidth,
+                    height: canvasHeight
+                )
+                let annotated = annotatedImageWithBoxes(
+                    from: UIImage(cgImage: canvas),
+                    mask: mask,
+                    boxes: detections.map(\.box),
+                    width: canvasWidth,
+                    height: canvasHeight
                 )
                 let result = CrackResolutionValidationResult(
                     id: index,
@@ -207,7 +246,7 @@ enum CrackRecognitionEngine {
                     detectionCount: detections.count,
                     confidence: Double(detections.map(\.score).max() ?? 0),
                     maskPixelCount: mask.filter { $0 }.count,
-                    annotatedImage: nil,
+                    annotatedImage: resizedUIImage(annotated, maxSide: 480),
                     errorMessage: nil
                 )
                 results.append(result)
@@ -835,6 +874,35 @@ enum CrackRecognitionEngine {
                         overlay,
                         in: CGRect(origin: .zero, size: size)
                     )
+                }
+            }
+    }
+
+    private static func annotatedImageWithBoxes(
+        from image: UIImage,
+        mask: [Bool],
+        boxes: [CGRect],
+        width: Int,
+        height: Int
+    ) -> UIImage {
+        let base = annotatedImage(
+            from: image,
+            mask: mask,
+            width: width,
+            height: height
+        )
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let size = CGSize(width: width, height: height)
+        return UIGraphicsImageRenderer(size: size, format: format)
+            .image { rendererContext in
+                base.draw(in: CGRect(origin: .zero, size: size))
+                rendererContext.cgContext.setStrokeColor(
+                    UIColor.systemYellow.cgColor
+                )
+                rendererContext.cgContext.setLineWidth(2)
+                for box in boxes {
+                    rendererContext.cgContext.stroke(box)
                 }
             }
     }

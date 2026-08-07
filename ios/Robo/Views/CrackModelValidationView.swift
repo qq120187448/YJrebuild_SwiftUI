@@ -9,6 +9,8 @@ struct CrackModelValidationView: View {
     @State private var isWorking = false
     @State private var errorMessage: String?
     @State private var progressMessage = ""
+    @State private var nextIndex = 0
+    @State private var modelStatus = "未检查"
 
     private let resolutions = [640, 800, 960, 1280, 1600, 1920, 2240]
 
@@ -38,20 +40,38 @@ struct CrackModelValidationView: View {
             }
 
             if image != nil {
+                Section("模型") {
+                    Button {
+                        checkModel()
+                    } label: {
+                        Label("检查模型", systemImage: "cpu")
+                    }
+                    .disabled(isWorking)
+
+                    Text(modelStatus)
+                        .font(.caption)
+                        .foregroundStyle(modelStatus.contains("成功") ? .green : .orange)
+                }
+
                 Section("验证") {
                     Button {
-                        startValidation()
+                        startCurrentValidation()
                     } label: {
                         if isWorking {
                             HStack {
                                 ProgressView()
                                 Text("验证中...")
                             }
+                        } else if nextIndex < resolutions.count {
+                            Label(
+                                "验证下一档：\(resolutions[nextIndex])",
+                                systemImage: "checkmark.seal"
+                            )
                         } else {
-                            Label("开始验证 640-2240", systemImage: "checkmark.seal")
+                            Label("全部档位已验证", systemImage: "checkmark.circle.fill")
                         }
                     }
-                    .disabled(isWorking)
+                    .disabled(isWorking || nextIndex >= resolutions.count)
 
                     if isWorking, !progressMessage.isEmpty {
                         Text(progressMessage)
@@ -122,6 +142,8 @@ struct CrackModelValidationView: View {
                let loaded = UIImage(data: data) {
                 image = loaded
                 results = []
+                nextIndex = 0
+                modelStatus = "未检查"
                 errorMessage = nil
                 progressMessage = ""
             } else {
@@ -130,24 +152,38 @@ struct CrackModelValidationView: View {
         }
     }
 
-    private func startValidation() {
+    private func checkModel() {
+        modelStatus = "正在检查..."
+        DispatchQueue.global(qos: .userInitiated).async {
+            let status = CrackRecognitionEngine.checkModelLoad()
+            DispatchQueue.main.async {
+                self.modelStatus = status
+            }
+        }
+    }
+
+    private func startCurrentValidation() {
         guard let image else { return }
+        guard nextIndex < resolutions.count else { return }
+        let resolution = resolutions[nextIndex]
         isWorking = true
         errorMessage = nil
-        progressMessage = "准备验证..."
+        progressMessage = "准备 \(resolution)×\(resolution)"
         DispatchQueue.global(qos: .userInitiated).async {
             let output = CrackRecognitionEngine.validateResolutions(
                 image: image,
-                resolutions: resolutions
+                resolutions: [resolution]
             ) { status, partialResults in
                 DispatchQueue.main.async {
                     self.progressMessage = status
-                    self.results = partialResults
                 }
             }
             DispatchQueue.main.async {
-                self.results = output
-                self.progressMessage = "验证完成"
+                if let result = output.first {
+                    self.results.append(result)
+                }
+                self.nextIndex += 1
+                self.progressMessage = "\(resolution) 完成"
                 self.isWorking = false
             }
         }

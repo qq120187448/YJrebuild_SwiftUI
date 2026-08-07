@@ -44,12 +44,12 @@ jobs:
           python -m pip install --quiet "ultralytics>=8.2" "coremltools>=8,<9"
           python tools/coreml_export/export_yolo_seg.py
           mkdir -p ios/Robo/Resources/Models/compiled
-          for name in crack_seg_n crack_seg_n_640 crack_seg_n_800 crack_seg_n_960 crack_seg_n_1280 crack_seg_n_1600 crack_seg_n_1920 crack_seg_n_2240 crack_seg_s; do
+          for name in crack_seg_n crack_seg_s; do
             xcrun coremlcompiler compile \
               "ios/Robo/Resources/Models/$name.mlpackage" \
               ios/Robo/Resources/Models/compiled
           done
-          for name in crack_seg_n crack_seg_n_640 crack_seg_n_800 crack_seg_n_960 crack_seg_n_1280 crack_seg_n_1600 crack_seg_n_1920 crack_seg_n_2240 crack_seg_s; do
+          for name in crack_seg_n crack_seg_s; do
             rm -rf "ios/Robo/Resources/Models/$name.mlpackage"
             mv "ios/Robo/Resources/Models/compiled/$name.mlmodelc" \
               ios/Robo/Resources/Models/
