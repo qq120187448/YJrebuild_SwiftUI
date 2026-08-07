@@ -21,6 +21,9 @@ struct RoboApp: App {
         WindowGroup {
             ContentView()
                 .modelContainer(modelContainer)
+                .onOpenURL { url in
+                    CrackRecognitionSettings.apply(url: url)
+                }
         }
     }
 }

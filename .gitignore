@@ -3,3 +3,6 @@
 build/
 ios/RoboScan.xcodeproj/
 ios/Robo.xcodeproj/
+crack-recognition/models/
+crack-recognition/data/
+tools/wall-defect-inspector/

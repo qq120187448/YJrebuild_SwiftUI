@@ -42,8 +42,8 @@ struct WallDefectScanView: View {
                             WallDefectModelView(
                                 surfaces: surfaces,
                                 arSession: defectARSession,
-                                onPhoto: { wallID, capture in
-                                    handlePhoto(wallID: wallID, capture: capture)
+                                onPhoto: { associations, capture in
+                                    handlePhoto(associations: associations, capture: capture)
                                 },
                                 onSave: {
                                     saveDocument()
@@ -245,7 +245,11 @@ struct WallDefectScanView: View {
         }
     }
 
-    private func handlePhoto(wallID: UUID, capture: DefectCameraCapture) {
+    private func handlePhoto(
+        associations: [WallDefectSurfaceAssociation],
+        capture: DefectCameraCapture
+    ) {
+        guard let primary = associations.first else { return }
         let photoID = UUID()
         do {
             let stored = try WallDefectStore.savePhoto(
@@ -256,7 +260,7 @@ struct WallDefectScanView: View {
             )
             let photo = WallDefectPhoto(
                 id: photoID,
-                wallID: wallID,
+                wallID: primary.surfaceID,
                 imageFileName: stored.imageFileName,
                 pose: capture.pose,
                 intrinsics: capture.intrinsics,
@@ -264,9 +268,57 @@ struct WallDefectScanView: View {
                 depthWidth: capture.depthWidth,
                 depthHeight: capture.depthHeight,
                 detectedClass: nil,
-                note: "待 CoreML 识别"
+                note: "识别中...",
+                surfaceAssociations: associations,
+                annotatedFileName: nil,
+                crackResult: nil
             )
             photos.append(photo)
+
+            let config = CrackRecognitionSettings.load()
+            let capturedSurfaces = surfaces
+            let capturedScanID = scanID
+            let capturedImage = capture.image
+            let capturedPose = capture.pose
+            let capturedIntrinsics = capture.intrinsics
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let output = try CrackRecognitionEngine.analyze(
+                        image: capturedImage,
+                        pose: capturedPose,
+                        intrinsics: capturedIntrinsics,
+                        surfaces: capturedSurfaces,
+                        config: config
+                    )
+                    let annotatedFileName = try WallDefectStore.saveAnnotatedPhoto(
+                        documentID: capturedScanID,
+                        photoID: photoID,
+                        image: output.annotatedImage
+                    )
+                    DispatchQueue.main.async {
+                        guard let index = self.photos.firstIndex(
+                            where: { $0.id == photoID }
+                        ) else {
+                            return
+                        }
+                        self.photos[index].crackResult = output.result
+                        self.photos[index].annotatedFileName = annotatedFileName
+                        self.photos[index].detectedClass = output.result.detectedClass
+                        self.photos[index].note = output.result.isEmpty
+                            ? "未识别到裂缝"
+                            : "裂缝 \(output.result.components.count) 条 · 总长 \(String(format: "%.3f m", output.result.totalLengthM))"
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        guard let index = self.photos.firstIndex(
+                            where: { $0.id == photoID }
+                        ) else {
+                            return
+                        }
+                        self.photos[index].note = "识别失败：\(error.localizedDescription)"
+                    }
+                }
+            }
         } catch {
             errorMessage = error.localizedDescription
         }

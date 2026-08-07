@@ -7,11 +7,12 @@ import UIKit
 struct WallDefectModelView: View {
     let surfaces: [WallDefectSurface]
     let arSession: ARSession
-    let onPhoto: (UUID, DefectCameraCapture) -> Void
+    let onPhoto: ([WallDefectSurfaceAssociation], DefectCameraCapture) -> Void
     let onSave: () -> Void
     let onDiscard: () -> Void
 
     @StateObject private var cameraModel = DefectCameraModel()
+    @StateObject private var realtimeDetector = CrackRealtimeDetector()
     @State private var cameraSurfaceID: UUID?
     @State private var photoCount = 0
     @State private var showSaveConfirm = false
@@ -26,9 +27,29 @@ struct WallDefectModelView: View {
                 surfaces: surfaces,
                 arSession: arSession,
                 cameraModel: cameraModel,
-                cameraSurfaceID: $cameraSurfaceID
+                cameraSurfaceID: $cameraSurfaceID,
+                realtimeDetector: realtimeDetector
             )
             .ignoresSafeArea()
+
+            if realtimeDetector.isAvailable,
+               !realtimeDetector.normalizedPoints.isEmpty {
+                Canvas { context, size in
+                    for point in realtimeDetector.normalizedPoints {
+                        let rect = CGRect(
+                            x: point.x * size.width - 2,
+                            y: point.y * size.height - 2,
+                            width: 4,
+                            height: 4
+                        )
+                        context.fill(
+                            Path(ellipseIn: rect),
+                            with: .color(.red.opacity(0.85))
+                        )
+                    }
+                }
+                .allowsHitTesting(false)
+            }
 
             VStack(spacing: 0) {
                 topBar
@@ -42,6 +63,9 @@ struct WallDefectModelView: View {
                 .padding(.horizontal, 10)
                 bottomBar
             }
+        }
+        .onAppear {
+            realtimeDetector.prepare(config: CrackRecognitionSettings.load())
         }
         .alert("保存扫描包？", isPresented: $showSaveConfirm) {
             Button("保存") {
@@ -110,10 +134,16 @@ struct WallDefectModelView: View {
 
             HStack(spacing: 14) {
                 Button {
-                    guard let cameraSurfaceID,
-                          let capture = cameraModel.capture() else { return }
+                    guard let capture = cameraModel.capture() else { return }
+                    let associations = WallDefectProjection.associations(
+                        pose: capture.pose,
+                        intrinsics: capture.intrinsics,
+                        imageSize: capture.image.size,
+                        surfaces: surfaces
+                    )
+                    guard !associations.isEmpty else { return }
                     photoCount += 1
-                    onPhoto(cameraSurfaceID, capture)
+                    onPhoto(associations, capture)
                 } label: {
                     ZStack {
                         Circle()
@@ -152,6 +182,7 @@ private struct WallDefectARView: UIViewRepresentable {
     let surfaces: [WallDefectSurface]
     let arSession: ARSession
     let cameraModel: DefectCameraModel
+    let realtimeDetector: CrackRealtimeDetector
     @Binding var cameraSurfaceID: UUID?
 
     func makeUIView(context: Context) -> ARSCNView {
@@ -188,7 +219,8 @@ private struct WallDefectARView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             cameraModel: cameraModel,
-            cameraSurfaceID: $cameraSurfaceID
+            cameraSurfaceID: $cameraSurfaceID,
+            realtimeDetector: realtimeDetector
         )
     }
 
@@ -209,20 +241,29 @@ private struct WallDefectARView: UIViewRepresentable {
 
     final class Coordinator: NSObject, ARSessionDelegate {
         let cameraModel: DefectCameraModel
+        let realtimeDetector: CrackRealtimeDetector
+        private let realtimeConfig: CrackRecognitionConfig
         var cameraSurfaceID: Binding<UUID?>
         weak var sceneView: ARSCNView?
 
         init(
             cameraModel: DefectCameraModel,
-            cameraSurfaceID: Binding<UUID?>
+            cameraSurfaceID: Binding<UUID?>,
+            realtimeDetector: CrackRealtimeDetector
         ) {
             self.cameraModel = cameraModel
             self.cameraSurfaceID = cameraSurfaceID
+            self.realtimeDetector = realtimeDetector
+            self.realtimeConfig = CrackRecognitionSettings.load()
         }
 
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
             DispatchQueue.main.async {
                 self.cameraModel.update(frame: frame)
+                self.realtimeDetector.process(
+                    frame: frame,
+                    config: self.realtimeConfig
+                )
                 self.updateCameraSurface()
             }
         }

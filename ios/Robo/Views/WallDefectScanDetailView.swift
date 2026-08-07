@@ -49,6 +49,25 @@ struct WallDefectScanDetailView: View {
                                 Text(photo.note.isEmpty ? "待 CoreML 识别" : photo.note)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                if let crackResult = photo.crackResult {
+                                    Text("裂缝 \(crackResult.components.count) 条 · 总长 \(String(format: "%.3f m", crackResult.totalLengthM))")
+                                        .font(.caption.bold())
+                                        .foregroundStyle(.orange)
+                                }
+                                if let annotatedFileName = photo.annotatedFileName {
+                                    NavigationLink {
+                                        CrackRecognitionResultView(
+                                            result: photo.crackResult
+                                                ?? emptyResult(),
+                                            annotatedImage: annotatedImage(
+                                                fileName: annotatedFileName
+                                            )
+                                        )
+                                    } label: {
+                                        Label("查看标注", systemImage: "wand.and.stars")
+                                            .font(.caption)
+                                    }
+                                }
                             }
                         }
                         .padding(.vertical, 2)
@@ -79,5 +98,26 @@ struct WallDefectScanDetailView: View {
 
     private func surfaceLabel(_ surfaceID: UUID) -> String {
         document.surfaces.first { $0.id == surfaceID }?.label ?? "未知墙面"
+    }
+
+    private func annotatedImage(fileName: String) -> UIImage? {
+        let url = photosDirectory.appendingPathComponent(fileName)
+        return UIImage(contentsOfFile: url.path)
+    }
+
+    private func emptyResult() -> CrackRecognitionResult {
+        CrackRecognitionResult(
+            detectedClass: "无结果",
+            confidence: 0,
+            totalPixelLength: 0,
+            totalMMLength: nil,
+            totalLengthM: 0,
+            totalAreaM2: 0,
+            components: [],
+            surfaceSummaries: [],
+            mode: "normal",
+            modelSize: "s",
+            engine: "yolo"
+        )
     }
 }

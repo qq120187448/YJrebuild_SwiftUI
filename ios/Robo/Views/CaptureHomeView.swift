@@ -1,5 +1,5 @@
-import SwiftUI
 import SwiftData
+import SwiftUI
 
 struct CaptureHomeView: View {
     @Binding var selectedTab: Int
@@ -16,6 +16,11 @@ struct CaptureHomeView: View {
     @State private var showingWallDefectScan = false
     @State private var showingToyBox = false
 
+    private let columns = [
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12)
+    ]
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -30,71 +35,72 @@ struct CaptureHomeView: View {
                 .ignoresSafeArea()
 
                 ScrollView {
-                    VStack(spacing: 22) {
-                        VStack(spacing: 6) {
-                            Image(systemName: "scope")
-                                .font(.system(size: 34))
-                                .foregroundStyle(.cyan)
-                            Text("Robo 工程扫描")
-                                .font(.largeTitle.bold())
-                                .foregroundStyle(.white)
-                            Text("LiDAR 扫描 · 3D 建模 · 工程量计算")
-                                .font(.subheadline)
-                                .foregroundStyle(.white.opacity(0.65))
+                    VStack(spacing: 12) {
+                        header
+
+                        LazyVGrid(columns: columns, spacing: 12) {
+                            compactCard(
+                                title: "房间工程扫描",
+                                subtitle: "房间建模与工程量",
+                                icon: "house",
+                                color: .cyan,
+                                startTitle: "开始",
+                                historyCount: rooms.count,
+                                startAction: {
+                                    showingLiDARScan = true
+                                },
+                                historyAction: {
+                                    historyFilter = .room
+                                    selectedTab = 1
+                                }
+                            )
+
+                            compactCard(
+                                title: "物体工程扫描",
+                                subtitle: "堆体、土方、设备",
+                                icon: "cube.transparent",
+                                color: .teal,
+                                startTitle: "开始",
+                                historyCount: objectScans.count,
+                                startAction: {
+                                    showingObjectScan = true
+                                },
+                                historyAction: {
+                                    historyFilter = .object
+                                    selectedTab = 1
+                                }
+                            )
+
+                            compactCard(
+                                title: "墙地面缺陷扫描",
+                                subtitle: "RoomPlan + 缺陷识别",
+                                icon: "paintbrush.pointed",
+                                color: .orange,
+                                startTitle: "开始",
+                                historyCount: nil,
+                                startAction: {
+                                    showingWallDefectScan = true
+                                },
+                                historyAction: nil
+                            )
+
+                            compactCard(
+                                title: "玩具箱",
+                                subtitle: "物体建模 + 区域建模",
+                                icon: "puzzlepiece",
+                                color: .purple,
+                                startTitle: "打开",
+                                historyCount: nil,
+                                startAction: {
+                                    showingToyBox = true
+                                },
+                                historyAction: nil
+                            )
                         }
-                        .padding(.top, 24)
-
-                        featureCard(
-                            title: "房间工程扫描",
-                            subtitle: "扫描房间，识别墙、门窗、家具，生成工程量清单",
-                            icon: "house",
-                            startTitle: "开始房间扫描",
-                            historyCount: rooms.count,
-                            startAction: {
-                                showingLiDARScan = true
-                            },
-                            historyAction: {
-                                historyFilter = .room
-                                selectedTab = 1
-                            }
-                        )
-
-                        featureCard(
-                            title: "物体工程扫描",
-                            subtitle: "扫描堆体、土方、设备，计算体积、表面积和 OBB 外包围尺寸",
-                            icon: "cube.transparent",
-                            startTitle: "开始物体扫描",
-                            historyCount: objectScans.count,
-                            startAction: {
-                                showingObjectScan = true
-                            },
-                            historyAction: {
-                                historyFilter = .object
-                                selectedTab = 1
-                            }
-                        )
-
-                        textureFeatureCard(
-                            title: "墙地面缺陷扫描",
-                            subtitle: "RoomPlan 全屋建模 + 手动定点拍照 + 本地缺陷识别",
-                            icon: "paintbrush.pointed",
-                            startTitle: "开始墙地面扫描",
-                            startAction: {
-                                showingWallDefectScan = true
-                            }
-                        )
-
-                        textureFeatureCard(
-                            title: "玩具箱",
-                            subtitle: "趣味物体建模 + 区域实景建模",
-                            icon: "puzzlepiece",
-                            startTitle: "打开玩具箱",
-                            startAction: {
-                                showingToyBox = true
-                            }
-                        )
+                        .padding(.horizontal, 12)
                     }
-                    .padding(16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 16)
                 }
             }
             .navigationBarHidden(true)
@@ -114,132 +120,93 @@ struct CaptureHomeView: View {
         }
     }
 
-    private func textureFeatureCard(
-        title: String,
-        subtitle: String,
-        icon: String,
-        startTitle: String,
-        startAction: @escaping () -> Void
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 12) {
-                Image(systemName: icon)
-                    .font(.system(size: 30))
-                    .foregroundColor(.white)
-                    .frame(width: 52, height: 52)
-                    .background(
-                        LinearGradient(
-                            colors: [Color.teal.opacity(0.85), Color.blue.opacity(0.7)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "scope")
+                .font(.system(size: 26, weight: .semibold))
+                .foregroundStyle(.cyan)
+                .frame(width: 42, height: 42)
+                .background(Color.white.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .font(.title3.bold())
-                        .foregroundStyle(.white)
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.6))
-                }
-            }
-
-            Button(action: startAction) {
-                Label(startTitle, systemImage: icon)
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(
-                        LinearGradient(
-                            colors: [Color.teal, Color.blue],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Robo 工程扫描")
+                    .font(.title2.bold())
                     .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                Text("LiDAR 建模 · 工程量 · 缺陷识别")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.6))
             }
+            Spacer()
         }
-        .padding(18)
-        .background(Color(red: 0.08, green: 0.11, blue: 0.18))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.teal.opacity(0.3), lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal, 12)
     }
 
-    private func featureCard(
+    private func compactCard(
         title: String,
         subtitle: String,
         icon: String,
+        color: Color,
         startTitle: String,
-        historyCount: Int,
+        historyCount: Int?,
         startAction: @escaping () -> Void,
-        historyAction: @escaping () -> Void
+        historyAction: (() -> Void)?
     ) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
                 Image(systemName: icon)
-                    .font(.system(size: 30))
-                    .foregroundColor(.white)
-                    .frame(width: 52, height: 52)
-                    .background(
-                        LinearGradient(
-                            colors: [Color.cyan.opacity(0.8), Color.blue.opacity(0.7)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                    .background(color.opacity(0.85))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .font(.title3.bold())
-                        .foregroundStyle(.white)
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.6))
-                }
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
+
+            Text(subtitle)
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.6))
+                .lineLimit(2)
+                .frame(height: 26, alignment: .topLeading)
 
             Button(action: startAction) {
                 Label(startTitle, systemImage: icon)
-                    .font(.headline)
+                    .font(.subheadline.bold())
                     .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(
-                        LinearGradient(
-                            colors: [Color.cyan, Color.blue],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
+                    .padding(.vertical, 9)
+                    .background(color)
                     .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
             }
 
-            Button(action: historyAction) {
-                Label(
-                    historyCount > 0 ? "历史记录（\(historyCount)）" : "历史记录（0）",
-                    systemImage: "clock.arrow.circlepath"
-                )
-                .font(.subheadline)
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(Color.white.opacity(0.08))
-                .foregroundColor(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+            if let historyCount, let historyAction {
+                Button(action: historyAction) {
+                    Label(
+                        historyCount > 0
+                            ? "历史 \(historyCount)"
+                            : "历史 0",
+                        systemImage: "clock.arrow.circlepath"
+                    )
+                    .font(.caption.bold())
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(Color.white.opacity(0.08))
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
             }
         }
-        .padding(18)
+        .padding(12)
         .background(Color(red: 0.08, green: 0.11, blue: 0.18))
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.cyan.opacity(0.25), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(color.opacity(0.3), lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 }

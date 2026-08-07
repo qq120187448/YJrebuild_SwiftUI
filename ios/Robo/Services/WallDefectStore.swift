@@ -45,6 +45,26 @@ enum WallDefectStore {
         return (imageName, depthName)
     }
 
+    static func saveAnnotatedPhoto(
+        documentID: UUID,
+        photoID: UUID,
+        image: UIImage
+    ) throws -> String {
+        let directory = rootDirectory()
+            .appendingPathComponent(documentID.uuidString, isDirectory: true)
+            .appendingPathComponent("Photos", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        guard let jpeg = image.jpegData(compressionQuality: 0.82) else {
+            throw WallDefectStoreError.imageEncodingFailed
+        }
+        let fileName = "\(photoID.uuidString)-annotated.jpg"
+        try jpeg.write(to: directory.appendingPathComponent(fileName))
+        return fileName
+    }
+
     static func loadDocument(at url: URL) throws -> WallDefectScanDocument {
         let data = try Data(contentsOf: url)
         let decoder = JSONDecoder()

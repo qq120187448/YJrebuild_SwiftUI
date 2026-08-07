@@ -3,11 +3,13 @@ import Foundation
 enum WallDefectSurfaceKind: String, Codable, CaseIterable, Equatable {
     case wall
     case floor
+    case ceiling
 
     var displayName: String {
         switch self {
         case .wall: return "墙面"
         case .floor: return "地面"
+        case .ceiling: return "天面"
         }
     }
 }
@@ -70,6 +72,9 @@ struct WallDefectPhoto: Identifiable, Codable, Equatable {
     let depthHeight: Int?
     var detectedClass: String?
     var note: String
+    var surfaceAssociations: [WallDefectSurfaceAssociation]
+    var annotatedFileName: String?
+    var crackResult: CrackRecognitionResult?
 
     init(
         id: UUID = UUID(),
@@ -82,7 +87,10 @@ struct WallDefectPhoto: Identifiable, Codable, Equatable {
         depthWidth: Int? = nil,
         depthHeight: Int? = nil,
         detectedClass: String? = nil,
-        note: String = ""
+        note: String = "",
+        surfaceAssociations: [WallDefectSurfaceAssociation] = [],
+        annotatedFileName: String? = nil,
+        crackResult: CrackRecognitionResult? = nil
     ) {
         self.id = id
         self.wallID = wallID
@@ -95,6 +103,38 @@ struct WallDefectPhoto: Identifiable, Codable, Equatable {
         self.depthHeight = depthHeight
         self.detectedClass = detectedClass
         self.note = note
+        self.surfaceAssociations = surfaceAssociations
+        self.annotatedFileName = annotatedFileName
+        self.crackResult = crackResult
+    }
+}
+
+struct WallDefectSurfaceAssociation: Codable, Equatable, Identifiable {
+    var id: UUID { surfaceID }
+    let surfaceID: UUID
+    var label: String?
+    var coverageRatio: Double
+    var uvPolygon: [[Double]]?
+    var detectedClass: String?
+    var areaM2: Double?
+    var lengthM: Double?
+
+    init(
+        surfaceID: UUID,
+        label: String? = nil,
+        coverageRatio: Double = 0,
+        uvPolygon: [[Double]]? = nil,
+        detectedClass: String? = nil,
+        areaM2: Double? = nil,
+        lengthM: Double? = nil
+    ) {
+        self.surfaceID = surfaceID
+        self.label = label
+        self.coverageRatio = coverageRatio
+        self.uvPolygon = uvPolygon
+        self.detectedClass = detectedClass
+        self.areaM2 = areaM2
+        self.lengthM = lengthM
     }
 }
 

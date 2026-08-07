@@ -30,6 +30,19 @@ enum WallDefectGeometry {
                 )
             )
         }
+        let ceilingHeight = RoomDataProcessor.estimateCeilingHeight(room.walls)
+        if ceilingHeight > 0.3 {
+            for (index, floor) in room.floors.enumerated() {
+                result.append(
+                    makeCeilingSurface(
+                        id: UUID(),
+                        index: index,
+                        floor: floor,
+                        ceilingHeight: ceilingHeight
+                    )
+                )
+            }
+        }
         return result
     }
 
@@ -183,6 +196,49 @@ enum WallDefectGeometry {
             uAxis: double3(uVec),
             vAxis: double3(vVec),
             normal: double3(normalDir)
+        )
+    }
+
+    private static func makeCeilingSurface(
+        id: UUID,
+        index: Int,
+        floor: CapturedRoom.Surface,
+        ceilingHeight: Double
+    ) -> WallDefectSurface {
+        let center = SIMD3<Float>(
+            floor.transform.columns.3.x,
+            floor.transform.columns.3.y,
+            floor.transform.columns.3.z
+        )
+        let uDir = simd_normalize(SIMD3<Float>(
+            floor.transform.columns.0.x,
+            floor.transform.columns.0.y,
+            floor.transform.columns.0.z
+        ))
+        let vDir = simd_normalize(SIMD3<Float>(
+            floor.transform.columns.1.x,
+            floor.transform.columns.1.y,
+            floor.transform.columns.1.z
+        ))
+        let up = simd_cross(uDir, vDir)
+        let width = Double(floor.dimensions.x)
+        let depth = Double(floor.dimensions.y)
+        let elevated = center + up * Float(ceilingHeight)
+        let origin = elevated - uDir * Float(width / 2) - vDir * Float(depth / 2)
+        let uVec = uDir * Float(width)
+        let vVec = vDir * Float(depth)
+
+        return WallDefectSurface(
+            id: id,
+            kind: .ceiling,
+            label: "天面 \(index + 1)",
+            width: width,
+            height: depth,
+            area: width * depth,
+            origin: double3(origin),
+            uAxis: double3(uVec),
+            vAxis: double3(vVec),
+            normal: double3(-up)
         )
     }
 

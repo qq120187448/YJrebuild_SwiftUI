@@ -49,6 +49,7 @@ targets:
       - path: Robo/Models/TextureScanRecord.swift
       - path: Robo/Models/ObjectCropVolume.swift
       - path: Robo/Models/WallDefectModels.swift
+      - path: Robo/Models/CrackRecognitionModels.swift
       - path: Robo/Services/RoomDataProcessor.swift
       - path: Robo/Services/QuantityTakeoffExporter.swift
       - path: Robo/Services/PhotoStorage.swift
@@ -64,6 +65,12 @@ targets:
       - path: Robo/Services/WallDefectGeometry.swift
       - path: Robo/Services/WallDefectStore.swift
       - path: Robo/Services/WallDefectARSessionStore.swift
+      - path: Robo/Services/WallDefectProjection.swift
+      - path: Robo/Services/CrackRecognitionSettings.swift
+      - path: Robo/Services/CrackSkeleton.swift
+      - path: Robo/Services/CrackYOLODecoder.swift
+      - path: Robo/Services/CrackRecognitionEngine.swift
+      - path: Robo/Services/CrackRealtimeDetector.swift
       - path: Robo/Views/ActivityView.swift
       - path: Robo/Views/ContentView.swift
       - path: Robo/Views/CaptureHomeView.swift
@@ -89,6 +96,9 @@ targets:
       - path: Robo/Views/WallDefectScanView.swift
       - path: Robo/Views/WallDefectModelView.swift
       - path: Robo/Views/WallDefectScanDetailView.swift
+      - path: Robo/Views/CrackRecognitionSettingsView.swift
+      - path: Robo/Views/CrackPhotoLabView.swift
+      - path: Robo/Views/CrackRecognitionResultView.swift
     dependencies:
       - package: Voxels
       - package: iTriangle
@@ -111,8 +121,13 @@ targets:
         CFBundlePackageType: APPL
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleURLTypes:
+          - CFBundleURLName: com.silv.RoboScan.crack
+            CFBundleURLSchemes:
+              - roboscan
         LSRequiresIPhoneOS: true
         NSCameraUsageDescription: 需要相机和 LiDAR 权限来进行房间扫描。
+        NSPhotoLibraryUsageDescription: 需要相册权限来选择缺陷照片进行识别。
         UILaunchScreen: {}
         UIRequiresFullScreen: true
         UISupportedInterfaceOrientations:

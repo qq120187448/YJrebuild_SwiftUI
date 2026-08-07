@@ -23,10 +23,23 @@ struct SettingsView: View {
             Form {
                 Section("关于") {
                     LabeledContent("名称", value: "Robo 工程量扫描")
-                    LabeledContent("版本", value: "0.61")
+                    LabeledContent("版本", value: "0.62")
                     Text("基于 Robo 精简改造：只保留 LiDAR 房间扫描与工程量清单导出，数据仅保存在本机，不连接任何后端。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                Section("缺陷识别") {
+                    NavigationLink {
+                        CrackRecognitionSettingsView()
+                    } label: {
+                        Label("识别设置", systemImage: "slider.horizontal.3")
+                    }
+                    NavigationLink {
+                        CrackPhotoLabView()
+                    } label: {
+                        Label("裂缝照片检测", systemImage: "photo.on.rectangle")
+                    }
                 }
 
                 Section("数据") {

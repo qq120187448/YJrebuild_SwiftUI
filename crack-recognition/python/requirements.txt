@@ -1,0 +1,10 @@
+torch
+torchvision
+ultralytics
+gradio
+scikit-image
+opencv-python-headless
+pillow
+numpy
+huggingface_hub
+transformers
