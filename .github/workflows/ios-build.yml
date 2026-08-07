@@ -22,6 +22,11 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Download crack YOLO weights
         run: |
           mkdir -p crack-recognition/models
@@ -36,7 +41,7 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           python -m pip install --quiet --upgrade pip
-          python -m pip install --quiet "ultralytics>=8.2" coremltools
+          python -m pip install --quiet "ultralytics>=8.2" "coremltools>=8,<9"
           python tools/coreml_export/export_yolo_seg.py
           ls -lh ios/Robo/Resources/Models
 
