@@ -474,7 +474,7 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
 
         var configuration = ObjectCaptureSession.Configuration()
         configuration.checkpointDirectory = snapshots
-        configuration.isOverCaptureEnabled = true
+        configuration.isOverCaptureEnabled = false
         newSession.start(imagesDirectory: images, configuration: configuration)
 
         errorMessage = nil
@@ -586,24 +586,10 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
             .appendingPathComponent("Snapshots", isDirectory: true)
 
         do {
-            let reconstruction: PhotogrammetrySession
-            if mode == .area, #available(iOS 18.0, *) {
-                let imageFiles = try FileManager.default
-                    .contentsOfDirectory(at: imagesDirectory, includingPropertiesForKeys: nil)
-                    .filter { ["jpg", "jpeg", "png", "heic"].contains($0.pathExtension.lowercased()) }
-                let inputSequence = imageFiles.lazy.compactMap { file in
-                    try? PhotogrammetrySample(contentsOf: file)
-                }
-                reconstruction = try PhotogrammetrySession(
-                    input: inputSequence,
-                    configuration: configuration
-                )
-            } else {
-                reconstruction = try PhotogrammetrySession(
-                    input: imagesDirectory,
-                    configuration: configuration
-                )
-            }
+            let reconstruction = try PhotogrammetrySession(
+                input: imagesDirectory,
+                configuration: configuration
+            )
             photogrammetrySession = reconstruction
             var outputIterator = reconstruction.outputs.makeAsyncIterator()
             try reconstruction.process(requests: [
