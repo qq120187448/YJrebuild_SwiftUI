@@ -302,14 +302,16 @@ struct ObjectCaptureTextureScanView: View {
                     .font(.system(size: 52))
                     .foregroundStyle(.orange)
 
-                Text("生成 USDZ 失败")
+                Text(coordinator.failureTitle)
                     .font(.title2.bold())
                     .foregroundStyle(.white)
 
-                Text("扫描已完成，共拍摄 \(coordinator.photoCount) 张照片，但模型生成没有成功。")
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.65))
-                    .multilineTextAlignment(.center)
+                if coordinator.canRetry {
+                    Text("扫描已完成，共拍摄 \(coordinator.photoCount) 张照片，但模型生成没有成功。")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.65))
+                        .multilineTextAlignment(.center)
+                }
 
                 Text(coordinator.errorMessage ?? "未知错误")
                     .font(.caption.monospaced())
@@ -320,16 +322,18 @@ struct ObjectCaptureTextureScanView: View {
                     .background(Color.white.opacity(0.07))
                     .clipShape(RoundedRectangle(cornerRadius: 12))
 
-                Button {
-                    coordinator.retryReconstruction()
-                } label: {
-                    Label("重试生成 USDZ", systemImage: "arrow.clockwise")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.cyan)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                if coordinator.canRetry {
+                    Button {
+                        coordinator.retryReconstruction()
+                    } label: {
+                        Label("重试生成 USDZ", systemImage: "arrow.clockwise")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.cyan)
+                            .foregroundStyle(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
                 }
 
                 Button {
@@ -365,6 +369,8 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
     @Published var captureState: ObjectCaptureSession.CaptureState?
     @Published var errorMessage: String?
     @Published var showErrorAlert = false
+    @Published var failureTitle = "实景建模失败"
+    @Published var canRetry = false
     @Published var progress: Double = 0
     @Published var stageText = "准备生成模型"
     @Published var photoCount = 0
@@ -463,6 +469,8 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
     func clearError() {
         errorMessage = nil
         showErrorAlert = false
+        failureTitle = "实景建模失败"
+        canRetry = false
         phase = .instructions
     }
 
@@ -488,6 +496,8 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
                 await beginReconstruction()
                 return
             case .failed(let error):
+                failureTitle = "扫描失败"
+                canRetry = false
                 errorMessage = "扫描失败：\(error.localizedDescription)"
                 phase = .failed
                 return
@@ -500,6 +510,8 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
     private func beginReconstruction() async {
         guard let imagesDirectory, let outputURL else { return }
         errorMessage = nil
+        failureTitle = "生成 USDZ 失败"
+        canRetry = true
         session = nil
         captureTask = nil
         phase = .reconstructing
