@@ -436,7 +436,7 @@ enum CrackRecognitionEngine {
             throw CrackRecognitionError.noModelOutput
         }
         let inputValue = MLFeatureValue(pixelBuffer: pixelBuffer)
-        let provider = MLDictionaryFeatureProvider(
+        let provider = try MLDictionaryFeatureProvider(
             dictionary: [inputName: inputValue]
         )
         let output = try model.mlModel.prediction(from: provider)
