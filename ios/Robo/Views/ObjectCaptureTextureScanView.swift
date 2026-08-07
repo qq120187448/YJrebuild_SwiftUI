@@ -153,9 +153,7 @@ struct ObjectCaptureTextureScanView: View {
 
     private func captureView(session: ObjectCaptureSession) -> some View {
         ZStack {
-            ObjectCaptureView(session: session)
-                .modifier(ObjectCaptureReticleModifier(hide: coordinator.usesAreaMode))
-                .ignoresSafeArea()
+            objectCaptureView(session: session)
 
             VStack {
                 HStack(spacing: 10) {
@@ -259,6 +257,18 @@ struct ObjectCaptureTextureScanView: View {
         }
     }
 
+    @ViewBuilder
+    private func objectCaptureView(session: ObjectCaptureSession) -> some View {
+        if #available(iOS 18.0, *) {
+            ObjectCaptureView(session: session)
+                .hideObjectReticle(coordinator.usesAreaMode)
+                .ignoresSafeArea()
+        } else {
+            ObjectCaptureView(session: session)
+                .ignoresSafeArea()
+        }
+    }
+
     private func statusPill(icon: String, text: String) -> some View {
         Label(text, systemImage: icon)
             .font(.subheadline.bold())
@@ -289,19 +299,6 @@ struct ObjectCaptureTextureScanView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(red: 0.04, green: 0.06, blue: 0.11).ignoresSafeArea())
-    }
-}
-
-private struct ObjectCaptureReticleModifier: ViewModifier {
-    let hide: Bool
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(iOS 18.0, *) {
-            content.hideObjectReticle(hide)
-        } else {
-            content
-        }
     }
 }
 
