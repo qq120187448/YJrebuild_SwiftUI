@@ -149,13 +149,13 @@ struct ScanHistoryView: View {
                     if textureScans.isEmpty {
                         emptyRow("暂无实景建模记录", systemImage: "camera.aperture")
                     } else {
-                        Section("实景建模") {
+                        Section("实景建模 / 玩具箱") {
                             ForEach(textureScans) { record in
                                 NavigationLink(value: record) {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text("实景建模 \(record.capturedAt.formatted(date: .abbreviated, time: .shortened))")
                                             .font(.headline)
-                                        Text("\(record.deviceModel) · \(record.photoCount) 张照片 · USDZ")
+                                        Text("\(record.deviceModel) · \(record.photoCount) 张照片 · \(record.deviceMaxResolution)")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
                                         Text(String(format: "扫描时长 %.0f 秒", record.duration))
@@ -265,6 +265,7 @@ struct TextureScanHistoryDetailView: View {
         List {
             Section("扫描信息") {
                 LabeledContent("设备", value: record.deviceModel)
+                LabeledContent("模式", value: record.deviceMaxResolution)
                 LabeledContent("照片数", value: "\(record.photoCount)")
                 LabeledContent("扫描时长", value: String(format: "%.0f 秒", record.duration))
                 LabeledContent("模型格式", value: "USDZ")

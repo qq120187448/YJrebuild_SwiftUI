@@ -14,6 +14,7 @@ struct CaptureHomeView: View {
     @State private var showingLiDARScan = false
     @State private var showingObjectScan = false
     @State private var showingTextureScan = false
+    @State private var showingToyBox = false
 
     var body: some View {
         NavigationStack {
@@ -75,11 +76,21 @@ struct CaptureHomeView: View {
 
                         textureFeatureCard(
                             title: "实景建模",
-                            subtitle: "苹果官方 Object Capture 引导扫描，本机生成带纹理 USDZ",
+                            subtitle: "iOS 18 区域模式：扫描墙面、天面或地面，本机生成带纹理 USDZ",
                             icon: "camera.aperture",
                             startTitle: "开始实景建模",
                             startAction: {
                                 showingTextureScan = true
+                            }
+                        )
+
+                        textureFeatureCard(
+                            title: "玩具箱",
+                            subtitle: "趣味物体建模：生成带纹理 USDZ，不输出工程量",
+                            icon: "puzzlepiece",
+                            startTitle: "打开玩具箱",
+                            startAction: {
+                                showingToyBox = true
                             }
                         )
                     }
@@ -96,7 +107,10 @@ struct CaptureHomeView: View {
             ObjectScanView()
         }
         .fullScreenCover(isPresented: $showingTextureScan) {
-            ObjectCaptureTextureScanView()
+            ObjectCaptureTextureScanView(mode: .area)
+        }
+        .fullScreenCover(isPresented: $showingToyBox) {
+            ObjectCaptureTextureScanView(mode: .object)
         }
     }
 

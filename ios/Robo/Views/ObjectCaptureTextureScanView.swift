@@ -8,9 +8,27 @@ import SwiftData
 import SwiftUI
 import UIKit
 
+enum ObjectCaptureMode: String, CaseIterable {
+    case area
+    case object
+
+    var displayName: String {
+        switch self {
+        case .area: return "区域实景建模"
+        case .object: return "趣味物体建模"
+        }
+    }
+}
+
 struct ObjectCaptureTextureScanView: View {
+    let mode: ObjectCaptureMode
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var coordinator = ObjectCaptureScanCoordinator()
+    @StateObject private var coordinator: ObjectCaptureScanCoordinator
+
+    init(mode: ObjectCaptureMode = .area) {
+        self.mode = mode
+        _coordinator = StateObject(wrappedValue: ObjectCaptureScanCoordinator(mode: mode))
+    }
 
     var body: some View {
         NavigationStack {
@@ -76,11 +94,11 @@ struct ObjectCaptureTextureScanView: View {
 
     private var navigationTitle: String {
         switch coordinator.phase {
-        case .instructions: return "实景建模"
-        case .capturing: return "官方 Object Capture"
+        case .instructions: return mode == .area ? "实景建模" : "玩具箱"
+        case .capturing: return mode == .area ? "区域扫描" : "物体扫描"
         case .reconstructing: return "生成 USDZ"
         case .failed: return "生成失败"
-        case .result: return "建模结果"
+        case .result: return mode == .area ? "区域建模结果" : "物体建模结果"
         }
     }
 
@@ -90,19 +108,30 @@ struct ObjectCaptureTextureScanView: View {
             Image(systemName: "camera.aperture")
                 .font(.system(size: 64))
                 .foregroundColor(.cyan)
-            Text("实景建模")
+            Text(mode.displayName)
                 .font(.title.bold())
                 .foregroundStyle(.white)
-            Text("苹果官方 Object Capture 引导扫描，在 iPhone 本地生成带纹理 USDZ")
+            Text(
+                mode == .area
+                    ? "苹果官方区域模式，扫描墙面、天面或地面，在 iPhone 本地生成带纹理 USDZ"
+                    : "苹果官方物体模式，围绕单个物体生成带纹理 USDZ，不输出工程量"
+            )
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.65))
                 .multilineTextAlignment(.center)
 
             VStack(alignment: .leading, spacing: 14) {
-                tipRow(icon: "figure.walk", text: "缓慢移动，保持画面重叠，完整覆盖目标区域")
-                tipRow(icon: "camera.fill", text: "系统自动拍摄照片，并在取景器中给出实时引导")
-                tipRow(icon: "cube.transparent", text: "扫描完成后自动重建网格并生成带纹理 USDZ")
-                tipRow(icon: "iphone", text: "需要 iPhone 12 Pro 或更新机型，支持 LiDAR")
+                if mode == .area {
+                    tipRow(icon: "square.dashed", text: "对准墙面、天面或地面，缓慢移动保持画面重叠")
+                    tipRow(icon: "camera.fill", text: "系统自动拍摄照片，并在取景器中给出实时引导")
+                    tipRow(icon: "cube.transparent", text: "扫描完成后自动重建网格并生成带纹理 USDZ")
+                    tipRow(icon: "iphone", text: "区域模式需要 iOS 18 或更新系统")
+                } else {
+                    tipRow(icon: "viewfinder", text: "将单个物体放入取景器，调整边框完整包围目标")
+                    tipRow(icon: "camera.fill", text: "围绕物体缓慢移动，系统自动拍摄照片")
+                    tipRow(icon: "cube.transparent", text: "扫描完成后自动生成带纹理 USDZ")
+                    tipRow(icon: "iphone", text: "需要 iPhone 12 Pro 或更新机型，支持 LiDAR")
+                }
             }
             .padding(18)
             .background(Color.white.opacity(0.08))
@@ -114,7 +143,7 @@ struct ObjectCaptureTextureScanView: View {
             Button {
                 coordinator.startCapture()
             } label: {
-                Text("开始实景扫描")
+                Text(mode == .area ? "开始区域扫描" : "开始趣味扫描")
                     .font(.headline)
                     .frame(maxWidth: .infinity)
                     .padding()
@@ -175,13 +204,20 @@ struct ObjectCaptureTextureScanView: View {
                     if let state = coordinator.captureState {
                         switch state {
                         case .ready:
-                            Text("将目标物体置于取景器中央，开始检测")
+                            Text(
+                                mode == .area
+                                    ? "对准墙面、天面或地面，缓慢移动开始区域扫描"
+                                    : "将目标物体置于取景器中央，开始检测"
+                            )
                                 .font(.headline)
                                 .foregroundStyle(.white)
                             Button {
                                 coordinator.beginCaptureFlow()
                             } label: {
-                                Label("检测物体", systemImage: "viewfinder")
+                                Label(
+                                    mode == .area ? "开始区域扫描" : "检测物体",
+                                    systemImage: mode == .area ? "square.dashed" : "viewfinder"
+                                )
                                     .font(.headline)
                                     .padding(.horizontal, 28)
                                     .padding(.vertical, 14)
@@ -190,7 +226,7 @@ struct ObjectCaptureTextureScanView: View {
                                     .clipShape(Capsule())
                             }
                         case .detecting:
-                            Text("调整边框，确保完整包围目标")
+                            Text(mode == .area ? "正在准备区域扫描" : "调整边框，确保完整包围目标")
                                 .font(.headline)
                                 .foregroundStyle(.white)
                             Button {
@@ -259,8 +295,14 @@ struct ObjectCaptureTextureScanView: View {
 
     @ViewBuilder
     private func objectCaptureView(session: ObjectCaptureSession) -> some View {
-        ObjectCaptureView(session: session)
-            .ignoresSafeArea()
+        if mode == .area, #available(iOS 18.0, *) {
+            ObjectCaptureView(session: session)
+                .hideObjectReticle(true)
+                .ignoresSafeArea()
+        } else {
+            ObjectCaptureView(session: session)
+                .ignoresSafeArea()
+        }
     }
 
     private func statusPill(icon: String, text: String) -> some View {
@@ -356,6 +398,8 @@ struct ObjectCaptureTextureScanView: View {
 
 @MainActor
 final class ObjectCaptureScanCoordinator: ObservableObject {
+    let mode: ObjectCaptureMode
+
     enum Phase {
         case instructions
         case capturing
@@ -383,11 +427,23 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
     private var captureTask: Task<Void, Never>?
     private var photogrammetrySession: PhotogrammetrySession?
 
+    init(mode: ObjectCaptureMode) {
+        self.mode = mode
+    }
+
     func startCapture() {
         guard ObjectCaptureSession.isSupported else {
             errorMessage = "当前设备不支持 Object Capture，需要 iPhone 12 Pro 或更新机型。"
             showErrorAlert = true
             return
+        }
+        if mode == .area {
+            if #available(iOS 18.0, *) {
+            } else {
+                errorMessage = "区域模式需要 iOS 18 或更新系统，请改用玩具箱物体模式。"
+                showErrorAlert = true
+                return
+            }
         }
 
         let scanID = UUID()
@@ -433,6 +489,13 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
 
     func beginCaptureFlow() {
         guard let session else { return }
+        if mode == .area {
+            if #available(iOS 18.0, *) {
+                guard session.state == .ready else { return }
+                session.startCapturing()
+                return
+            }
+        }
         switch session.state {
         case .ready:
             _ = session.startDetecting()
@@ -523,10 +586,24 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
             .appendingPathComponent("Snapshots", isDirectory: true)
 
         do {
-            let reconstruction = try PhotogrammetrySession(
-                input: imagesDirectory,
-                configuration: configuration
-            )
+            let reconstruction: PhotogrammetrySession
+            if mode == .area, #available(iOS 18.0, *) {
+                let imageFiles = try FileManager.default
+                    .contentsOfDirectory(at: imagesDirectory, includingPropertiesForKeys: nil)
+                    .filter { ["jpg", "jpeg", "png", "heic"].contains($0.pathExtension.lowercased()) }
+                let inputSequence = imageFiles.lazy.compactMap { file in
+                    try? PhotogrammetrySample(contentsOf: file)
+                }
+                reconstruction = try PhotogrammetrySession(
+                    input: inputSequence,
+                    configuration: configuration
+                )
+            } else {
+                reconstruction = try PhotogrammetrySession(
+                    input: imagesDirectory,
+                    configuration: configuration
+                )
+            }
             photogrammetrySession = reconstruction
             var outputIterator = reconstruction.outputs.makeAsyncIterator()
             try reconstruction.process(requests: [
@@ -584,6 +661,7 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
             duration: Date().timeIntervalSince(startedAt),
             deviceModel: ObjectCaptureScanCoordinator.hardwareModel(),
             photoCount: photoCount,
+            mode: mode,
             imagesDirectory: imagesDirectory,
             outputDirectory: outputDirectory,
             usdzURL: outputURL
@@ -650,6 +728,7 @@ struct ObjectCaptureScanResult {
     let duration: TimeInterval
     let deviceModel: String
     let photoCount: Int
+    let mode: ObjectCaptureMode
     let imagesDirectory: URL
     let outputDirectory: URL
     let usdzURL: URL
@@ -682,7 +761,10 @@ struct ObjectCaptureResultView: View {
                         .frame(height: 260)
                     }
                 } label: {
-                    Label("带纹理 USDZ 模型", systemImage: "cube.transparent")
+                    Label(
+                        result.mode == .area ? "区域实景 USDZ 模型" : "趣味物体 USDZ 模型",
+                        systemImage: "cube.transparent"
+                    )
                 }
 
                 GroupBox {
@@ -696,6 +778,12 @@ struct ObjectCaptureResultView: View {
                 } label: {
                     Label("扫描信息", systemImage: "info.circle")
                 }
+
+                Text("此功能只生成带纹理 USDZ，不输出工程量清单。")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.55))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 18)
 
                 Button {
                     showQuickLook = true
@@ -774,7 +862,7 @@ struct ObjectCaptureResultView: View {
             scanID: result.scanID,
             capturedAt: result.capturedAt,
             deviceModel: result.deviceModel,
-            deviceMaxResolution: "Apple Object Capture",
+            deviceMaxResolution: result.mode == .area ? "区域模式" : "物体模式",
             photoCount: result.photoCount,
             closeUpCount: 0,
             wallCount: 0,
