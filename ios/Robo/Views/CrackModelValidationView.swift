@@ -10,7 +10,7 @@ struct CrackModelValidationView: View {
     @State private var errorMessage: String?
     @State private var progressMessage = ""
 
-    private let resolutions = [640, 800, 960, 1280]
+    private let resolutions = [640, 800, 960, 1280, 1600, 1920, 2240]
 
     var body: some View {
         List {
@@ -48,7 +48,7 @@ struct CrackModelValidationView: View {
                                 Text("验证中...")
                             }
                         } else {
-                            Label("开始验证 640/800/960/1280", systemImage: "checkmark.seal")
+                            Label("开始验证 640-2240", systemImage: "checkmark.seal")
                         }
                     }
                     .disabled(isWorking)

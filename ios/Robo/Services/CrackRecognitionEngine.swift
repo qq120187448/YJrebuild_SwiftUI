@@ -145,7 +145,7 @@ enum CrackRecognitionEngine {
 
     static func validateResolutions(
         image: UIImage,
-        resolutions: [Int] = [640, 800, 960, 1280],
+        resolutions: [Int] = [640, 800, 960, 1280, 1600, 1920, 2240],
         progress: ((String, [CrackResolutionValidationResult]) -> Void)? = nil
     ) -> [CrackResolutionValidationResult] {
         let analysisImage = resizedUIImage(image, maxSide: 4096)

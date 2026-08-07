@@ -63,7 +63,7 @@ def main() -> int:
     for path, stem in paths.items():
         if stem == "crack_seg_n":
             export_one(path, 640, "crack_seg_n")
-            for imgsz in (640, 800, 960, 1280):
+            for imgsz in (640, 800, 960, 1280, 1600, 1920, 2240):
                 export_one(path, imgsz, f"crack_seg_n_{imgsz}")
         else:
             export_one(path, 640, stem)
