@@ -67,6 +67,11 @@ struct ObjectCaptureTextureScanView: View {
                 UIApplication.shared.isIdleTimerDisabled = false
                 coordinator.cancelTasks()
             }
+            .onReceive(
+                Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+            ) { _ in
+                coordinator.refreshState()
+            }
         }
     }
 
@@ -358,24 +363,25 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
         }
 
         let newSession = ObjectCaptureSession()
+        session = newSession
+        captureState = newSession.state
+        captureTask?.cancel()
+        captureTask = Task { [weak self] in
+            await self?.monitor(session: newSession)
+        }
+
         var configuration = ObjectCaptureSession.Configuration()
         configuration.checkpointDirectory = snapshots
         configuration.isOverCaptureEnabled = true
         newSession.start(imagesDirectory: images, configuration: configuration)
 
-        session = newSession
         captureState = newSession.state
+        photoCount = newSession.numberOfShotsTaken
         imagesDirectory = images
         outputDirectory = baseDirectory
         outputURL = models.appendingPathComponent("model-mobile.usdz")
         startedAt = Date()
-        photoCount = 0
         phase = .capturing
-
-        captureTask?.cancel()
-        captureTask = Task { [weak self] in
-            await self?.monitor(session: newSession)
-        }
     }
 
     func beginCaptureFlow() {
@@ -404,6 +410,12 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
         photogrammetrySession?.cancel()
     }
 
+    func refreshState() {
+        guard let session else { return }
+        captureState = session.state
+        photoCount = session.numberOfShotsTaken
+    }
+
     func clearError() {
         errorMessage = nil
         phase = .instructions
@@ -418,6 +430,9 @@ final class ObjectCaptureScanCoordinator: ObservableObject {
     }
 
     private func monitor(session: ObjectCaptureSession) async {
+        captureState = session.state
+        photoCount = session.numberOfShotsTaken
+
         for await state in session.stateUpdates {
             guard !Task.isCancelled else { return }
             captureState = state
