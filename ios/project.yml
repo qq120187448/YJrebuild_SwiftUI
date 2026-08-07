@@ -88,6 +88,7 @@ targets:
       - path: Robo/Views/ToyBoxView.swift
       - path: Robo/Views/WallDefectScanView.swift
       - path: Robo/Views/WallDefectModelView.swift
+      - path: Robo/Views/WallDefectScanDetailView.swift
     dependencies:
       - package: Voxels
       - package: iTriangle

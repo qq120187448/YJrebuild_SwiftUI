@@ -68,6 +68,11 @@ enum WallDefectStore {
         .sorted { $0.capturedAt > $1.capturedAt }
     }
 
+    static func delete(documentID: UUID) {
+        let directory = rootDirectory().appendingPathComponent(documentID.uuidString)
+        try? FileManager.default.removeItem(at: directory)
+    }
+
     static func rootDirectory() -> URL {
         let documents = FileManager.default.urls(
             for: .documentDirectory,

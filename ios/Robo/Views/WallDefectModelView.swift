@@ -12,12 +12,12 @@ struct WallDefectModelView: View {
     let onDiscard: () -> Void
 
     @StateObject private var cameraModel = DefectCameraModel()
-    @State private var selectedSurfaceID: UUID?
+    @State private var cameraSurfaceID: UUID?
     @State private var photoCount = 0
     @State private var showSaveConfirm = false
 
-    private var selectedSurface: WallDefectSurface? {
-        surfaces.first { $0.id == selectedSurfaceID }
+    private var cameraSurface: WallDefectSurface? {
+        surfaces.first { $0.id == cameraSurfaceID }
     }
 
     var body: some View {
@@ -26,13 +26,20 @@ struct WallDefectModelView: View {
                 surfaces: surfaces,
                 arSession: arSession,
                 cameraModel: cameraModel,
-                selectedSurfaceID: $selectedSurfaceID
+                cameraSurfaceID: $cameraSurfaceID
             )
             .ignoresSafeArea()
 
-            VStack {
+            VStack(spacing: 0) {
                 topBar
                 Spacer()
+                RoomMiniMapView(
+                    surfaces: surfaces,
+                    yaw: cameraModel.yaw,
+                    selectedSurfaceID: cameraSurfaceID
+                )
+                .frame(height: 180)
+                .padding(.horizontal, 10)
                 bottomBar
             }
         }
@@ -52,23 +59,23 @@ struct WallDefectModelView: View {
     private var topBar: some View {
         HStack(spacing: 12) {
             Image(
-                systemName: selectedSurface == nil
-                    ? "hand.tap"
+                systemName: cameraSurface == nil
+                    ? "camera.viewfinder"
                     : "checkmark.circle.fill"
             )
             .font(.title3)
-            .foregroundStyle(selectedSurface == nil ? .white : .green)
+            .foregroundStyle(cameraSurface == nil ? .white : .green)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(selectedSurface?.label ?? "点击墙面选择")
+                Text(cameraSurface?.label ?? "对准墙面或地面")
                     .font(.subheadline.bold())
                     .foregroundStyle(.white)
-                if let selectedSurface {
-                    Text(selectedSurface.uvDescription)
+                if let cameraSurface {
+                    Text(cameraSurface.uvDescription)
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.white.opacity(0.75))
                 } else {
-                    Text("直接点选模型上的墙或地面")
+                    Text("自动根据相机方向判断贴图位置")
                         .font(.caption2)
                         .foregroundStyle(.white.opacity(0.65))
                 }
@@ -91,18 +98,22 @@ struct WallDefectModelView: View {
 
     private var bottomBar: some View {
         VStack(spacing: 10) {
-            if let selectedSurface {
-                Text("已选：\(selectedSurface.label)")
+            if let cameraSurface {
+                Text("当前目标：\(cameraSurface.label)")
                     .font(.caption.bold())
                     .foregroundStyle(.white)
+            } else {
+                Text("把相机对准墙或地面，自动识别目标")
+                    .font(.caption.bold())
+                    .foregroundStyle(.white.opacity(0.75))
             }
 
             HStack(spacing: 14) {
                 Button {
-                    guard let selectedSurfaceID,
+                    guard let cameraSurfaceID,
                           let capture = cameraModel.capture() else { return }
                     photoCount += 1
-                    onPhoto(selectedSurfaceID, capture)
+                    onPhoto(cameraSurfaceID, capture)
                 } label: {
                     ZStack {
                         Circle()
@@ -113,8 +124,8 @@ struct WallDefectModelView: View {
                             .frame(width: 52, height: 52)
                     }
                 }
-                .disabled(selectedSurface == nil)
-                .opacity(selectedSurface == nil ? 0.45 : 1)
+                .disabled(cameraSurface == nil)
+                .opacity(cameraSurface == nil ? 0.45 : 1)
 
                 Button {
                     showSaveConfirm = true
@@ -141,13 +152,14 @@ private struct WallDefectARView: UIViewRepresentable {
     let surfaces: [WallDefectSurface]
     let arSession: ARSession
     let cameraModel: DefectCameraModel
-    @Binding var selectedSurfaceID: UUID?
+    @Binding var cameraSurfaceID: UUID?
 
     func makeUIView(context: Context) -> ARSCNView {
         let view = ARSCNView()
         view.session = arSession
         view.session.delegate = context.coordinator
         view.automaticallyUpdatesLighting = true
+        context.coordinator.sceneView = view
 
         let configuration = ARWorldTrackingConfiguration()
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
@@ -159,19 +171,13 @@ private struct WallDefectARView: UIViewRepresentable {
         arSession.run(configuration, options: [])
 
         addNodes(to: view.scene.rootNode)
-
-        let tap = UITapGestureRecognizer(
-            target: context.coordinator,
-            action: #selector(Coordinator.handleTap(_:))
-        )
-        view.addGestureRecognizer(tap)
         return view
     }
 
     func updateUIView(_ uiView: ARSCNView, context: Context) {
         context.coordinator.updateSelection(
             in: uiView.scene.rootNode,
-            selectedID: selectedSurfaceID
+            selectedID: cameraSurfaceID
         )
     }
 
@@ -182,7 +188,7 @@ private struct WallDefectARView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             cameraModel: cameraModel,
-            selectedSurfaceID: $selectedSurfaceID
+            cameraSurfaceID: $cameraSurfaceID
         )
     }
 
@@ -196,78 +202,44 @@ private struct WallDefectARView: UIViewRepresentable {
 
             let node = SCNNode(geometry: plane)
             node.name = surface.id.uuidString
-            node.transform = SCNMatrix4(transform(for: surface))
+            node.transform = SCNMatrix4(surfaceTransform(surface))
             root.addChildNode(node)
         }
     }
 
-    private func transform(for surface: WallDefectSurface) -> simd_float4x4 {
-        let origin = WallDefectGeometry.planeOrigin(for: surface)
-        let u = WallDefectGeometry.planeUAxis(for: surface)
-        let v = WallDefectGeometry.planeVAxis(for: surface)
-        let normal = WallDefectGeometry.planeNormal(for: surface)
-        let center = origin + u / 2 + v / 2
-
-        var matrix = simd_float4x4()
-        matrix.columns.0 = SIMD4<Float>(
-            Float(simd_normalize(u).x),
-            Float(simd_normalize(u).y),
-            Float(simd_normalize(u).z),
-            0
-        )
-        matrix.columns.1 = SIMD4<Float>(
-            Float(simd_normalize(v).x),
-            Float(simd_normalize(v).y),
-            Float(simd_normalize(v).z),
-            0
-        )
-        matrix.columns.2 = SIMD4<Float>(
-            Float(simd_normalize(normal).x),
-            Float(simd_normalize(normal).y),
-            Float(simd_normalize(normal).z),
-            0
-        )
-        matrix.columns.3 = SIMD4<Float>(
-            Float(center.x),
-            Float(center.y),
-            Float(center.z),
-            1
-        )
-        return matrix
-    }
-
     final class Coordinator: NSObject, ARSessionDelegate {
         let cameraModel: DefectCameraModel
-        var selectedSurfaceID: Binding<UUID?>
+        var cameraSurfaceID: Binding<UUID?>
+        weak var sceneView: ARSCNView?
 
         init(
             cameraModel: DefectCameraModel,
-            selectedSurfaceID: Binding<UUID?>
+            cameraSurfaceID: Binding<UUID?>
         ) {
             self.cameraModel = cameraModel
-            self.selectedSurfaceID = selectedSurfaceID
+            self.cameraSurfaceID = cameraSurfaceID
         }
 
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
             DispatchQueue.main.async {
                 self.cameraModel.update(frame: frame)
+                self.updateCameraSurface()
             }
         }
 
-        @objc func handleTap(_ gesture: UITapGestureRecognizer) {
-            guard let view = gesture.view as? ARSCNView else { return }
-            let location = gesture.location(in: view)
+        private func updateCameraSurface() {
+            guard let view = sceneView else { return }
+            let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
             let results = view.hitTest(
-                location,
+                center,
                 options: [.rootNode: view.scene.rootNode]
             )
-            guard let node = results.first?.node,
-                  let name = node.name,
-                  let id = UUID(uuidString: name) else {
-                return
+            var nextID: UUID?
+            if let name = results.first?.node.name {
+                nextID = UUID(uuidString: name)
             }
-            DispatchQueue.main.async {
-                self.selectedSurfaceID.wrappedValue = id
+            if cameraSurfaceID.wrappedValue != nextID {
+                cameraSurfaceID.wrappedValue = nextID
             }
         }
 
@@ -285,4 +257,149 @@ private struct WallDefectARView: UIViewRepresentable {
             }
         }
     }
+}
+
+private struct RoomMiniMapView: UIViewRepresentable {
+    let surfaces: [WallDefectSurface]
+    let yaw: Float
+    let selectedSurfaceID: UUID?
+
+    func makeUIView(context: Context) -> SCNView {
+        let view = SCNView()
+        view.backgroundColor = UIColor(white: 0, alpha: 0.42)
+        view.allowsCameraControl = false
+        view.antialiasingMode = .multisampling4X
+
+        let scene = SCNScene()
+        view.scene = scene
+        addNodes(to: scene.rootNode)
+
+        let camera = SCNNode()
+        camera.camera = SCNCamera()
+        camera.camera?.fieldOfView = 60
+        scene.rootNode.addChildNode(camera)
+        view.pointOfView = camera
+        update(camera: camera)
+        return view
+    }
+
+    func updateUIView(_ uiView: SCNView, context: Context) {
+        guard let camera = uiView.pointOfView else { return }
+        update(camera: camera)
+        updateSelection(in: uiView.scene?.rootNode)
+    }
+
+    private func addNodes(to root: SCNNode) {
+        for surface in surfaces {
+            let plane = SCNPlane(width: surface.width, height: surface.height)
+            let material = SCNMaterial()
+            material.diffuse.contents = UIColor.cyan.withAlphaComponent(0.55)
+            material.isDoubleSided = true
+            plane.firstMaterial = material
+
+            let node = SCNNode(geometry: plane)
+            node.name = surface.id.uuidString
+            node.transform = SCNMatrix4(surfaceTransform(surface))
+            root.addChildNode(node)
+        }
+    }
+
+    private func update(camera: SCNNode) {
+        let center = roomCenter
+        let radius = max(roomRadius, 0.5)
+        let elevation = Float.pi / 4
+        let distance = radius * 3.4
+        let horizontal = distance * cos(elevation)
+
+        camera.position = SCNVector3(
+            center.x + horizontal * sin(yaw),
+            center.y + distance * sin(elevation),
+            center.z + horizontal * cos(yaw)
+        )
+        camera.look(at: SCNVector3(center.x, center.y, center.z))
+    }
+
+    private func updateSelection(in root: SCNNode?) {
+        guard let root else { return }
+        for node in root.childNodes {
+            guard let name = node.name,
+                  let id = UUID(uuidString: name) else {
+                continue
+            }
+            let selected = id == selectedSurfaceID
+            let color = selected
+                ? UIColor.orange.withAlphaComponent(0.85)
+                : UIColor.cyan.withAlphaComponent(0.55)
+            node.geometry?.firstMaterial?.diffuse.contents = color
+        }
+    }
+
+    private var roomCenter: SCNVector3 {
+        var sum = SIMD3<Double>.zero
+        var count = 0
+        for surface in surfaces {
+            let center = WallDefectGeometry.planeOrigin(for: surface)
+                + WallDefectGeometry.planeUAxis(for: surface) / 2
+                + WallDefectGeometry.planeVAxis(for: surface) / 2
+            sum += center
+            count += 1
+        }
+        guard count > 0 else { return SCNVector3Zero }
+        return SCNVector3(
+            Float(sum.x / Double(count)),
+            Float(sum.y / Double(count)),
+            Float(sum.z / Double(count))
+        )
+    }
+
+    private var roomRadius: Float {
+        let center = roomCenter
+        var maxDistance: Float = 0
+        for surface in surfaces {
+            let point = WallDefectGeometry.planeOrigin(for: surface)
+                + WallDefectGeometry.planeUAxis(for: surface) / 2
+                + WallDefectGeometry.planeVAxis(for: surface) / 2
+            let distance = simd_distance(
+                SIMD3<Float>(Float(point.x), Float(point.y), Float(point.z)),
+                SIMD3<Float>(center.x, center.y, center.z)
+            )
+            maxDistance = max(maxDistance, distance)
+        }
+        return maxDistance
+    }
+}
+
+private func surfaceTransform(_ surface: WallDefectSurface) -> simd_float4x4 {
+    let origin = WallDefectGeometry.planeOrigin(for: surface)
+    let u = WallDefectGeometry.planeUAxis(for: surface)
+    let v = WallDefectGeometry.planeVAxis(for: surface)
+    let normal = WallDefectGeometry.planeNormal(for: surface)
+    let center = origin + u / 2 + v / 2
+
+    var matrix = simd_float4x4()
+    matrix.columns.0 = SIMD4<Float>(
+        Float(simd_normalize(u).x),
+        Float(simd_normalize(u).y),
+        Float(simd_normalize(u).z),
+        0
+    )
+    matrix.columns.1 = SIMD4<Float>(
+        Float(simd_normalize(v).x),
+        Float(simd_normalize(v).y),
+        Float(simd_normalize(v).z),
+        0
+    )
+    matrix.columns.2 = SIMD4<Float>(
+        Float(simd_normalize(normal).x),
+        Float(simd_normalize(normal).y),
+        Float(simd_normalize(normal).z),
+        0
+    )
+    matrix.columns.3 = SIMD4<Float>(
+        Float(center.x),
+        Float(center.y),
+        Float(center.z),
+        1
+    )
+    return matrix
 }

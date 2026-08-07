@@ -19,11 +19,13 @@ struct DefectCameraCapture {
 final class DefectCameraModel: ObservableObject {
     @Published var latestFrame: ARFrame?
     @Published var lastError: String?
+    @Published var yaw: Float = 0
 
     private let ciContext = CIContext()
 
     func update(frame: ARFrame) {
         latestFrame = frame
+        yaw = frame.camera.eulerAngles.y
     }
 
     func capture() -> DefectCameraCapture? {

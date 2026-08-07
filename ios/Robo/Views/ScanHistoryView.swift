@@ -6,6 +6,7 @@ enum ScanHistoryFilter: Hashable {
     case room
     case object
     case texture
+    case defect
 }
 
 struct ScanHistoryView: View {
@@ -23,6 +24,7 @@ struct ScanHistoryView: View {
 
     @State private var showingLiDAR = false
     @State private var shareURLs: [URL] = []
+    @State private var wallDefectScans: [WallDefectScanDocument] = []
 
     private struct BuildingGroup: Identifiable {
         let id: String
@@ -60,6 +62,7 @@ struct ScanHistoryView: View {
                         Text("房间").tag(ScanHistoryFilter.room)
                         Text("物体").tag(ScanHistoryFilter.object)
                         Text("实景").tag(ScanHistoryFilter.texture)
+                        Text("缺陷").tag(ScanHistoryFilter.defect)
                     }
                     .pickerStyle(.segmented)
                 }
@@ -176,6 +179,39 @@ struct ScanHistoryView: View {
                         }
                     }
                 }
+
+                if filter == .all || filter == .defect {
+                    if wallDefectScans.isEmpty {
+                        emptyRow("暂无墙地面缺陷扫描记录", systemImage: "paintbrush.pointed")
+                    } else {
+                        Section("墙地面缺陷扫描") {
+                            ForEach(wallDefectScans) { document in
+                                NavigationLink {
+                                    WallDefectScanDetailView(document: document)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(document.name)
+                                            .font(.headline)
+                                        Text("\(document.surfaces.count) 个墙面/地面 · \(document.photos.count) 张照片")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Text(document.capturedAt.formatted(date: .abbreviated, time: .shortened))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .padding(.vertical, 2)
+                                }
+                                .swipeActions(edge: .trailing) {
+                                    Button(role: .destructive) {
+                                        deleteWallDefectScan(document)
+                                    } label: {
+                                        Label("删除", systemImage: "trash")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             .navigationTitle("历史记录")
             .navigationDestination(for: RoomScanRecord.self) { room in
@@ -197,9 +233,12 @@ struct ScanHistoryView: View {
                 }
             }
         }
-        .fullScreenCover(isPresented: $showingLiDAR) {
-            LiDARScanView()
-        }
+            .fullScreenCover(isPresented: $showingLiDAR) {
+                LiDARScanView()
+            }
+            .onAppear {
+                wallDefectScans = WallDefectStore.allDocuments()
+            }
         .sheet(isPresented: Binding(
             get: { !shareURLs.isEmpty },
             set: { if !$0 { shareURLs = [] } }
@@ -217,6 +256,11 @@ struct ScanHistoryView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 20)
+    }
+
+    private func deleteWallDefectScan(_ document: WallDefectScanDocument) {
+        WallDefectStore.delete(documentID: document.id)
+        wallDefectScans.removeAll { $0.id == document.id }
     }
 
 private func exportBuilding(_ group: BuildingGroup) {
