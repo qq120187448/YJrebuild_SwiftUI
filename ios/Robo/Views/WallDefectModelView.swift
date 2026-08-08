@@ -21,7 +21,7 @@ struct WallDefectModelDebugSettings: Equatable {
     var modelFlipZ = false
     var cameraForwardReversed = true
     var cameraUpReversed = false
-    var cameraRollDeg: Double = 0
+    var cameraRollDeg: Double = 90
     var swapPitchYaw = false
 }
 
@@ -58,8 +58,8 @@ struct WallDefectModelView: View {
     private var debugCameraForwardReversed = true
     @AppStorage("wallDefectDebug.cameraUpReversed")
     private var debugCameraUpReversed = false
-    @AppStorage("wallDefectDebug.cameraRollDeg")
-    private var debugCameraRollDeg = 0.0
+    @AppStorage("wallDefectDebug.cameraRollCompensation")
+    private var debugCameraRollDeg = 90.0
     @AppStorage("wallDefectDebug.swapPitchYaw")
     private var debugSwapPitchYaw = false
 
@@ -141,6 +141,7 @@ struct WallDefectModelView: View {
                         room: room,
                         surfaces: surfaces,
                         cameraTransform: cameraModel.cameraTransform,
+                        cameraSurfaceID: cameraSurfaceID,
                         settings: debugSettings
                     )
                     .frame(height: 150)
@@ -263,7 +264,7 @@ struct WallDefectModelView: View {
     }
 
     private var debugPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("模型调试")
                     .font(.caption.bold())
@@ -276,6 +277,8 @@ struct WallDefectModelView: View {
                 .foregroundStyle(.orange)
             }
 
+            ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 6) {
             Text("模型初始参数")
                 .font(.caption2.bold())
                 .foregroundStyle(.white.opacity(0.7))
@@ -376,6 +379,10 @@ struct WallDefectModelView: View {
                 }
             }
 
+            }
+            }
+            .frame(maxHeight: 170)
+
             Text(debugParameterSummary)
                 .font(.caption2.monospaced())
                 .foregroundStyle(.white.opacity(0.8))
@@ -408,7 +415,7 @@ struct WallDefectModelView: View {
         debugModelFlipZ = false
         debugCameraForwardReversed = true
         debugCameraUpReversed = false
-        debugCameraRollDeg = 0
+        debugCameraRollDeg = 90
         debugSwapPitchYaw = false
     }
 
@@ -721,6 +728,7 @@ private struct RoomMiniMapView: UIViewRepresentable {
     let room: CapturedRoom
     let surfaces: [WallDefectSurface]
     let cameraTransform: simd_float4x4?
+    let cameraSurfaceID: UUID?
     let settings: WallDefectModelDebugSettings
 
     func makeUIView(context: Context) -> SCNView {
@@ -747,6 +755,7 @@ private struct RoomMiniMapView: UIViewRepresentable {
         guard let camera = uiView.pointOfView else { return }
         updateModelTransform(in: uiView)
         update(camera: camera)
+        updateHighlights(in: uiView)
     }
 
     private func loadScene() -> SCNScene {
@@ -755,33 +764,53 @@ private struct RoomMiniMapView: UIViewRepresentable {
         modelRoot.name = "DebugModelRoot"
         modelRoot.simdTransform = debugModelTransform()
         for surface in surfaces {
-            let box = SCNBox(
-                width: CGFloat(surface.width),
-                height: CGFloat(surface.height),
-                length: 0.03,
-                chamferRadius: 0
+            guard surface.kind != .ceiling else { continue }
+            let material = makeMaterial(
+                for: surface,
+                isIncomplete: incompleteWallIDs.contains(surface.id),
+                isHighlighted: surface.id == cameraSurfaceID
             )
-            let material = SCNMaterial()
-            switch surface.kind {
-            case .floor:
-                material.diffuse.contents = UIColor(
-                    white: 0.82,
-                    alpha: 0.92
+            let geometry: SCNGeometry
+            if surface.kind == .wall {
+                let wallRect = CGRect(
+                    x: 0,
+                    y: 0,
+                    width: CGFloat(surface.width),
+                    height: CGFloat(surface.height)
                 )
-            case .ceiling:
-                material.diffuse.contents = UIColor(
-                    white: 0.92,
-                    alpha: 0.92
+                let path = UIBezierPath(rect: wallRect)
+                path.usesEvenOddFillRule = true
+                for rect in openingRects(for: surface.id) {
+                    let inner = UIBezierPath(rect: rect)
+                    inner.usesEvenOddFillRule = true
+                    path.append(inner)
+                }
+                let shape = SCNShape(
+                    path: path,
+                    extrusionDepth: 0.03
                 )
-            case .wall:
-                material.diffuse.contents = UIColor.white
+                shape.materials = [material]
+                geometry = shape
+            } else {
+                let box = SCNBox(
+                    width: CGFloat(surface.width),
+                    height: CGFloat(surface.height),
+                    length: 0.03,
+                    chamferRadius: 0
+                )
+                box.materials = [material]
+                geometry = box
             }
-            material.isDoubleSided = true
-            box.materials = [material]
-
-            let node = SCNNode(geometry: box)
-            node.simdTransform = surfaceTransform(surface)
-            modelRoot.addChildNode(node)
+            let geometryNode = SCNNode(geometry: geometry)
+            geometryNode.name = surface.id.uuidString
+            if surface.kind == .wall {
+                geometryNode.simdPosition = SIMD3<Float>(0, 0, -0.015)
+            }
+            let wrapper = SCNNode()
+            wrapper.name = "SurfaceNode-\(surface.id.uuidString)"
+            wrapper.simdTransform = surfaceTransform(surface)
+            wrapper.addChildNode(geometryNode)
+            modelRoot.addChildNode(wrapper)
         }
         scene.rootNode.addChildNode(modelRoot)
         return scene
@@ -791,91 +820,8 @@ private struct RoomMiniMapView: UIViewRepresentable {
         let center = roomCenter
         let radius = max(roomRadius, 0.5)
         let distance = radius * 2.8
-
-        if let transform = cameraTransform {
-            let forward = SCNVector3(
-                settings.cameraForwardReversed
-                    ? -transform.columns.2.x
-                    : transform.columns.2.x,
-                settings.cameraForwardReversed
-                    ? -transform.columns.2.y
-                    : transform.columns.2.y,
-                settings.cameraForwardReversed
-                    ? -transform.columns.2.z
-                    : transform.columns.2.z
-            )
-            var up = SCNVector3(
-                settings.cameraUpReversed
-                    ? -transform.columns.1.x
-                    : transform.columns.1.x,
-                settings.cameraUpReversed
-                    ? -transform.columns.1.y
-                    : transform.columns.1.y,
-                settings.cameraUpReversed
-                    ? -transform.columns.1.z
-                    : transform.columns.1.z
-            )
-            let forwardLength = simd_length(SIMD3<Float>(
-                forward.x, forward.y, forward.z
-            ))
-            let normalizedForward = forwardLength > 0.0001
-                ? SCNVector3(
-                    forward.x / forwardLength,
-                    forward.y / forwardLength,
-                    forward.z / forwardLength
-                )
-                : SCNVector3(0, 0, -1)
-            let dot = normalizedForward.x * up.x
-                + normalizedForward.y * up.y
-                + normalizedForward.z * up.z
-            up = SCNVector3(
-                up.x - normalizedForward.x * dot,
-                up.y - normalizedForward.y * dot,
-                up.z - normalizedForward.z * dot
-            )
-            let upLength = simd_length(SIMD3<Float>(up.x, up.y, up.z))
-            let baseUp = upLength > 0.0001
-                ? SCNVector3(
-                    up.x / upLength,
-                    up.y / upLength,
-                    up.z / upLength
-                )
-                : (abs(normalizedForward.y) < 0.95
-                    ? SCNVector3(0, 1, 0)
-                    : SCNVector3(0, 0, 1))
-
-            let rollDegrees = settings.cameraRollDeg
-                + (settings.swapPitchYaw ? 90 : 0)
-            let roll = Float(rollDegrees * .pi / 180)
-            let right = crossVector(normalizedForward, baseUp)
-            let rotatedUp = SCNVector3(
-                baseUp.x * cosf(roll) + right.x * sinf(roll),
-                baseUp.y * cosf(roll) + right.y * sinf(roll),
-                baseUp.z * cosf(roll) + right.z * sinf(roll)
-            )
-            let safeUp = abs(
-                normalizedForward.x * rotatedUp.x
-                    + normalizedForward.y * rotatedUp.y
-                    + normalizedForward.z * rotatedUp.z
-            ) < 0.95
-                ? rotatedUp
-                : SCNVector3(0, 1, 0)
-            camera.position = SCNVector3(
-                center.x - normalizedForward.x * distance,
-                center.y - normalizedForward.y * distance,
-                center.z - normalizedForward.z * distance
-            )
-            camera.look(
-                at: SCNVector3(center.x, center.y, center.z),
-                up: safeUp,
-                localFront: SCNVector3(0, 0, -1)
-            )
-            return
-        }
-
-        let elevation = Float.pi / 4.2
+        let elevation = Float.pi / 4.0
         let horizontal = distance * cos(elevation)
-
         camera.position = SCNVector3(
             center.x + horizontal * 0.8,
             center.y + distance * sin(elevation),
@@ -900,10 +846,195 @@ private struct RoomMiniMapView: UIViewRepresentable {
             -center.y,
             -center.z
         ))
+        let yaw = simd_quatf(
+            angle: Float(cameraYawDegrees * .pi / 180),
+            axis: SIMD3<Float>(0, 1, 0)
+        )
+        let yawMatrix = simd_float4x4(yaw)
         return simd_mul(
-            simd_mul(toCenter, modelCorrectionMatrix()),
+            simd_mul(
+                toCenter,
+                simd_mul(yawMatrix, modelCorrectionMatrix())
+            ),
             fromCenter
         )
+    }
+
+    private var cameraYawDegrees: Double {
+        guard let transform = cameraTransform else { return 0 }
+        let forward = SCNVector3(
+            settings.cameraForwardReversed
+                ? -transform.columns.2.x
+                : transform.columns.2.x,
+            settings.cameraForwardReversed
+                ? -transform.columns.2.y
+                : transform.columns.2.y,
+            settings.cameraForwardReversed
+                ? -transform.columns.2.z
+                : transform.columns.2.z
+        )
+        let horizontal = SIMD2<Float>(forward.x, forward.z)
+        let length = simd_length(horizontal)
+        guard length > 0.0001 else { return 0 }
+        let yaw = Double(atan2(horizontal.x, horizontal.z)) * 180 / .pi
+        let compensation = (settings.swapPitchYaw ? 90 : 0)
+            + settings.cameraRollDeg
+        return yaw + compensation
+    }
+
+    private func makeMaterial(
+        for surface: WallDefectSurface,
+        isIncomplete: Bool,
+        isHighlighted: Bool
+    ) -> SCNMaterial {
+        let material = SCNMaterial()
+        material.isDoubleSided = true
+        material.lightingModel = .phong
+        if isHighlighted {
+            material.diffuse.contents = UIColor.systemCyan
+            material.emission.contents = UIColor(
+                red: 0.05,
+                green: 0.65,
+                blue: 0.9,
+                alpha: 1
+            )
+            material.transparency = 1
+        } else {
+            material.emission.contents = UIColor.clear
+            switch surface.kind {
+            case .floor:
+                material.diffuse.contents = UIColor(
+                    white: 0.82,
+                    alpha: 0.92
+                )
+            case .ceiling:
+                material.diffuse.contents = UIColor(
+                    white: 0.92,
+                    alpha: 0.92
+                )
+            case .wall:
+                material.diffuse.contents = UIColor.white
+                material.transparency = isIncomplete ? 0.28 : 0.92
+            }
+        }
+        return material
+    }
+
+    private var incompleteWallIDs: Set<UUID> {
+        var result = Set<UUID>()
+        for wall in room.walls where wall.completedEdges.count < 4 {
+            result.insert(wall.identifier)
+        }
+        return result
+    }
+
+    private func openingRects(for wallID: UUID) -> [CGRect] {
+        guard let wall = room.walls.first(
+            where: { $0.identifier == wallID }
+        ) else {
+            return []
+        }
+        let wallCenter = SIMD3<Float>(
+            wall.transform.columns.3.x,
+            wall.transform.columns.3.y,
+            wall.transform.columns.3.z
+        )
+        let uUnit = simd_normalize(SIMD3<Float>(
+            wall.transform.columns.0.x,
+            wall.transform.columns.0.y,
+            wall.transform.columns.0.z
+        ))
+        let vUnit = simd_normalize(SIMD3<Float>(
+            wall.transform.columns.1.x,
+            wall.transform.columns.1.y,
+            wall.transform.columns.1.z
+        ))
+        let wallWidth = wall.dimensions.x
+        let wallHeight = wall.dimensions.y
+        let origin = wallCenter
+            - uUnit * (wallWidth * 0.5)
+            - vUnit * (wallHeight * 0.5)
+
+        var rects: [CGRect] = []
+        let openings = room.doors + room.windows + room.openings
+        for opening in openings where opening.parentIdentifier == wallID {
+            let center = SIMD3<Float>(
+                opening.transform.columns.3.x,
+                opening.transform.columns.3.y,
+                opening.transform.columns.3.z
+            )
+            let halfX = SIMD3<Float>(
+                opening.transform.columns.0.x,
+                opening.transform.columns.0.y,
+                opening.transform.columns.0.z
+            ) * (opening.dimensions.x * 0.5)
+            let halfY = SIMD3<Float>(
+                opening.transform.columns.1.x,
+                opening.transform.columns.1.y,
+                opening.transform.columns.1.z
+            ) * (opening.dimensions.y * 0.5)
+            let halfZ = SIMD3<Float>(
+                opening.transform.columns.2.x,
+                opening.transform.columns.2.y,
+                opening.transform.columns.2.z
+            ) * (opening.dimensions.z * 0.5)
+
+            var minU = Float.greatestFiniteMagnitude
+            var maxU = -Float.greatestFiniteMagnitude
+            var minV = Float.greatestFiniteMagnitude
+            var maxV = -Float.greatestFiniteMagnitude
+            for sx: Float in [-1, 1] {
+                for sy: Float in [-1, 1] {
+                    for sz: Float in [-1, 1] {
+                        let corner = center
+                            + halfX * sx
+                            + halfY * sy
+                            + halfZ * sz
+                        let toCorner = corner - origin
+                        let u = simd_dot(toCorner, uUnit)
+                        let v = simd_dot(toCorner, vUnit)
+                        minU = min(minU, u)
+                        maxU = max(maxU, u)
+                        minV = min(minV, v)
+                        maxV = max(maxV, v)
+                    }
+                }
+            }
+            let clipped = CGRect(
+                x: CGFloat(max(0, minU)),
+                y: CGFloat(max(0, minV)),
+                width: CGFloat(min(wallWidth, maxU) - max(0, minU)),
+                height: CGFloat(min(wallHeight, maxV) - max(0, minV))
+            )
+            if clipped.width > 0.01, clipped.height > 0.01 {
+                rects.append(clipped)
+            }
+        }
+        return rects
+    }
+
+    private func updateHighlights(in view: SCNView) {
+        guard let scene = view.scene,
+              let modelRoot = scene.rootNode.childNode(
+                  withName: "DebugModelRoot",
+                  recursively: false
+              ) else {
+            return
+        }
+        for surface in surfaces {
+            guard let geometryNode = modelRoot.childNode(
+                withName: surface.id.uuidString,
+                recursively: true
+            ), let geometry = geometryNode.geometry else {
+                continue
+            }
+            let material = makeMaterial(
+                for: surface,
+                isIncomplete: incompleteWallIDs.contains(surface.id),
+                isHighlighted: surface.id == cameraSurfaceID
+            )
+            geometry.materials = [material]
+        }
     }
 
     private func modelCorrectionMatrix() -> simd_float4x4 {
