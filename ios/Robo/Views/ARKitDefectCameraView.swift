@@ -63,7 +63,7 @@ final class DefectCameraModel: ObservableObject {
     func capture(
         viewSize: CGSize? = nil,
         outputSide: CGFloat = 1024,
-        centerRatio: CGFloat = Self.squareCropCenterYRatio
+        centerRatio: CGFloat = DefectCameraModel.squareCropCenterYRatio
     ) -> DefectCameraCapture? {
         guard let frame = latestFrame else {
             lastError = "尚未获取 ARKit 画面"
