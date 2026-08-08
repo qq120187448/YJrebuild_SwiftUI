@@ -399,9 +399,6 @@ private struct WallDefectARView: UIViewRepresentable {
             let nextID = associations.first?.surfaceID
             if cameraSurfaceID.wrappedValue != nextID {
                 cameraSurfaceID.wrappedValue = nextID
-                if nextID != nil {
-                    cameraModel.lastError = nil
-                }
             }
         }
 
