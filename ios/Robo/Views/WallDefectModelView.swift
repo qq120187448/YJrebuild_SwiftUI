@@ -478,19 +478,37 @@ private struct RoomMiniMapView: UIViewRepresentable {
     }
 
     private func loadScene() -> SCNScene {
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(UUID().uuidString).usdz")
-        do {
-            try room.export(to: tempURL, exportOptions: .model)
-            let scene = try SCNScene(url: tempURL, options: [
-                .checkConsistency: true
-            ])
-            try? FileManager.default.removeItem(at: tempURL)
-            return scene
-        } catch {
-            try? FileManager.default.removeItem(at: tempURL)
-            return SCNScene()
+        let scene = SCNScene()
+        for surface in surfaces {
+            let box = SCNBox(
+                width: CGFloat(surface.width),
+                height: CGFloat(surface.height),
+                length: 0.03,
+                chamferRadius: 0
+            )
+            let material = SCNMaterial()
+            switch surface.kind {
+            case .floor:
+                material.diffuse.contents = UIColor(
+                    white: 0.82,
+                    alpha: 0.92
+                )
+            case .ceiling:
+                material.diffuse.contents = UIColor(
+                    white: 0.92,
+                    alpha: 0.92
+                )
+            case .wall:
+                material.diffuse.contents = UIColor.white
+            }
+            material.isDoubleSided = true
+            box.materials = [material]
+
+            let node = SCNNode(geometry: box)
+            node.simdTransform = surfaceTransform(surface)
+            scene.rootNode.addChildNode(node)
         }
+        return scene
     }
 
     private func update(camera: SCNNode) {
@@ -500,9 +518,9 @@ private struct RoomMiniMapView: UIViewRepresentable {
 
         if let transform = cameraTransform {
             let forward = SCNVector3(
-                transform.columns.2.x,
-                transform.columns.2.y,
-                transform.columns.2.z
+                -transform.columns.2.x,
+                -transform.columns.2.y,
+                -transform.columns.2.z
             )
             let up = SCNVector3(
                 transform.columns.1.x,

@@ -339,7 +339,7 @@ enum WallDefectProjection {
             let local = SIMD3<Float>(
                 Float((Double(pixel.x) - cx) / fx),
                 Float(-(Double(pixel.y) - cy) / fy),
-                1
+                -1
             )
             let rotation = simd_float3x3(columns: (
                 SIMD3<Float>(matrix.columns.0.x, matrix.columns.0.y, matrix.columns.0.z),
