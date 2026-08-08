@@ -295,10 +295,14 @@ struct RulerCalibrationView: View {
         guard viewPoints.count == 2 else { return nil }
         let rect = fittedRect(in: imageViewSize)
         guard rect.width > 0, rect.height > 0 else { return nil }
-        let dx = (viewPoints[1].x - viewPoints[0].x)
-            / rect.width * image.size.width
-        let dy = (viewPoints[1].y - viewPoints[0].y)
-            / rect.height * image.size.height
+        let dx = Double(
+            (viewPoints[1].x - viewPoints[0].x)
+                / rect.width * image.size.width
+        )
+        let dy = Double(
+            (viewPoints[1].y - viewPoints[0].y)
+                / rect.height * image.size.height
+        )
         return hypot(dx, dy)
     }
 
