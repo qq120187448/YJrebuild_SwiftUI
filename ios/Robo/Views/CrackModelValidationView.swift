@@ -12,8 +12,12 @@ struct CrackModelValidationView: View {
     @State private var nextIndex = 0
     @State private var modelStatus = "未检查"
     @State private var timeoutWorkItem: DispatchWorkItem?
+    @State private var didTimeout = false
 
     private let resolutions = [640, 800, 960, 1280, 1600, 1920, 2240]
+    private var engineConfig: CrackRecognitionConfig {
+        CrackRecognitionSettings.load()
+    }
 
     var body: some View {
         List {
@@ -52,6 +56,19 @@ struct CrackModelValidationView: View {
                     Text(modelStatus)
                         .font(.caption)
                         .foregroundStyle(modelStatus.contains("成功") ? .green : .orange)
+
+                    LabeledContent(
+                        "计算单元",
+                        value: engineConfig.computeMode == "cpu"
+                            ? "仅 CPU"
+                            : "自动（CPU+神经网络）"
+                    )
+                    LabeledContent(
+                        "推理通道",
+                        value: engineConfig.inferenceBackend == "vision"
+                            ? "Vision"
+                            : "CoreML 直连"
+                    )
                 }
 
                 Section("验证") {
@@ -78,6 +95,12 @@ struct CrackModelValidationView: View {
                         Text(progressMessage)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                    }
+
+                    if didTimeout {
+                        Text("推理已挂起，无法取消。请退出验证页后重新进入 App，避免再次触发。")
+                            .font(.caption)
+                            .foregroundStyle(.red)
                     }
 
                     if let errorMessage {
@@ -147,6 +170,7 @@ struct CrackModelValidationView: View {
                 modelStatus = "未检查"
                 errorMessage = nil
                 progressMessage = ""
+                didTimeout = false
             } else {
                 errorMessage = "无法读取所选照片"
             }
@@ -168,14 +192,15 @@ struct CrackModelValidationView: View {
         guard nextIndex < resolutions.count else { return }
         let resolution = resolutions[nextIndex]
         isWorking = true
+        didTimeout = false
         errorMessage = nil
         progressMessage = "准备 \(resolution)×\(resolution)"
         timeoutWorkItem?.cancel()
         let timeout = DispatchWorkItem {
             DispatchQueue.main.async {
                 guard self.isWorking else { return }
-                self.progressMessage = "推理超时（>30秒），模型可能无法在当前 iOS 上运行"
-                self.isWorking = false
+                self.didTimeout = true
+                self.progressMessage = "推理已挂起超过 30 秒，当前无法取消；请退出本页并重启 App"
             }
         }
         timeoutWorkItem = timeout
@@ -198,6 +223,7 @@ struct CrackModelValidationView: View {
                 }
                 self.nextIndex += 1
                 self.progressMessage = "\(resolution) 完成"
+                self.didTimeout = false
                 self.isWorking = false
                 self.timeoutWorkItem?.cancel()
             }

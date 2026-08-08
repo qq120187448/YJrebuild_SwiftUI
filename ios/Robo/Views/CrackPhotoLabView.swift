@@ -9,6 +9,8 @@ struct CrackPhotoLabView: View {
     @State private var annotatedImage: UIImage?
     @State private var isWorking = false
     @State private var errorMessage: String?
+    @State private var timeoutWorkItem: DispatchWorkItem?
+    @State private var didTimeout = false
 
     private var config: CrackRecognitionConfig {
         CrackRecognitionSettings.load()
@@ -26,6 +28,7 @@ struct CrackPhotoLabView: View {
                         systemImage: "photo.on.rectangle"
                     )
                 }
+                .disabled(isWorking)
                 .onChange(of: selectedItem) { _, newValue in
                     loadPhoto(from: newValue)
                 }
@@ -59,6 +62,12 @@ struct CrackPhotoLabView: View {
                             .font(.caption)
                             .foregroundStyle(.red)
                     }
+
+                    if didTimeout {
+                        Text("识别已挂起，无法取消。请退出本页后重新进入 App，避免再次触发。")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
                 }
             }
 
@@ -88,6 +97,9 @@ struct CrackPhotoLabView: View {
                 result = nil
                 annotatedImage = nil
                 errorMessage = nil
+                didTimeout = false
+                isWorking = false
+                timeoutWorkItem?.cancel()
             } else {
                 errorMessage = "无法读取所选照片"
             }
@@ -97,7 +109,21 @@ struct CrackPhotoLabView: View {
     private func startRecognition() {
         guard let image else { return }
         isWorking = true
+        didTimeout = false
         errorMessage = nil
+        timeoutWorkItem?.cancel()
+        let timeout = DispatchWorkItem {
+            DispatchQueue.main.async {
+                guard self.isWorking else { return }
+                self.didTimeout = true
+                self.errorMessage = "识别已挂起超过 30 秒，当前无法取消；请退出本页并重启 App"
+            }
+        }
+        timeoutWorkItem = timeout
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + 30,
+            execute: timeout
+        )
         let config = self.config
         DispatchQueue.global(qos: .userInitiated).async {
             do {
@@ -111,12 +137,16 @@ struct CrackPhotoLabView: View {
                 DispatchQueue.main.async {
                     self.result = output.result
                     self.annotatedImage = output.annotatedImage
+                    self.didTimeout = false
                     self.isWorking = false
+                    self.timeoutWorkItem?.cancel()
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.errorMessage = error.localizedDescription
+                    self.didTimeout = false
                     self.isWorking = false
+                    self.timeoutWorkItem?.cancel()
                 }
             }
         }

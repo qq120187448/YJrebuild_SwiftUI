@@ -4,6 +4,8 @@ struct CrackRecognitionConfig: Codable, Equatable {
     var mode: String = "hairline"          // normal / hairline
     var modelSize: String = "n"            // n / s
     var engine: String = "yolo"            // yolo / mobilesam
+    var computeMode: String = "neural"     // neural / cpu
+    var inferenceBackend: String = "direct" // direct / vision
     var confidence: Double = 0.15
     var iou: Double = 0.5
     var tileSize: Int = 1024
@@ -26,6 +28,8 @@ struct CrackRecognitionConfig: Codable, Equatable {
         mode = mode == "normal" ? "normal" : "hairline"
         modelSize = modelSize == "n" ? "n" : "s"
         engine = engine == "mobilesam" ? "mobilesam" : "yolo"
+        computeMode = computeMode == "cpu" ? "cpu" : "neural"
+        inferenceBackend = inferenceBackend == "vision" ? "vision" : "direct"
         confidence = min(max(confidence, 0.1), 0.9)
         iou = min(max(iou, 0.1), 0.9)
         tileSize = min(max(tileSize, 512), 1600)
@@ -78,6 +82,12 @@ enum CrackRecognitionSettings {
         }
         if let value = components.queryItems?.first(where: { $0.name == "engine" })?.value {
             config.engine = value == "mobilesam" ? "mobilesam" : "yolo"
+        }
+        if let value = components.queryItems?.first(where: { $0.name == "compute" })?.value {
+            config.computeMode = value == "cpu" ? "cpu" : "neural"
+        }
+        if let value = components.queryItems?.first(where: { $0.name == "backend" })?.value {
+            config.inferenceBackend = value == "vision" ? "vision" : "direct"
         }
         if let value = components.queryItems?.first(where: { $0.name == "conf" })?.value,
            let number = Double(value) {

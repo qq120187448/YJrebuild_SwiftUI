@@ -3,6 +3,7 @@ import CoreVideo
 import CoreML
 import Foundation
 import UIKit
+import Vision
 
 struct CrackRecognitionOutput {
     let result: CrackRecognitionResult
@@ -29,6 +30,7 @@ enum CrackRecognitionError: LocalizedError {
     case modelNotFound
     case invalidImage
     case noModelOutput
+    case visionModelUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -38,6 +40,8 @@ enum CrackRecognitionError: LocalizedError {
             return "无法读取识别图片"
         case .noModelOutput:
             return "模型输出格式不符合 YOLOv8-seg"
+        case .visionModelUnavailable:
+            return "无法创建 Vision CoreML 请求"
         }
     }
 }
@@ -46,6 +50,7 @@ enum CrackRecognitionEngine {
 
     private struct LoadedModel {
         let mlModel: MLModel
+        let visionModel: VNCoreMLModel?
     }
 
     private static var modelCache: [String: LoadedModel] = [:]
@@ -58,7 +63,7 @@ enum CrackRecognitionEngine {
         surfaces: [WallDefectSurface],
         config: CrackRecognitionConfig
     ) throws -> CrackRecognitionOutput {
-        let model = try loadModel(size: config.modelSize)
+        let model = try loadModel(size: config.modelSize, config: config)
         let hairlineMaxSide = min(
             4096,
             max(config.tileSize * 2, 2048)
@@ -136,7 +141,10 @@ enum CrackRecognitionEngine {
 
     static func checkModelLoad() -> String {
         do {
-            _ = try loadModel(named: "crack_seg_n")
+            _ = try loadModel(
+                named: "crack_seg_n",
+                config: CrackRecognitionSettings.load()
+            )
             return "模型加载成功"
         } catch {
             return "模型加载失败：\(error.localizedDescription)"
@@ -165,7 +173,7 @@ enum CrackRecognitionEngine {
             return results
         }
 
-        var config = CrackRecognitionConfig.defaultConfig
+        var config = CrackRecognitionSettings.load()
         config.confidence = 0.15
         config.iou = 0.5
         config.mode = "normal"
@@ -181,7 +189,7 @@ enum CrackRecognitionEngine {
         let model: LoadedModel
         do {
             progress?("正在加载 crack_seg_n 模型", [])
-            model = try loadModel(named: "crack_seg_n")
+            model = try loadModel(named: "crack_seg_n", config: config)
             progress?("模型加载成功，等待推理", [])
         } catch {
             let errorMessage = error.localizedDescription
@@ -202,6 +210,9 @@ enum CrackRecognitionEngine {
 
         var results: [CrackResolutionValidationResult] = []
         for (index, resolution) in resolutions.enumerated() {
+            let backendLabel = config.inferenceBackend == "vision"
+                ? "Vision"
+                : "CoreML"
             do {
                 progress?("正在准备 \(resolution)×\(resolution) 输入", results)
                 let canvas = letterboxedCGImage(
@@ -211,7 +222,7 @@ enum CrackRecognitionEngine {
                 let canvasWidth = canvas.width
                 let canvasHeight = canvas.height
                 progress?(
-                    "\(resolution) 输入图已生成，开始 CoreML 推理",
+                    "\(resolution) 输入图已生成，开始 \(backendLabel) 推理",
                     results
                 )
                 let detections = try runSingleDetection(
@@ -263,29 +274,53 @@ enum CrackRecognitionEngine {
         return results
     }
 
-    private static func loadModel(size: String) throws -> LoadedModel {
+    private static func loadModel(
+        size: String,
+        config: CrackRecognitionConfig
+    ) throws -> LoadedModel {
         let name = size == "n" ? "crack_seg_n" : "crack_seg_s"
-        return try loadModel(named: name)
+        return try loadModel(named: name, config: config)
     }
 
-    private static func loadModel(named name: String) throws -> LoadedModel {
+    private static func loadModel(
+        named name: String,
+        config: CrackRecognitionConfig
+    ) throws -> LoadedModel {
+        let cacheKey = "\(name)|\(config.computeMode)"
         modelLock.lock()
-        if let cached = modelCache[name] {
+        if let cached = modelCache[cacheKey] {
             modelLock.unlock()
             return cached
         }
         modelLock.unlock()
 
-        let loaded = try makeModel(name: name)
+        let loaded = try makeModel(name: name, config: config)
         modelLock.lock()
-        modelCache[name] = loaded
+        modelCache[cacheKey] = loaded
         modelLock.unlock()
         return loaded
     }
 
-    private static func makeModel(name: String) throws -> LoadedModel {
+    private static func makeModel(
+        name: String,
+        config: CrackRecognitionConfig
+    ) throws -> LoadedModel {
         let configuration = MLModelConfiguration()
-        configuration.computeUnits = .cpuOnly
+        if config.computeMode == "cpu" {
+            configuration.computeUnits = .cpuOnly
+        } else {
+            if #available(iOS 16.0, *) {
+                configuration.computeUnits = .cpuAndNeuralEngine
+            } else {
+                configuration.computeUnits = .all
+            }
+        }
+        if #available(iOS 17.0, *) {
+            configuration.setValue(1, forKey: "experimentalMLE5EngineUsage")
+        }
+        print(
+            "[CrackCoreML] loading \(name) computeMode=\(config.computeMode) mle5Compat=1"
+        )
         let mlModel: MLModel
         if let url = Bundle.main.url(
             forResource: name,
@@ -318,7 +353,8 @@ enum CrackRecognitionEngine {
         } else {
             throw CrackRecognitionError.modelNotFound
         }
-        return LoadedModel(mlModel: mlModel)
+        let visionModel = try? VNCoreMLModel(for: mlModel)
+        return LoadedModel(mlModel: mlModel, visionModel: visionModel)
     }
 
     private static func runDetections(
@@ -389,7 +425,8 @@ enum CrackRecognitionEngine {
         )
         let (prediction, protos) = try predict(
             model: model,
-            cgImage: resized
+            cgImage: resized,
+            config: config
         )
         var detections = CrackYOLODecoder.decode(
             prediction: prediction,
@@ -434,6 +471,20 @@ enum CrackRecognitionEngine {
 
     private static func predict(
         model: LoadedModel,
+        cgImage: CGImage,
+        config: CrackRecognitionConfig
+    ) throws -> (prediction: MLMultiArray, protos: MLMultiArray) {
+        if config.inferenceBackend == "vision" {
+            return try predictWithVision(
+                model: model,
+                cgImage: cgImage
+            )
+        }
+        return try predictDirect(model: model, cgImage: cgImage)
+    }
+
+    private static func predictDirect(
+        model: LoadedModel,
         cgImage: CGImage
     ) throws -> (prediction: MLMultiArray, protos: MLMultiArray) {
         let pixelBuffer = try makePixelBuffer(from: cgImage)
@@ -445,13 +496,70 @@ enum CrackRecognitionEngine {
         let provider = try MLDictionaryFeatureProvider(
             dictionary: [inputName: inputValue]
         )
-        let options = MLPredictionOptions()
-        options.usesCPUOnly = true
-        let output = try model.mlModel.prediction(
-            from: provider,
-            options: options
+        print(
+            "[CrackCoreML] direct prediction start \(cgImage.width)x\(cgImage.height)"
         )
+        let started = CFAbsoluteTimeGetCurrent()
+        let output = try model.mlModel.prediction(from: provider)
+        print(
+            String(
+                format: "[CrackCoreML] direct prediction done %.3f s",
+                CFAbsoluteTimeGetCurrent() - started
+            )
+        )
+        return try extractOutputs(from: output)
+    }
 
+    private static func predictWithVision(
+        model: LoadedModel,
+        cgImage: CGImage
+    ) throws -> (prediction: MLMultiArray, protos: MLMultiArray) {
+        guard let visionModel = model.visionModel else {
+            throw CrackRecognitionError.visionModelUnavailable
+        }
+        let request = VNCoreMLRequest(model: visionModel)
+        request.imageCropAndScaleOption = .scaleFit
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        print(
+            "[CrackCoreML] vision prediction start \(cgImage.width)x\(cgImage.height)"
+        )
+        let started = CFAbsoluteTimeGetCurrent()
+        try handler.perform([request])
+        print(
+            String(
+                format: "[CrackCoreML] vision prediction done %.3f s",
+                CFAbsoluteTimeGetCurrent() - started
+            )
+        )
+        guard let observations = request.results
+                as? [VNCoreMLFeatureValueObservation] else {
+            throw CrackRecognitionError.noModelOutput
+        }
+        var prediction: MLMultiArray?
+        var protos: MLMultiArray?
+        for observation in observations {
+            guard let array = observation.featureValue.multiArrayValue else {
+                continue
+            }
+            if array.shape.count == 3,
+               array.shape[1].intValue > 36,
+               prediction == nil {
+                prediction = array
+            } else if array.shape.count == 4,
+                      array.shape[1].intValue == 32,
+                      protos == nil {
+                protos = array
+            }
+        }
+        if let prediction, let protos {
+            return (prediction, protos)
+        }
+        throw CrackRecognitionError.noModelOutput
+    }
+
+    private static func extractOutputs(
+        from output: MLFeatureProvider
+    ) throws -> (prediction: MLMultiArray, protos: MLMultiArray) {
         var prediction: MLMultiArray?
         var protos: MLMultiArray?
         for name in output.featureNames {

@@ -30,6 +30,24 @@ struct CrackRecognitionSettingsView: View {
                 }
             }
 
+            Section("CoreML 引擎") {
+                Picker("计算单元", selection: $config.computeMode) {
+                    Text("自动（CPU+神经网络）").tag("neural")
+                    Text("仅 CPU").tag("cpu")
+                }
+                .pickerStyle(.segmented)
+
+                Picker("推理通道", selection: $config.inferenceBackend) {
+                    Text("CoreML 直连").tag("direct")
+                    Text("Vision A/B").tag("vision")
+                }
+                .pickerStyle(.segmented)
+
+                Text("已启用 MLE5 兼容开关，iOS 17+ 生效")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("检测参数") {
                 sliderRow(
                     title: "检测置信度",
