@@ -2,12 +2,21 @@ import CoreGraphics
 import CoreVideo
 import CoreML
 import Foundation
+import simd
 import UIKit
 import Vision
 
+struct CrackSkeleton3DPoint {
+    let surfaceID: UUID
+    let pixel: CrackPoint
+    let world: SIMD3<Float>
+}
+
 struct CrackRecognitionOutput {
     let result: CrackRecognitionResult
-    let annotatedImage: UIImage
+    let annotatedImage: UIImage?
+    let arSkeleton: [CrackSkeleton3DPoint]
+    let timings: [String: Double]
 }
 
 struct CrackResolutionValidationResult: Identifiable {
@@ -65,9 +74,18 @@ enum CrackRecognitionEngine {
         pose: [Float],
         intrinsics: [Float],
         surfaces: [WallDefectSurface],
-        config: CrackRecognitionConfig
+        config: CrackRecognitionConfig,
+        progress: ((String, Double?) -> Void)? = nil
     ) throws -> CrackRecognitionOutput {
+        var timings: [String: Double] = [:]
+        let overallStart = CFAbsoluteTimeGetCurrent()
+        let modelStart = CFAbsoluteTimeGetCurrent()
+        progress?("正在加载模型", nil)
         let model = try loadModel(size: config.modelSize, config: config)
+        timings["模型加载"] = CFAbsoluteTimeGetCurrent() - modelStart
+
+        let prepareStart = CFAbsoluteTimeGetCurrent()
+        progress?("正在预处理照片", timings["模型加载"])
         let hairlineMaxSide = min(
             4096,
             max(config.tileSize * 2, 2048)
@@ -84,25 +102,45 @@ enum CrackRecognitionEngine {
         let height = cgImage.height
         let ratio = CGFloat(width) / max(image.size.width, 1)
         let scaledIntrinsics = scaleIntrinsics(intrinsics, ratio: ratio)
+        timings["预处理"] = CFAbsoluteTimeGetCurrent() - prepareStart
+
+        let inferenceStart = CFAbsoluteTimeGetCurrent()
+        progress?("正在 CoreML 推理", timings["预处理"])
         let detections = try runDetections(
             cgImage: cgImage,
             model: model,
-            config: config
+            config: config,
+            progress: { stage in
+                progress?(stage, CFAbsoluteTimeGetCurrent() - overallStart)
+            }
         )
-        let merged = mergedMask(
+        timings["CoreML识别"] = CFAbsoluteTimeGetCurrent() - inferenceStart
+
+        let sparseStart = CFAbsoluteTimeGetCurrent()
+        progress?("正在转换稀疏掩码", timings["CoreML识别"])
+        let sparse = sparseMaskPoints(
             detections: detections,
             width: width,
             height: height
         )
-        let skeleton = CrackSkeleton.analyze(
-            mask: merged,
+        timings["掩码转稀疏点"] = CFAbsoluteTimeGetCurrent() - sparseStart
+
+        let skeletonStart = CFAbsoluteTimeGetCurrent()
+        progress?("正在提取裂缝骨架", timings["掩码转稀疏点"])
+        let skeleton = CrackSkeleton.analyzeSparse(
+            points: sparse.points,
+            spacing: sparse.spacing,
             width: width,
             height: height,
             config: config
         )
-        let skeletonMask = skeleton.mask ?? merged
-        let measurements = surfaceMeasurements(
-            skeletonMask: skeletonMask,
+        timings["骨架化"] = CFAbsoluteTimeGetCurrent() - skeletonStart
+
+        let measureStart = CFAbsoluteTimeGetCurrent()
+        progress?("正在墙面投射并计算长度", timings["骨架化"])
+        let measurements = measureSparseSkeleton(
+            points: skeleton.skeletonPoints,
+            spacing: sparse.spacing,
             width: width,
             height: height,
             pose: pose,
@@ -110,6 +148,7 @@ enum CrackRecognitionEngine {
             surfaces: surfaces,
             config: config
         )
+        timings["墙面投射与长度"] = CFAbsoluteTimeGetCurrent() - measureStart
 
         let confidence = detections.map(\.score).max() ?? 0
         let totalMM: Double?
@@ -134,13 +173,14 @@ enum CrackRecognitionEngine {
             modelSize: config.modelSize,
             engine: config.engine
         )
-        let annotated = annotatedImage(
-            from: analysisImage,
-            mask: skeletonMask,
-            width: width,
-            height: height
+        timings["总计"] = CFAbsoluteTimeGetCurrent() - overallStart
+        progress?("识别完成", timings["总计"])
+        return CrackRecognitionOutput(
+            result: result,
+            annotatedImage: nil,
+            arSkeleton: measurements.arPoints,
+            timings: timings
         )
-        return CrackRecognitionOutput(result: result, annotatedImage: annotated)
     }
 
     static func checkModelLoad() -> String {
@@ -365,7 +405,8 @@ enum CrackRecognitionEngine {
     private static func runDetections(
         cgImage: CGImage,
         model: LoadedModel,
-        config: CrackRecognitionConfig
+        config: CrackRecognitionConfig,
+        progress: ((String) -> Void)? = nil
     ) throws -> [YOLOSegDetection] {
         let width = cgImage.width
         let height = cgImage.height
@@ -395,7 +436,8 @@ enum CrackRecognitionEngine {
                         inputSize: inputSize,
                         offset: CGPoint(x: x, y: y),
                         tileSize: CGSize(width: tileWidth, height: tileHeight),
-                        config: config
+                        config: config,
+                        progress: progress
                     )
                     all.append(contentsOf: decoded)
                 }
@@ -413,7 +455,8 @@ enum CrackRecognitionEngine {
             inputSize: inputSize,
             offset: .zero,
             tileSize: CGSize(width: width, height: height),
-            config: config
+            config: config,
+            progress: progress
         )
     }
 
@@ -702,6 +745,203 @@ enum CrackRecognitionEngine {
             }
         }
         return mask
+    }
+
+    private static func sparseMaskPoints(
+        detections: [YOLOSegDetection],
+        width: Int,
+        height: Int
+    ) -> (points: Set<CrackPoint>, spacing: Int) {
+        guard width > 0, height > 0 else {
+            return (points: Set<CrackPoint>(), spacing: 1)
+        }
+        var points = Set<CrackPoint>()
+        var spacing = 1
+        for detection in detections {
+            guard let values = detection.mask,
+                  detection.maskWidth > 0,
+                  detection.maskHeight > 0 else {
+                continue
+            }
+            let tile = detection.tileRect
+            let originX = Int(tile.minX.rounded())
+            let originY = Int(tile.minY.rounded())
+            let tileWidth = Int(tile.width.rounded())
+            let tileHeight = Int(tile.height.rounded())
+            guard tileWidth > 0, tileHeight > 0 else { continue }
+            spacing = max(
+                spacing,
+                max(
+                    1,
+                    Int(
+                        ceil(
+                            Double(tileWidth)
+                                / Double(detection.maskWidth)
+                        )
+                    )
+                )
+            )
+
+            for my in 0..<detection.maskHeight {
+                for mx in 0..<detection.maskWidth {
+                    guard values[my * detection.maskWidth + mx] > 0.5 else {
+                        continue
+                    }
+                    let localSpacing = max(
+                        1,
+                        Int(
+                            ceil(
+                                Double(tileWidth)
+                                    / Double(detection.maskWidth)
+                            )
+                        )
+                    )
+                    let x = min(originX + mx * localSpacing, width - 1)
+                    let y = min(originY + my * localSpacing, height - 1)
+                    guard x >= 0, y >= 0, x < width, y < height else {
+                        continue
+                    }
+                    points.insert(CrackPoint(x: x, y: y))
+                }
+            }
+        }
+        return (points: points, spacing: spacing)
+    }
+
+    private static func measureSparseSkeleton(
+        points: Set<CrackPoint>,
+        spacing: Int,
+        width: Int,
+        height: Int,
+        pose: [Float],
+        intrinsics: [Float],
+        surfaces: [WallDefectSurface],
+        config: CrackRecognitionConfig
+    ) -> (
+        summaries: [CrackSurfaceSummary],
+        components: [CrackComponentMeasurement],
+        totalLengthM: Double,
+        totalAreaM2: Double,
+        arPoints: [CrackSkeleton3DPoint]
+    ) {
+        guard !points.isEmpty, !surfaces.isEmpty else {
+            return ([], [], 0, 0, [])
+        }
+        let projections = WallDefectProjection.projectSparsePoints(
+            points: points,
+            pose: pose,
+            intrinsics: intrinsics,
+            surfaces: surfaces
+        )
+
+        var summaries: [CrackSurfaceSummary] = []
+        var components: [CrackComponentMeasurement] = []
+        var totalLength = 0.0
+        var totalArea = 0.0
+        var arPoints: [CrackSkeleton3DPoint] = []
+
+        let sorted = projections.sorted {
+            $0.value.count > $1.value.count
+        }
+        for (surfaceID, projected) in sorted {
+            guard let surface = surfaces.first(
+                where: { $0.id == surfaceID }
+            ) else {
+                continue
+            }
+            let skeletonSet = Set(projected.map(\.point))
+            let groups = CrackSkeleton.componentPointsSparse(
+                skeletonSet,
+                spacing: spacing
+            )
+            let uvByPoint = Dictionary(
+                projected.map { ($0.point, $0.uv) },
+                uniquingKeysWith: { first, _ in first }
+            )
+
+            var splitLength = 0.0
+            var longest = 0.0
+            for group in groups {
+                var uvByGroup: [CrackPoint: SIMD2<Double>] = [:]
+                for point in group {
+                    if let uv = uvByPoint[point] {
+                        uvByGroup[point] = uv
+                    }
+                }
+                let physical = CrackSkeleton.physicalGraphLength(
+                    group,
+                    uvByPoint: uvByGroup
+                )
+                let pixelLength = CrackSkeleton.pixelLength(of: group)
+                let lengthM = physical ?? 0
+                let mm: Double?
+                if let physical {
+                    mm = physical * 1000
+                } else if config.lengthUnit == "known",
+                          config.mmPerPixel > 0 {
+                    mm = pixelLength * config.mmPerPixel
+                } else {
+                    mm = nil
+                }
+                components.append(
+                    CrackComponentMeasurement(
+                        id: components.count + 1,
+                        pixelLength: pixelLength,
+                        mmLength: mm,
+                        lengthM: lengthM > 0 ? lengthM : nil
+                    )
+                )
+                splitLength += lengthM
+                longest = max(longest, lengthM)
+            }
+
+            summaries.append(
+                CrackSurfaceSummary(
+                    surfaceID: surface.id,
+                    label: surface.label,
+                    pixelArea: skeletonSet.count,
+                    areaM2: 0,
+                    totalLengthM: splitLength,
+                    longestLengthM: longest,
+                    componentCount: groups.count,
+                    uvPolygon: uvPolygonSparse(projected)
+                )
+            )
+            arPoints.append(
+                contentsOf: projected.map {
+                    CrackSkeleton3DPoint(
+                        surfaceID: surfaceID,
+                        pixel: $0.point,
+                        world: $0.world
+                    )
+                }
+            )
+            totalLength += splitLength
+            totalArea += 0
+        }
+        return (summaries, components, totalLength, totalArea, arPoints)
+    }
+
+    private static func uvPolygonSparse(
+        _ projected: [SparseSurfaceProjection]
+    ) -> [[Double]] {
+        guard !projected.isEmpty else { return [] }
+        var minU = Double.infinity
+        var maxU = -Double.infinity
+        var minV = Double.infinity
+        var maxV = -Double.infinity
+        for item in projected {
+            minU = min(minU, item.uv.x)
+            maxU = max(maxU, item.uv.x)
+            minV = min(minV, item.uv.y)
+            maxV = max(maxV, item.uv.y)
+        }
+        return [
+            [minU, minV],
+            [maxU, minV],
+            [maxU, maxV],
+            [minU, maxV]
+        ]
     }
 
     private static func surfaceMeasurements(

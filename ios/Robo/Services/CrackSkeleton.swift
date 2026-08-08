@@ -27,7 +27,306 @@ struct CrackAnalysis: Equatable {
     var longestMMLength: Double?
 }
 
+struct CrackSparseAnalysis {
+    var skeletonPoints: Set<CrackPoint> = []
+    var components: [CrackComponent] = []
+    var totalPixelLength: Double = 0
+    var longestPixelLength: Double = 0
+}
+
 enum CrackSkeleton {
+
+    static func analyzeSparse(
+        points: Set<CrackPoint>,
+        spacing: Int,
+        width: Int,
+        height: Int,
+        config: CrackRecognitionConfig
+    ) -> CrackSparseAnalysis {
+        let bounded = Set(
+            points.filter {
+                $0.x >= 0 && $0.y >= 0 && $0.x < width && $0.y < height
+            }
+        )
+        let minSparseArea = max(
+            4,
+            config.minMaskArea / max(1, spacing * spacing)
+        )
+        guard bounded.count >= minSparseArea else {
+            return CrackSparseAnalysis()
+        }
+
+        let skeleton = skeletonizeSparse(
+            bounded,
+            spacing: max(1, spacing),
+            width: width,
+            height: height
+        )
+        let groups = componentPointsSparse(
+            skeleton,
+            spacing: max(1, spacing)
+        )
+        let mmPerPixel = config.lengthUnit == "known"
+            ? config.mmPerPixel
+            : nil
+
+        if config.skeletonMode == "main" {
+            let pruned = pruneSpursSparse(
+                skeleton,
+                spacing: max(1, spacing),
+                width: width,
+                height: height,
+                minSpurLength: Double(config.minSpurLength)
+            )
+            let prunedGroups = componentPointsSparse(
+                pruned,
+                spacing: max(1, spacing)
+            )
+            var components = prunedGroups.enumerated().map { index, points in
+                CrackComponent(
+                    id: index + 1,
+                    pixelLength: graphLength(points, width: width),
+                    mmPerPixel: mmPerPixel
+                )
+            }
+            components = components
+                .filter {
+                    $0.pixelLength >= Double(config.minSkeletonLength)
+                }
+                .sorted { $0.pixelLength > $1.pixelLength }
+            if components.count > config.topCracks {
+                components = Array(components.prefix(config.topCracks))
+            }
+
+            let keptIDs = Set(components.map(\.id))
+            var display = Set<CrackPoint>()
+            for (index, points) in prunedGroups.enumerated()
+                where keptIDs.contains(index + 1) {
+                display.formUnion(points)
+            }
+            let totalPixel = components.reduce(0) { $0 + $1.pixelLength }
+            let longest = components.map(\.pixelLength).max() ?? 0
+            return CrackSparseAnalysis(
+                skeletonPoints: display,
+                components: components,
+                totalPixelLength: totalPixel,
+                longestPixelLength: longest
+            )
+        }
+
+        let components = groups.enumerated().map { index, points in
+            CrackComponent(
+                id: index + 1,
+                pixelLength: graphLength(points, width: width),
+                mmPerPixel: mmPerPixel
+            )
+        }
+        let totalPixel = components.reduce(0) { $0 + $1.pixelLength }
+        let longest = components.map(\.pixelLength).max() ?? 0
+        return CrackSparseAnalysis(
+            skeletonPoints: skeleton,
+            components: components,
+            totalPixelLength: totalPixel,
+            longestPixelLength: longest
+        )
+    }
+
+    static func componentPointsSparse(
+        _ input: Set<CrackPoint>,
+        spacing: Int = 1
+    ) -> [[CrackPoint]] {
+        guard !input.isEmpty else { return [] }
+        var visited = Set<CrackPoint>()
+        var groups: [[CrackPoint]] = []
+
+        for start in input where !visited.contains(start) {
+            var queue = [start]
+            visited.insert(start)
+            var points: [CrackPoint] = []
+            var queueIndex = 0
+            while queueIndex < queue.count {
+                let current = queue[queueIndex]
+                queueIndex += 1
+                points.append(current)
+                for dy in -spacing...spacing where dy % spacing == 0 {
+                    for dx in -spacing...spacing where dx % spacing == 0 {
+                        if dy == 0 && dx == 0 { continue }
+                        let neighbor = CrackPoint(
+                            x: current.x + dx,
+                            y: current.y + dy
+                        )
+                        if input.contains(neighbor),
+                           !visited.contains(neighbor) {
+                            visited.insert(neighbor)
+                            queue.append(neighbor)
+                        }
+                    }
+                }
+            }
+            groups.append(points)
+        }
+        return groups
+    }
+
+    private static func skeletonizeSparse(
+        _ input: Set<CrackPoint>,
+        spacing: Int,
+        width: Int,
+        height: Int
+    ) -> Set<CrackPoint> {
+        var current = input
+        var changed = true
+
+        while changed {
+            changed = false
+            var toRemove = Set<CrackPoint>()
+            for point in current {
+                guard point.x >= spacing, point.y >= spacing,
+                      point.x < width - spacing,
+                      point.y < height - spacing else {
+                    continue
+                }
+                let neighbors = sparseNeighbors(
+                    point,
+                    in: current,
+                    spacing: spacing
+                )
+                let b = neighbors.filter { $0 }.count
+                if b < 2 || b > 6 { continue }
+                if countTransitions(neighbors) != 1 { continue }
+                if neighbors[0] && neighbors[2] && neighbors[4] { continue }
+                if neighbors[2] && neighbors[4] && neighbors[6] { continue }
+                toRemove.insert(point)
+            }
+            if !toRemove.isEmpty {
+                current.subtract(toRemove)
+                changed = true
+            }
+        }
+        return current
+    }
+
+    private static func pruneSpursSparse(
+        _ input: Set<CrackPoint>,
+        spacing: Int,
+        width: Int,
+        height: Int,
+        minSpurLength: Double
+    ) -> Set<CrackPoint> {
+        var current = input
+        for _ in 0..<30 {
+            var removed = Set<CrackPoint>()
+            for point in current {
+                guard sparseNeighborCount(
+                    point,
+                    in: current,
+                    spacing: spacing
+                ) == 1 else {
+                    continue
+                }
+                let path = traceEndpointSparse(
+                    current,
+                    start: point,
+                    spacing: spacing,
+                    width: width,
+                    height: height,
+                    limit: minSpurLength
+                )
+                if !path.isEmpty {
+                    removed.formUnion(path)
+                }
+            }
+            if removed.isEmpty { break }
+            current.subtract(removed)
+        }
+        return current
+    }
+
+    private static func traceEndpointSparse(
+        _ input: Set<CrackPoint>,
+        start: CrackPoint,
+        spacing: Int,
+        width: Int,
+        height: Int,
+        limit: Double
+    ) -> [CrackPoint] {
+        var previous: CrackPoint?
+        var current = start
+        var path = [start]
+        var distance = 0.0
+
+        while true {
+            var neighbors: [CrackPoint] = []
+            for dy in -spacing...spacing where dy % spacing == 0 {
+                for dx in -spacing...spacing where dx % spacing == 0 {
+                    if dy == 0 && dx == 0 { continue }
+                    let point = CrackPoint(
+                        x: current.x + dx,
+                        y: current.y + dy
+                    )
+                    if point.x >= 0, point.x < width,
+                       point.y >= 0, point.y < height,
+                       input.contains(point),
+                       previous != point {
+                        neighbors.append(point)
+                    }
+                }
+            }
+            guard let next = neighbors.first else {
+                return path
+            }
+            distance += hypot(
+                Double(next.x - current.x),
+                Double(next.y - current.y)
+            )
+            if distance > limit {
+                return []
+            }
+            path.append(next)
+            let degree = sparseNeighborCount(
+                next,
+                in: input,
+                spacing: spacing
+            )
+            if degree == 1 {
+                return path
+            }
+            if degree != 2 {
+                return path.dropLast().map { $0 }
+            }
+            previous = current
+            current = next
+        }
+    }
+
+    private static func sparseNeighborCount(
+        _ point: CrackPoint,
+        in input: Set<CrackPoint>,
+        spacing: Int
+    ) -> Int {
+        sparseNeighbors(
+            point,
+            in: input,
+            spacing: spacing
+        ).filter { $0 }.count
+    }
+
+    private static func sparseNeighbors(
+        _ point: CrackPoint,
+        in input: Set<CrackPoint>,
+        spacing: Int
+    ) -> [Bool] {
+        [
+            input.contains(CrackPoint(x: point.x, y: point.y - spacing)),
+            input.contains(CrackPoint(x: point.x + spacing, y: point.y - spacing)),
+            input.contains(CrackPoint(x: point.x + spacing, y: point.y)),
+            input.contains(CrackPoint(x: point.x + spacing, y: point.y + spacing)),
+            input.contains(CrackPoint(x: point.x, y: point.y + spacing)),
+            input.contains(CrackPoint(x: point.x - spacing, y: point.y + spacing)),
+            input.contains(CrackPoint(x: point.x - spacing, y: point.y)),
+            input.contains(CrackPoint(x: point.x - spacing, y: point.y - spacing))
+        ]
+    }
 
     static func analyze(
         mask: [Bool],

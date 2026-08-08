@@ -7,7 +7,9 @@ import UIKit
 
 struct WallDefectPhotoRecognitionResult {
     let result: CrackRecognitionResult
-    let annotatedImage: UIImage
+    let annotatedImage: UIImage?
+    let arSkeleton: [CrackSkeleton3DPoint]
+    let timings: [String: Double]
 }
 
 struct WallDefectModelView: View {
@@ -16,6 +18,7 @@ struct WallDefectModelView: View {
     let arSession: ARSession
     let latestRecognition: WallDefectPhotoRecognitionResult?
     let isRecognizing: Bool
+    let progressMessage: String
     let onPhoto: ([WallDefectSurfaceAssociation], DefectCameraCapture) -> Void
     let onSave: () -> Void
     let onDiscard: () -> Void
@@ -30,19 +33,41 @@ struct WallDefectModelView: View {
         surfaces.first { $0.id == cameraSurfaceID }
     }
 
+    private var captureCenterRatio: CGFloat {
+        guard cameraViewSize.width > 0, cameraViewSize.height > 0 else {
+            return DefectCameraModel.squareCropCenterYRatio
+        }
+        let side = min(
+            cameraViewSize.width,
+            cameraViewSize.height
+        ) * DefectCameraModel.squareCropInset
+        let centerY = max(
+            side / 2 + 72,
+            cameraViewSize.height
+                * DefectCameraModel.squareCropCenterYRatio
+        )
+        return min(max(centerY / cameraViewSize.height, 0), 1)
+    }
+
     var body: some View {
         ZStack {
             WallDefectARView(
                 surfaces: surfaces,
                 arSession: arSession,
                 cameraModel: cameraModel,
-                cameraSurfaceID: $cameraSurfaceID
+                cameraSurfaceID: $cameraSurfaceID,
+                latestARSkeleton: latestRecognition?.arSkeleton ?? []
             )
             .ignoresSafeArea()
 
             GeometryReader { geometry in
                 let side = min(geometry.size.width, geometry.size.height)
                     * DefectCameraModel.squareCropInset
+                let centerY = max(
+                    side / 2 + 72,
+                    geometry.size.height
+                        * DefectCameraModel.squareCropCenterYRatio
+                )
                 ZStack {
                     Color.clear
                     RoundedRectangle(cornerRadius: 0)
@@ -57,6 +82,7 @@ struct WallDefectModelView: View {
                         .clipShape(Capsule())
                         .offset(y: -side / 2 - 18)
                 }
+                .position(x: geometry.size.width / 2, y: centerY)
                 .onAppear {
                     cameraViewSize = geometry.size
                 }
@@ -76,6 +102,7 @@ struct WallDefectModelView: View {
                     surfaces: surfaces,
                     yaw: cameraModel.yaw,
                     pitch: cameraModel.pitch,
+                    cameraTransform: cameraModel.cameraTransform,
                     selectedSurfaceID: cameraSurfaceID
                 )
                 .frame(height: 180)
@@ -155,7 +182,8 @@ struct WallDefectModelView: View {
                         viewSize: cameraViewSize == .zero
                             ? nil
                             : cameraViewSize,
-                        outputSide: CGFloat(config.captureResolution)
+                        outputSide: CGFloat(config.captureResolution),
+                        centerRatio: captureCenterRatio
                     ) else { return }
                     let associations = WallDefectProjection.associations(
                         pose: capture.pose,
@@ -212,13 +240,29 @@ struct WallDefectModelView: View {
             .padding(.vertical, 10)
             .background(.black.opacity(0.55))
             .clipShape(Capsule())
+            .overlay(alignment: .bottom) {
+                if !progressMessage.isEmpty {
+                    Text(progressMessage)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.75))
+                        .lineLimit(1)
+                        .padding(.top, 2)
+                }
+            }
         } else if let latestRecognition {
             HStack(spacing: 12) {
-                Image(uiImage: latestRecognition.annotatedImage)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 64, height: 64)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                if let annotatedImage = latestRecognition.annotatedImage {
+                    Image(uiImage: annotatedImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 64, height: 64)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                } else {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.title)
+                        .foregroundStyle(.yellow)
+                        .frame(width: 64, height: 64)
+                }
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(latestRecognition.result.detectedClass)
@@ -229,6 +273,19 @@ struct WallDefectModelView: View {
                     )
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.8))
+                    if !latestRecognition.timings.isEmpty {
+                        Text(
+                            latestRecognition.timings
+                                .map {
+                                    "\($0.key) \(String(format: "%.2fs", $0.value))"
+                                }
+                                .sorted()
+                                .joined(separator: " · ")
+                        )
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.65))
+                        .lineLimit(2)
+                    }
                 }
                 Spacer(minLength: 0)
             }
@@ -244,6 +301,7 @@ private struct WallDefectARView: UIViewRepresentable {
     let surfaces: [WallDefectSurface]
     let arSession: ARSession
     let cameraModel: DefectCameraModel
+    let latestARSkeleton: [CrackSkeleton3DPoint]
     @Binding var cameraSurfaceID: UUID?
 
     func makeUIView(context: Context) -> ARSCNView {
@@ -264,7 +322,12 @@ private struct WallDefectARView: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_ uiView: ARSCNView, context: Context) {}
+    func updateUIView(_ uiView: ARSCNView, context: Context) {
+        context.coordinator.updateARSkeleton(
+            latestARSkeleton,
+            in: uiView
+        )
+    }
 
     static func dismantleUIView(_ uiView: ARSCNView, coordinator: Coordinator) {
         uiView.session.pause()
@@ -282,6 +345,8 @@ private struct WallDefectARView: UIViewRepresentable {
         let surfaces: [WallDefectSurface]
         let cameraModel: DefectCameraModel
         var cameraSurfaceID: Binding<UUID?>
+        private let skeletonNodeName = "CrackARSkeleton"
+        private var lastSkeletonHash = Int.min
 
         init(
             surfaces: [WallDefectSurface],
@@ -332,6 +397,81 @@ private struct WallDefectARView: UIViewRepresentable {
             }
         }
 
+        func updateARSkeleton(
+            _ points: [CrackSkeleton3DPoint],
+            in view: ARSCNView
+        ) {
+            var hash = 0
+            for point in points {
+                hash = hash &* 31 &+ point.pixel.x
+                hash = hash &* 31 &+ point.pixel.y
+                hash = hash &* 31 &+ point.surfaceID.hashValue
+            }
+            guard hash != lastSkeletonHash else { return }
+            lastSkeletonHash = hash
+
+            view.scene.rootNode.childNode(
+                withName: skeletonNodeName,
+                recursively: true
+            )?.removeFromParentNode()
+            guard !points.isEmpty else { return }
+
+            var vertices: [SCNVector3] = []
+            var indices: [Int32] = []
+            var indexByPoint: [CrackPoint: Int] = [:]
+            for (index, point) in points.enumerated() {
+                vertices.append(
+                    SCNVector3(
+                        point.world.x,
+                        point.world.y,
+                        point.world.z
+                    )
+                )
+                indexByPoint[point.pixel] = index
+            }
+
+            let maxPixel = points
+                .map { max($0.pixel.x, $0.pixel.y) }
+                .max() ?? 1024
+            let neighborRadius = max(2, maxPixel / 160 + 2)
+            for (point, index) in indexByPoint {
+                for dy in -neighborRadius...neighborRadius {
+                    for dx in -neighborRadius...neighborRadius {
+                        if dx == 0 && dy == 0 { continue }
+                        let neighbor = CrackPoint(
+                            x: point.x + dx,
+                            y: point.y + dy
+                        )
+                        if let neighborIndex = indexByPoint[neighbor],
+                           index < neighborIndex,
+                           point.surfaceID == points[neighborIndex].surfaceID {
+                            indices.append(Int32(index))
+                            indices.append(Int32(neighborIndex))
+                        }
+                    }
+                }
+            }
+            guard !indices.isEmpty else { return }
+
+            let source = SCNGeometrySource(vertices: vertices)
+            let element = SCNGeometryElement(
+                indices: indices,
+                primitiveType: .line
+            )
+            let geometry = SCNGeometry(
+                sources: [source],
+                elements: [element]
+            )
+            geometry.firstMaterial?.diffuse.contents = UIColor.yellow
+            geometry.firstMaterial?.emission.contents = UIColor.yellow
+            geometry.firstMaterial?.isDoubleSided = true
+
+            let node = SCNNode(geometry: geometry)
+            node.name = skeletonNodeName
+            node.renderingOrder = 100
+            view.scene.rootNode.addChildNode(node)
+        }
+
         private func flatten(matrix: simd_float4x4) -> [Float] {
             [
                 matrix.columns.0.x, matrix.columns.0.y, matrix.columns.0.z, matrix.columns.0.w,
@@ -356,6 +496,7 @@ private struct RoomMiniMapView: UIViewRepresentable {
     let surfaces: [WallDefectSurface]
     let yaw: Float
     let pitch: Float
+    let cameraTransform: simd_float4x4?
     let selectedSurfaceID: UUID?
 
     func makeUIView(context: Context) -> SCNView {
@@ -402,11 +543,42 @@ private struct RoomMiniMapView: UIViewRepresentable {
     private func update(camera: SCNNode) {
         let center = roomCenter
         let radius = max(roomRadius, 0.5)
+        let distance = radius * 3.4
+
+        if let transform = cameraTransform {
+            let forward = SCNVector3(
+                transform.columns.2.x,
+                transform.columns.2.y,
+                transform.columns.2.z
+            )
+            let up = SCNVector3(
+                transform.columns.1.x,
+                transform.columns.1.y,
+                transform.columns.1.z
+            )
+            let dot = forward.x * up.x
+                + forward.y * up.y
+                + forward.z * up.z
+            let safeUp = abs(dot) < 0.95
+                ? up
+                : SCNVector3(0, 1, 0)
+            camera.position = SCNVector3(
+                center.x + forward.x * distance,
+                center.y + forward.y * distance,
+                center.z + forward.z * distance
+            )
+            camera.look(
+                at: SCNVector3(center.x, center.y, center.z),
+                up: safeUp,
+                localFront: SCNVector3(0, 0, -1)
+            )
+            return
+        }
+
         let elevation = min(
             max(Float.pi / 4 + pitch * 0.6, 0.12),
             1.35
         )
-        let distance = radius * 3.4
         let horizontal = distance * cos(elevation)
 
         camera.position = SCNVector3(

@@ -149,6 +149,82 @@ enum WallDefectProjection {
         .sorted { $0.pixelCount > $1.pixelCount }
     }
 
+    static func projectSparsePoints(
+        points: Set<CrackPoint>,
+        pose: [Float],
+        intrinsics: [Float],
+        surfaces: [WallDefectSurface]
+    ) -> [UUID: [SparseSurfaceProjection]] {
+        guard !points.isEmpty, !surfaces.isEmpty else {
+            return [UUID: [SparseSurfaceProjection]]()
+        }
+        let camera = Camera(pose: pose, intrinsics: intrinsics)
+        guard camera.isValid else {
+            return [UUID: [SparseSurfaceProjection]]()
+        }
+
+        var result: [UUID: [SparseSurfaceProjection]] = [:]
+        for point in points {
+            let pixel = CGPoint(x: point.x, y: point.y)
+            guard let surfaceID = nearestSurface(
+                at: pixel,
+                camera: camera,
+                surfaces: surfaces
+            ), let surface = surfaces.first(where: { $0.id == surfaceID }),
+                let uv = uvCoordinate(
+                    at: pixel,
+                    camera: camera,
+                    surface: surface
+                ), let world = worldPoint(uv: uv, surface: surface) else {
+                continue
+            }
+            result[surfaceID, default: []].append(
+                SparseSurfaceProjection(
+                    point: point,
+                    uv: uv,
+                    world: world
+                )
+            )
+        }
+        return result
+    }
+
+    static func worldPoint(
+        uv: SIMD2<Double>,
+        surface: WallDefectSurface
+    ) -> SIMD3<Float>? {
+        guard surface.origin.count == 3,
+              surface.uAxis.count == 3,
+              surface.vAxis.count == 3,
+              surface.width > 0,
+              surface.height > 0 else {
+            return nil
+        }
+        let origin = SIMD3<Double>(
+            surface.origin[0],
+            surface.origin[1],
+            surface.origin[2]
+        )
+        let uAxis = SIMD3<Double>(
+            surface.uAxis[0],
+            surface.uAxis[1],
+            surface.uAxis[2]
+        )
+        let vAxis = SIMD3<Double>(
+            surface.vAxis[0],
+            surface.vAxis[1],
+            surface.vAxis[2]
+        )
+        let point = origin
+            + uAxis * (uv.x / surface.width)
+            + vAxis * (uv.y / surface.height)
+        return SIMD3<Float>(
+            Float(point.x),
+            Float(point.y),
+            Float(point.z)
+        )
+    }
+
     private static func uvCoordinate(
         at pixel: CGPoint,
         camera: Camera,
@@ -296,4 +372,10 @@ struct SurfaceMaskSplit {
     let mask: [Bool]
     let uvByIndex: [Int: SIMD2<Double>]
     let pixelCount: Int
+}
+
+struct SparseSurfaceProjection {
+    let point: CrackPoint
+    let uv: SIMD2<Double>
+    let world: SIMD3<Float>
 }

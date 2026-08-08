@@ -23,6 +23,7 @@ struct WallDefectScanView: View {
     @State private var savedPath: String?
     @State private var latestRecognition: WallDefectPhotoRecognitionResult?
     @State private var isPhotoAnalyzing = false
+    @State private var recognitionProgress = ""
 
     var body: some View {
         NavigationStack {
@@ -47,6 +48,7 @@ struct WallDefectScanView: View {
                                 arSession: defectARSession,
                                 latestRecognition: latestRecognition,
                                 isRecognizing: isPhotoAnalyzing,
+                                progressMessage: recognitionProgress,
                                 onPhoto: { associations, capture in
                                     handlePhoto(associations: associations, capture: capture)
                                 },
@@ -238,6 +240,7 @@ struct WallDefectScanView: View {
         savedPath = nil
         latestRecognition = nil
         isPhotoAnalyzing = false
+        recognitionProgress = ""
         phase = .scanning
     }
 
@@ -248,6 +251,7 @@ struct WallDefectScanView: View {
         guard let primary = associations.first else { return }
         isPhotoAnalyzing = true
         latestRecognition = nil
+        recognitionProgress = "正在保存照片"
         let photoID = UUID()
         do {
             let stored = try WallDefectStore.savePhoto(
@@ -275,7 +279,6 @@ struct WallDefectScanView: View {
 
             let config = CrackRecognitionSettings.load()
             let capturedSurfaces = surfaces
-            let capturedScanID = scanID
             let capturedImage = capture.image
             let capturedPose = capture.pose
             let capturedIntrinsics = capture.intrinsics
@@ -286,12 +289,12 @@ struct WallDefectScanView: View {
                         pose: capturedPose,
                         intrinsics: capturedIntrinsics,
                         surfaces: capturedSurfaces,
-                        config: config
-                    )
-                    let annotatedFileName = try WallDefectStore.saveAnnotatedPhoto(
-                        documentID: capturedScanID,
-                        photoID: photoID,
-                        image: output.annotatedImage
+                        config: config,
+                        progress: { message, _ in
+                            DispatchQueue.main.async {
+                                self.recognitionProgress = message
+                            }
+                        }
                     )
                     DispatchQueue.main.async {
                         guard let index = self.photos.firstIndex(
@@ -300,16 +303,19 @@ struct WallDefectScanView: View {
                             return
                         }
                         self.photos[index].crackResult = output.result
-                        self.photos[index].annotatedFileName = annotatedFileName
+                        self.photos[index].annotatedFileName = nil
                         self.photos[index].detectedClass = output.result.detectedClass
                         self.photos[index].note = output.result.isEmpty
                             ? "未识别到裂缝"
                             : "裂缝 \(output.result.components.count) 条 · 总长 \(String(format: "%.3f m", output.result.totalLengthM))"
                         self.latestRecognition = WallDefectPhotoRecognitionResult(
                             result: output.result,
-                            annotatedImage: output.annotatedImage
+                            annotatedImage: output.annotatedImage,
+                            arSkeleton: output.arSkeleton,
+                            timings: output.timings
                         )
                         self.isPhotoAnalyzing = false
+                        self.recognitionProgress = ""
                     }
                 } catch {
                     DispatchQueue.main.async {
@@ -321,11 +327,13 @@ struct WallDefectScanView: View {
                         self.photos[index].note = "识别失败：\(error.localizedDescription)"
                         self.latestRecognition = nil
                         self.isPhotoAnalyzing = false
+                        self.recognitionProgress = ""
                     }
                 }
             }
         } catch {
             isPhotoAnalyzing = false
+            recognitionProgress = ""
             errorMessage = error.localizedDescription
         }
     }

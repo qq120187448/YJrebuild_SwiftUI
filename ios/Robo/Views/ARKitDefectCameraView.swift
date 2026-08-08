@@ -17,12 +17,14 @@ struct DefectCameraCapture {
 
 @MainActor
 final class DefectCameraModel: ObservableObject {
-    static let squareCropInset: CGFloat = 0.92
+    static let squareCropInset: CGFloat = 0.98
+    static let squareCropCenterYRatio: CGFloat = 0.36
 
     @Published var latestFrame: ARFrame?
     @Published var lastError: String?
     @Published var yaw: Float = 0
     @Published var pitch: Float = 0
+    @Published var cameraTransform: simd_float4x4?
 
     private let ciContext = CIContext()
 
@@ -31,6 +33,7 @@ final class DefectCameraModel: ObservableObject {
         let euler = frame.camera.eulerAngles
         yaw = euler.y
         pitch = euler.x
+        cameraTransform = frame.camera.transform
     }
 
     func poseArray() -> [Float]? {
@@ -59,7 +62,8 @@ final class DefectCameraModel: ObservableObject {
 
     func capture(
         viewSize: CGSize? = nil,
-        outputSide: CGFloat = 1024
+        outputSide: CGFloat = 1024,
+        centerRatio: CGFloat = Self.squareCropCenterYRatio
     ) -> DefectCameraCapture? {
         guard let frame = latestFrame else {
             lastError = "尚未获取 ARKit 画面"
@@ -71,7 +75,8 @@ final class DefectCameraModel: ObservableObject {
         }
         let cropRect = squareCropRect(
             imageSize: fullImage.size,
-            viewSize: viewSize
+            viewSize: viewSize,
+            centerRatio: centerRatio
         )
         guard cropRect.width > 4, cropRect.height > 4,
               let cgImage = fullImage.cgImage,
@@ -119,7 +124,8 @@ final class DefectCameraModel: ObservableObject {
 
     private func squareCropRect(
         imageSize: CGSize,
-        viewSize: CGSize?
+        viewSize: CGSize?,
+        centerRatio: CGFloat
     ) -> CGRect {
         guard imageSize.width > 0, imageSize.height > 0 else {
             return .zero
@@ -135,9 +141,16 @@ final class DefectCameraModel: ObservableObject {
                 viewSide / scale,
                 min(imageSize.width, imageSize.height)
             )
+            let centerX = imageSize.width / 2
+            let offsetY = (viewSize.height - imageSize.height * scale) / 2
+            var centerY = (viewSize.height * centerRatio - offsetY) / scale
+            centerY = min(
+                max(centerY, cropSide / 2),
+                imageSize.height - cropSide / 2
+            )
             return CGRect(
-                x: (imageSize.width - cropSide) / 2,
-                y: (imageSize.height - cropSide) / 2,
+                x: centerX - cropSide / 2,
+                y: centerY - cropSide / 2,
                 width: cropSide,
                 height: cropSide
             )
