@@ -18,7 +18,7 @@ struct DefectCameraCapture {
 @MainActor
 final class DefectCameraModel: ObservableObject {
     static let squareCropInset: CGFloat = 0.98
-    static let squareCropCenterYRatio: CGFloat = 0.42
+    static let squareCropCenterYRatio: CGFloat = 0.34
 
     private(set) var latestFrame: ARFrame?
     @Published var lastError: String?

@@ -177,7 +177,7 @@ enum WallDefectGeometry {
             transform.columns.1.y,
             transform.columns.1.z
         ))
-        let normalDir = simd_cross(uDir, vDir)
+        let normalDir = SIMD3<Float>(0, 1, 0)
         let width = Double(dimensions.x)
         let depth = Double(dimensions.y)
 
@@ -220,7 +220,7 @@ enum WallDefectGeometry {
             floor.transform.columns.1.y,
             floor.transform.columns.1.z
         ))
-        let up = simd_cross(uDir, vDir)
+        let up = SIMD3<Float>(0, 1, 0)
         let width = Double(floor.dimensions.x)
         let depth = Double(floor.dimensions.y)
         let elevated = center + up * Float(ceilingHeight)

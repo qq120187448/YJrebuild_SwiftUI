@@ -16,6 +16,7 @@ struct WallDefectModelView: View {
     let room: CapturedRoom
     let surfaces: [WallDefectSurface]
     let arSession: ARSession
+    let roomCaptureView: RoomCaptureView?
     let latestRecognition: WallDefectPhotoRecognitionResult?
     let isRecognizing: Bool
     let progressMessage: String
@@ -25,7 +26,6 @@ struct WallDefectModelView: View {
 
     @StateObject private var cameraModel = DefectCameraModel()
     @State private var cameraSurfaceID: UUID?
-    @State private var photoCount = 0
     @State private var showSaveConfirm = false
     @State private var cameraViewSize = CGSize.zero
 
@@ -42,7 +42,7 @@ struct WallDefectModelView: View {
             cameraViewSize.height
         ) * DefectCameraModel.squareCropInset
         let centerY = max(
-            side / 2 + 72,
+            side / 2 + 48,
             cameraViewSize.height
                 * DefectCameraModel.squareCropCenterYRatio
         )
@@ -64,7 +64,7 @@ struct WallDefectModelView: View {
                 let side = min(geometry.size.width, geometry.size.height)
                     * DefectCameraModel.squareCropInset
                 let centerY = max(
-                    side / 2 + 72,
+                    side / 2 + 48,
                     geometry.size.height
                         * DefectCameraModel.squareCropCenterYRatio
                 )
@@ -73,14 +73,6 @@ struct WallDefectModelView: View {
                     RoundedRectangle(cornerRadius: 0)
                         .stroke(.yellow, lineWidth: 2)
                         .frame(width: side, height: side)
-                    Text("将目标放入方框")
-                        .font(.caption.bold())
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(.black.opacity(0.5))
-                        .clipShape(Capsule())
-                        .offset(y: -side / 2 - 18)
                 }
                 .position(x: geometry.size.width / 2, y: centerY)
                 .onAppear {
@@ -94,15 +86,26 @@ struct WallDefectModelView: View {
             .allowsHitTesting(false)
 
             VStack(spacing: 0) {
-                topBar
                 Spacer(minLength: 0)
                 HStack(alignment: .top, spacing: 8) {
-                    RoomMiniMapView(
-                        room: room,
-                        surfaces: surfaces
-                    )
-                    .frame(height: 150)
-                    .frame(maxWidth: .infinity)
+                    if let roomCaptureView {
+                        RoomPlanModelCarrierView(
+                            roomCaptureView: roomCaptureView
+                        )
+                        .frame(height: 150)
+                        .frame(maxWidth: .infinity)
+                        .transition(
+                            .move(edge: .bottom)
+                                .combined(with: .opacity)
+                        )
+                    } else {
+                        RoomMiniMapView(
+                            room: room,
+                            surfaces: surfaces
+                        )
+                        .frame(height: 150)
+                        .frame(maxWidth: .infinity)
+                    }
 
                     recognitionSummaryPanel
                         .frame(maxWidth: .infinity)
@@ -122,46 +125,6 @@ struct WallDefectModelView: View {
         } message: {
             Text("照片会与墙体 UV 坐标一起归档，后续用于缺陷工程量计算。")
         }
-    }
-
-    private var topBar: some View {
-        HStack(spacing: 12) {
-            Image(
-                systemName: cameraSurface == nil
-                    ? "camera.viewfinder"
-                    : "checkmark.circle.fill"
-            )
-            .font(.title3)
-            .foregroundStyle(cameraSurface == nil ? .white : .green)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(cameraSurface?.label ?? "对准墙面或地面")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.white)
-                if let cameraSurface {
-                    Text(cameraSurface.uvDescription)
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.75))
-                } else {
-                    Text("自动根据相机方向判断贴图位置")
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.65))
-                }
-            }
-
-            Spacer()
-
-            Text("已拍 \(photoCount) 张")
-                .font(.subheadline.bold().monospacedDigit())
-                .foregroundStyle(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(.black.opacity(0.45))
-                .clipShape(Capsule())
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(.black.opacity(0.55))
     }
 
     private var bottomBar: some View {
@@ -216,11 +179,6 @@ struct WallDefectModelView: View {
                         imageSize: capture.image.size,
                         surfaces: surfaces
                     )
-                    guard !associations.isEmpty else {
-                        cameraModel.lastError = "未识别到目标表面，请对准墙面/地面/天面"
-                        return
-                    }
-                    photoCount += 1
                     onPhoto(associations, capture)
                 } label: {
                     ZStack {
@@ -590,6 +548,35 @@ private struct RoomMiniMapView: UIViewRepresentable {
         }
         return maxDistance
     }
+}
+
+private struct RoomPlanModelCarrierView: UIViewRepresentable {
+    let roomCaptureView: RoomCaptureView
+
+    func makeUIView(context: Context) -> UIView {
+        let container = UIView()
+        container.backgroundColor = .clear
+        container.clipsToBounds = true
+        roomCaptureView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(roomCaptureView)
+        NSLayoutConstraint.activate([
+            roomCaptureView.leadingAnchor.constraint(
+                equalTo: container.leadingAnchor
+            ),
+            roomCaptureView.trailingAnchor.constraint(
+                equalTo: container.trailingAnchor
+            ),
+            roomCaptureView.topAnchor.constraint(
+                equalTo: container.topAnchor
+            ),
+            roomCaptureView.bottomAnchor.constraint(
+                equalTo: container.bottomAnchor
+            )
+        ])
+        return container
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {}
 }
 
 private func surfaceTransform(_ surface: WallDefectSurface) -> simd_float4x4 {

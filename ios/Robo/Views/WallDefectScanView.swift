@@ -18,6 +18,7 @@ struct WallDefectScanView: View {
     @State private var surfaces: [WallDefectSurface] = []
     @State private var photos: [WallDefectPhoto] = []
     @State private var defectARSession: ARSession?
+    @State private var roomCaptureView: RoomCaptureView?
     @State private var stopRequested = false
     @State private var errorMessage: String?
     @State private var savedPath: String?
@@ -46,6 +47,7 @@ struct WallDefectScanView: View {
                                 room: capturedRoom,
                                 surfaces: surfaces,
                                 arSession: defectARSession,
+                                roomCaptureView: roomCaptureView,
                                 latestRecognition: latestRecognition,
                                 isRecognizing: isPhotoAnalyzing,
                                 progressMessage: recognitionProgress,
@@ -201,15 +203,20 @@ struct WallDefectScanView: View {
             RoomCaptureViewWrapper(
                 stopRequested: $stopRequested,
                 onCaptureComplete: { room in
-                    capturedRoom = room
-                    surfaces = WallDefectGeometry.surfaces(from: room)
-                    phase = .model
+                    withAnimation(.easeInOut(duration: 0.45)) {
+                        capturedRoom = room
+                        surfaces = WallDefectGeometry.surfaces(from: room)
+                        phase = .model
+                    }
                 },
                 onCaptureError: { error in
                     errorMessage = error.localizedDescription
                 },
                 onARSessionReady: { session in
                     defectARSession = session
+                },
+                onViewReady: { view in
+                    roomCaptureView = view
                 },
                 keepARSessionAlive: true
             )
@@ -236,6 +243,7 @@ struct WallDefectScanView: View {
         surfaces = []
         photos = []
         defectARSession = nil
+        roomCaptureView = nil
         errorMessage = nil
         savedPath = nil
         latestRecognition = nil
@@ -248,7 +256,11 @@ struct WallDefectScanView: View {
         associations: [WallDefectSurfaceAssociation],
         capture: DefectCameraCapture
     ) {
-        guard let primary = associations.first else { return }
+        let primary = associations.first
+            ?? WallDefectSurfaceAssociation(
+                surfaceID: surfaces.first?.id ?? UUID(),
+                coverageRatio: 0
+            )
         isPhotoAnalyzing = true
         latestRecognition = nil
         recognitionProgress = "正在保存照片"

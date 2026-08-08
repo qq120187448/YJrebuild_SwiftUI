@@ -15,6 +15,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
     var onPendingUpdate: ([String]) -> Void = { _ in }
     var initialWorldMap: ARWorldMap? = nil
     var onARSessionReady: ((ARSession) -> Void)? = { _ in }
+    var onViewReady: ((RoomCaptureView) -> Void)? = { _ in }
     var keepARSessionAlive = false
 
     func makeUIView(context: Context) -> RoomCaptureView {
@@ -23,6 +24,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
         captureView.captureSession.delegate = context.coordinator
         captureView.delegate = context.coordinator
         captureView.captureSession.run(configuration: .init())
+        onViewReady?(captureView)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak arSession] in
             guard let arSession else { return }
