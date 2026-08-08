@@ -22,11 +22,13 @@ final class DefectCameraModel: ObservableObject {
 
     private(set) var latestFrame: ARFrame?
     @Published var lastError: String?
+    @Published var cameraTransform: simd_float4x4?
 
     private let ciContext = CIContext()
 
     func update(frame: ARFrame) {
         latestFrame = frame
+        cameraTransform = frame.camera.transform
     }
 
     func poseArray() -> [Float]? {

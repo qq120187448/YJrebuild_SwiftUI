@@ -16,7 +16,6 @@ struct WallDefectModelView: View {
     let room: CapturedRoom
     let surfaces: [WallDefectSurface]
     let arSession: ARSession
-    let roomCaptureView: RoomCaptureView?
     let latestRecognition: WallDefectPhotoRecognitionResult?
     let isRecognizing: Bool
     let progressMessage: String
@@ -88,24 +87,17 @@ struct WallDefectModelView: View {
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
                 HStack(alignment: .top, spacing: 8) {
-                    if let roomCaptureView {
-                        RoomPlanModelCarrierView(
-                            roomCaptureView: roomCaptureView
-                        )
-                        .frame(height: 150)
-                        .frame(maxWidth: .infinity)
-                        .transition(
-                            .move(edge: .bottom)
-                                .combined(with: .opacity)
-                        )
-                    } else {
-                        RoomMiniMapView(
-                            room: room,
-                            surfaces: surfaces
-                        )
-                        .frame(height: 150)
-                        .frame(maxWidth: .infinity)
-                    }
+                    RoomMiniMapView(
+                        room: room,
+                        surfaces: surfaces,
+                        cameraTransform: cameraModel.cameraTransform
+                    )
+                    .frame(height: 150)
+                    .frame(maxWidth: .infinity)
+                    .transition(
+                        .move(edge: .bottom)
+                            .combined(with: .opacity)
+                    )
 
                     recognitionSummaryPanel
                         .frame(maxWidth: .infinity)
@@ -458,6 +450,7 @@ private struct WallDefectARView: UIViewRepresentable {
 private struct RoomMiniMapView: UIViewRepresentable {
     let room: CapturedRoom
     let surfaces: [WallDefectSurface]
+    let cameraTransform: simd_float4x4?
 
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView()
@@ -504,6 +497,37 @@ private struct RoomMiniMapView: UIViewRepresentable {
         let center = roomCenter
         let radius = max(roomRadius, 0.5)
         let distance = radius * 2.8
+
+        if let transform = cameraTransform {
+            let forward = SCNVector3(
+                transform.columns.2.x,
+                transform.columns.2.y,
+                transform.columns.2.z
+            )
+            let up = SCNVector3(
+                transform.columns.1.x,
+                transform.columns.1.y,
+                transform.columns.1.z
+            )
+            let dot = forward.x * up.x
+                + forward.y * up.y
+                + forward.z * up.z
+            let safeUp = abs(dot) < 0.95
+                ? up
+                : SCNVector3(0, 1, 0)
+            camera.position = SCNVector3(
+                center.x - forward.x * distance,
+                center.y - forward.y * distance,
+                center.z - forward.z * distance
+            )
+            camera.look(
+                at: SCNVector3(center.x, center.y, center.z),
+                up: safeUp,
+                localFront: SCNVector3(0, 0, -1)
+            )
+            return
+        }
+
         let elevation = Float.pi / 4.2
         let horizontal = distance * cos(elevation)
 
@@ -548,35 +572,6 @@ private struct RoomMiniMapView: UIViewRepresentable {
         }
         return maxDistance
     }
-}
-
-private struct RoomPlanModelCarrierView: UIViewRepresentable {
-    let roomCaptureView: RoomCaptureView
-
-    func makeUIView(context: Context) -> UIView {
-        let container = UIView()
-        container.backgroundColor = .clear
-        container.clipsToBounds = true
-        roomCaptureView.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(roomCaptureView)
-        NSLayoutConstraint.activate([
-            roomCaptureView.leadingAnchor.constraint(
-                equalTo: container.leadingAnchor
-            ),
-            roomCaptureView.trailingAnchor.constraint(
-                equalTo: container.trailingAnchor
-            ),
-            roomCaptureView.topAnchor.constraint(
-                equalTo: container.topAnchor
-            ),
-            roomCaptureView.bottomAnchor.constraint(
-                equalTo: container.bottomAnchor
-            )
-        ])
-        return container
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {}
 }
 
 private func surfaceTransform(_ surface: WallDefectSurface) -> simd_float4x4 {
