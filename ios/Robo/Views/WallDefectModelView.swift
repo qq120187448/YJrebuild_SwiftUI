@@ -731,6 +731,10 @@ private struct RoomMiniMapView: UIViewRepresentable {
     let cameraSurfaceID: UUID?
     let settings: WallDefectModelDebugSettings
 
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView()
         view.backgroundColor = .clear
@@ -755,7 +759,14 @@ private struct RoomMiniMapView: UIViewRepresentable {
         guard let camera = uiView.pointOfView else { return }
         updateModelTransform(in: uiView)
         update(camera: camera)
-        updateHighlights(in: uiView)
+        if context.coordinator.lastHighlightedID != cameraSurfaceID {
+            updateHighlights(in: uiView)
+            context.coordinator.lastHighlightedID = cameraSurfaceID
+        }
+    }
+
+    final class Coordinator {
+        var lastHighlightedID: UUID?
     }
 
     private func loadScene() -> SCNScene {
