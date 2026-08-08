@@ -885,7 +885,8 @@ private struct RoomMiniMapView: UIViewRepresentable {
     }
 
     private func updateModelTransform(in view: SCNView) {
-        view.scene.rootNode.childNode(
+        guard let scene = view.scene else { return }
+        scene.rootNode.childNode(
             withName: "DebugModelRoot",
             recursively: false
         )?.simdTransform = debugModelTransform()
