@@ -95,18 +95,19 @@ struct WallDefectModelView: View {
 
             VStack(spacing: 0) {
                 topBar
-                Spacer()
-                recognitionResultCard
-                RoomMiniMapView(
-                    room: room,
-                    surfaces: surfaces,
-                    yaw: cameraModel.yaw,
-                    pitch: cameraModel.pitch,
-                    cameraTransform: cameraModel.cameraTransform,
-                    selectedSurfaceID: cameraSurfaceID
-                )
-                .frame(height: 180)
-                .padding(.horizontal, 10)
+                Spacer(minLength: 0)
+                HStack(alignment: .top, spacing: 8) {
+                    RoomMiniMapView(
+                        room: room,
+                        surfaces: surfaces
+                    )
+                    .frame(height: 150)
+                    .frame(maxWidth: .infinity)
+
+                    recognitionSummaryPanel
+                        .frame(maxWidth: .infinity)
+                }
+                .padding(.horizontal, 8)
                 bottomBar
             }
         }
@@ -184,7 +185,22 @@ struct WallDefectModelView: View {
                     .foregroundStyle(.orange)
             }
 
-            HStack(spacing: 14) {
+            ZStack {
+                HStack {
+                    Button {
+                        showSaveConfirm = true
+                    } label: {
+                        Label("保存", systemImage: "square.and.arrow.down")
+                            .font(.subheadline.bold())
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.teal)
+                            .foregroundStyle(.white)
+                            .clipShape(Capsule())
+                    }
+                    Spacer()
+                }
+
                 Button {
                     let config = CrackRecognitionSettings.load()
                     guard let capture = cameraModel.capture(
@@ -210,26 +226,14 @@ struct WallDefectModelView: View {
                     ZStack {
                         Circle()
                             .stroke(.white, lineWidth: 4)
-                            .frame(width: 68, height: 68)
+                            .frame(width: 72, height: 72)
                         Circle()
                             .fill(.white)
-                            .frame(width: 52, height: 52)
+                            .frame(width: 56, height: 56)
                     }
                 }
                 .disabled(isRecognizing)
                 .opacity(isRecognizing ? 0.45 : 1)
-
-                Button {
-                    showSaveConfirm = true
-                } label: {
-                    Label("保存扫描包", systemImage: "square.and.arrow.down")
-                        .font(.headline)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 14)
-                        .background(Color.teal)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
             }
         }
         .padding(14)
@@ -240,72 +244,61 @@ struct WallDefectModelView: View {
     }
 
     @ViewBuilder
-    private var recognitionResultCard: some View {
-        if isRecognizing {
-            HStack(spacing: 12) {
-                ProgressView()
-                Text("照片识别中...")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.white)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(.black.opacity(0.55))
-            .clipShape(Capsule())
-            .overlay(alignment: .bottom) {
+    private var recognitionSummaryPanel: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("识别简报")
+                .font(.caption.bold())
+                .foregroundStyle(.white)
+
+            if isRecognizing {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("识别中")
+                }
                 if !progressMessage.isEmpty {
                     Text(progressMessage)
                         .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.75))
-                        .lineLimit(1)
-                        .padding(.top, 2)
-                }
-            }
-        } else if let latestRecognition {
-            HStack(spacing: 12) {
-                if let annotatedImage = latestRecognition.annotatedImage {
-                    Image(uiImage: annotatedImage)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: 64, height: 64)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                } else {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.title)
-                        .foregroundStyle(.yellow)
-                        .frame(width: 64, height: 64)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(latestRecognition.result.detectedClass)
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                    Text(
-                        "裂缝 \(latestRecognition.result.components.count) 条 · 总长 \(String(format: "%.3f m", latestRecognition.result.totalLengthM))"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.8))
-                    if !latestRecognition.timings.isEmpty {
-                        Text(
-                            latestRecognition.timings
-                                .map {
-                                    "\($0.key) \(String(format: "%.2fs", $0.value))"
-                                }
-                                .sorted()
-                                .joined(separator: " · ")
-                        )
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.65))
+                        .foregroundStyle(.white.opacity(0.7))
                         .lineLimit(2)
-                    }
                 }
-                Spacer(minLength: 0)
+            } else if let latestRecognition {
+                let result = latestRecognition.result
+                let longest = result.components
+                    .map { $0.lengthM ?? 0 }
+                    .max() ?? 0
+                LabeledContent("裂缝", value: "\(result.components.count) 条")
+                LabeledContent(
+                    "总长",
+                    value: String(format: "%.3f m", result.totalLengthM)
+                )
+                LabeledContent(
+                    "最长",
+                    value: String(format: "%.3f m", longest)
+                )
+                if result.totalAreaM2 > 0 {
+                    LabeledContent(
+                        "面积",
+                        value: String(format: "%.4f m²", result.totalAreaM2)
+                    )
+                }
+                if let total = latestRecognition.timings["总计"] {
+                    LabeledContent(
+                        "耗时",
+                        value: String(format: "%.2fs", total)
+                    )
+                }
+            } else {
+                Text("尚未识别")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.7))
             }
-            .padding(12)
-            .background(.black.opacity(0.55))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .padding(.horizontal, 12)
         }
+        .font(.caption)
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.black.opacity(0.55))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }
 
@@ -510,10 +503,6 @@ private struct WallDefectARView: UIViewRepresentable {
 private struct RoomMiniMapView: UIViewRepresentable {
     let room: CapturedRoom
     let surfaces: [WallDefectSurface]
-    let yaw: Float
-    let pitch: Float
-    let cameraTransform: simd_float4x4?
-    let selectedSurfaceID: UUID?
 
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView()
@@ -559,48 +548,14 @@ private struct RoomMiniMapView: UIViewRepresentable {
     private func update(camera: SCNNode) {
         let center = roomCenter
         let radius = max(roomRadius, 0.5)
-        let distance = radius * 3.4
-
-        if let transform = cameraTransform {
-            let forward = SCNVector3(
-                transform.columns.2.x,
-                transform.columns.2.y,
-                transform.columns.2.z
-            )
-            let up = SCNVector3(
-                transform.columns.1.x,
-                transform.columns.1.y,
-                transform.columns.1.z
-            )
-            let dot = forward.x * up.x
-                + forward.y * up.y
-                + forward.z * up.z
-            let safeUp = abs(dot) < 0.95
-                ? up
-                : SCNVector3(0, 1, 0)
-            camera.position = SCNVector3(
-                center.x - forward.x * distance,
-                center.y - forward.y * distance,
-                center.z - forward.z * distance
-            )
-            camera.look(
-                at: SCNVector3(center.x, center.y, center.z),
-                up: safeUp,
-                localFront: SCNVector3(0, 0, -1)
-            )
-            return
-        }
-
-        let elevation = min(
-            max(Float.pi / 4 + pitch * 0.6, 0.12),
-            1.35
-        )
+        let distance = radius * 2.8
+        let elevation = Float.pi / 4.2
         let horizontal = distance * cos(elevation)
 
         camera.position = SCNVector3(
-            center.x + horizontal * sin(yaw),
+            center.x + horizontal * 0.8,
             center.y + distance * sin(elevation),
-            center.z + horizontal * cos(yaw)
+            center.z + horizontal * 0.8
         )
         camera.look(at: SCNVector3(center.x, center.y, center.z))
     }

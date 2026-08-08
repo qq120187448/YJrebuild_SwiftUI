@@ -151,9 +151,27 @@ enum CrackRecognitionEngine {
         timings["墙面投射与长度"] = CFAbsoluteTimeGetCurrent() - measureStart
 
         let confidence = detections.map(\.score).max() ?? 0
+        let fallbackComponents = skeleton.components.map { component in
+            let lengthM = component.mmLength.map { $0 / 1000 }
+            return CrackComponentMeasurement(
+                id: component.id,
+                pixelLength: component.pixelLength,
+                mmLength: component.mmLength,
+                lengthM: lengthM
+            )
+        }
+        let finalComponents = measurements.components.isEmpty
+            ? fallbackComponents
+            : measurements.components
+        let fallbackTotalM = finalComponents.reduce(0) {
+            $0 + ($1.lengthM ?? 0)
+        }
+        let finalTotalM = measurements.totalLengthM > 0
+            ? measurements.totalLengthM
+            : fallbackTotalM
         let totalMM: Double?
-        if measurements.totalLengthM > 0 {
-            totalMM = measurements.totalLengthM * 1000
+        if finalTotalM > 0 {
+            totalMM = finalTotalM * 1000
         } else if config.lengthUnit == "known", config.mmPerPixel > 0 {
             totalMM = skeleton.totalPixelLength * config.mmPerPixel
         } else {
@@ -165,9 +183,9 @@ enum CrackRecognitionEngine {
             confidence: Double(confidence),
             totalPixelLength: skeleton.totalPixelLength,
             totalMMLength: totalMM,
-            totalLengthM: measurements.totalLengthM,
+            totalLengthM: finalTotalM,
             totalAreaM2: measurements.totalAreaM2,
-            components: measurements.components,
+            components: finalComponents,
             surfaceSummaries: measurements.summaries,
             mode: config.mode,
             modelSize: config.modelSize,

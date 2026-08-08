@@ -18,22 +18,15 @@ struct DefectCameraCapture {
 @MainActor
 final class DefectCameraModel: ObservableObject {
     static let squareCropInset: CGFloat = 0.98
-    static let squareCropCenterYRatio: CGFloat = 0.36
+    static let squareCropCenterYRatio: CGFloat = 0.42
 
-    @Published var latestFrame: ARFrame?
+    private(set) var latestFrame: ARFrame?
     @Published var lastError: String?
-    @Published var yaw: Float = 0
-    @Published var pitch: Float = 0
-    @Published var cameraTransform: simd_float4x4?
 
     private let ciContext = CIContext()
 
     func update(frame: ARFrame) {
         latestFrame = frame
-        let euler = frame.camera.eulerAngles
-        yaw = euler.y
-        pitch = euler.x
-        cameraTransform = frame.camera.transform
     }
 
     func poseArray() -> [Float]? {
