@@ -89,11 +89,14 @@ enum CrackYOLODecoder {
 
     static func nms(
         _ detections: [YOLOSegDetection],
-        iouThreshold: Float
+        iouThreshold: Float,
+        maxDetections: Int = 16
     ) -> [YOLOSegDetection] {
+        guard maxDetections > 0 else { return [] }
         let sorted = detections.sorted { $0.score > $1.score }
         var kept: [YOLOSegDetection] = []
         for detection in sorted {
+            guard kept.count < maxDetections else { break }
             var overlaps = false
             for item in kept {
                 if iou(detection.box, item.box) >= iouThreshold {

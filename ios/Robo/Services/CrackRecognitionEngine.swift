@@ -55,6 +55,7 @@ enum CrackRecognitionEngine {
 
     private static var modelCache: [String: LoadedModel] = [:]
     private static let modelLock = NSLock()
+    private static let maxDetectionsPerImage = 16
     private static let inferenceQueue = DispatchQueue(
         label: "com.silv.RoboScan.crackInference",
         qos: .userInitiated
@@ -235,9 +236,12 @@ enum CrackRecognitionEngine {
                     inputSize: 640,
                     offset: .zero,
                     tileSize: CGSize(width: canvasWidth, height: canvasHeight),
-                    config: config
+                    config: config,
+                    progress: { stage in
+                        progress?("\(resolution) \(stage)", results)
+                    }
                 )
-                progress?("\(resolution) 推理返回，正在生成标注图", results)
+                progress?("\(resolution) 生成标注图", results)
                 let mask = mergedMask(
                     detections: detections,
                     width: canvasWidth,
@@ -410,7 +414,8 @@ enum CrackRecognitionEngine {
             }
             return CrackYOLODecoder.nms(
                 all,
-                iouThreshold: Float(config.iou)
+                iouThreshold: Float(config.iou),
+                maxDetections: maxDetectionsPerImage
             )
         }
 
@@ -430,8 +435,10 @@ enum CrackRecognitionEngine {
         inputSize: Int,
         offset: CGPoint,
         tileSize: CGSize,
-        config: CrackRecognitionConfig
+        config: CrackRecognitionConfig,
+        progress: ((String) -> Void)? = nil
     ) throws -> [YOLOSegDetection] {
+        progress?("letterbox 完成，进入推理队列")
         let (resized, transform) = letterboxedCGImage(
             cgImage,
             canvasSize: inputSize
@@ -439,12 +446,14 @@ enum CrackRecognitionEngine {
         print(
             "[CrackCoreML] letterbox complete \(resized.width)x\(resized.height)"
         )
+        progress?("推理队列开始")
         let (prediction, protos) = try predict(
             model: model,
             cgImage: resized,
             config: config
         )
         print("[CrackCoreML] prediction returned, starting decode")
+        progress?("CoreML 推理返回，开始解析检测")
         var detections = CrackYOLODecoder.decode(
             prediction: prediction,
             protos: protos,
@@ -452,8 +461,10 @@ enum CrackRecognitionEngine {
         )
         detections = CrackYOLODecoder.nms(
             detections,
-            iouThreshold: Float(config.iou)
+            iouThreshold: Float(config.iou),
+            maxDetections: maxDetectionsPerImage
         )
+        progress?("检测解析完成，生成掩码")
 
         for index in detections.indices {
             let box = detections[index].box
@@ -483,6 +494,7 @@ enum CrackRecognitionEngine {
                 size: tileSize
             )
         }
+        progress?("掩码生成完成")
         return detections
     }
 
