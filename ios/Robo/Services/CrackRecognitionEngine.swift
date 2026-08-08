@@ -55,7 +55,6 @@ enum CrackRecognitionEngine {
 
     private static var modelCache: [String: LoadedModel] = [:]
     private static let modelLock = NSLock()
-    private static let maxDetectionsPerImage = 16
     private static let inferenceQueue = DispatchQueue(
         label: "com.silv.RoboScan.crackInference",
         qos: .userInitiated
@@ -158,7 +157,7 @@ enum CrackRecognitionEngine {
 
     static func validateResolutions(
         image: UIImage,
-        resolutions: [Int] = [640, 800, 960, 1280, 1600, 1920, 2240],
+        resolutions: [Int] = [640, 1280, 1920, 2240, 3200, 4096],
         progress: ((String, [CrackResolutionValidationResult]) -> Void)? = nil
     ) -> [CrackResolutionValidationResult] {
         let analysisImage = resizedUIImage(image, maxSide: 4096)
@@ -178,18 +177,7 @@ enum CrackRecognitionEngine {
             return results
         }
 
-        var config = CrackRecognitionSettings.load()
-        config.confidence = 0.15
-        config.iou = 0.5
-        config.mode = "normal"
-        config.modelSize = "n"
-        config.minMaskArea = 50
-        config.skeletonMode = "main"
-        config.topCracks = 3
-        config.minSpurLength = 30
-        config.minSkeletonLength = 80
-        config.lengthUnit = "pixel"
-        config.mmPerPixel = 0
+        let config = CrackRecognitionSettings.load()
 
         let model: LoadedModel
         do {
@@ -415,7 +403,7 @@ enum CrackRecognitionEngine {
             return CrackYOLODecoder.nms(
                 all,
                 iouThreshold: Float(config.iou),
-                maxDetections: maxDetectionsPerImage
+                maxDetections: config.maxDetections
             )
         }
 
@@ -462,7 +450,7 @@ enum CrackRecognitionEngine {
         detections = CrackYOLODecoder.nms(
             detections,
             iouThreshold: Float(config.iou),
-            maxDetections: maxDetectionsPerImage
+            maxDetections: config.maxDetections
         )
         progress?("检测解析完成，生成掩码")
 
@@ -478,17 +466,6 @@ enum CrackRecognitionEngine {
                 for: &detections[index],
                 protos: protos
             )
-            detections[index].mask = resampleMask(
-                protoMask: detections[index].mask ?? [],
-                protoWidth: detections[index].maskWidth,
-                protoHeight: detections[index].maskHeight,
-                tileWidth: Int(tileSize.width),
-                tileHeight: Int(tileSize.height),
-                canvasSize: inputSize,
-                transform: transform
-            )
-            detections[index].maskWidth = Int(tileSize.width)
-            detections[index].maskHeight = Int(tileSize.height)
             detections[index].tileRect = CGRect(
                 origin: offset,
                 size: tileSize
@@ -928,44 +905,6 @@ enum CrackRecognitionEngine {
                 offsetY: CGFloat(offsetY)
             )
         )
-    }
-
-    private static func resampleMask(
-        protoMask: [Float],
-        protoWidth: Int,
-        protoHeight: Int,
-        tileWidth: Int,
-        tileHeight: Int,
-        canvasSize: Int,
-        transform: LetterboxTransform
-    ) -> [Float] {
-        guard protoWidth > 0, protoHeight > 0,
-              protoMask.count == protoWidth * protoHeight,
-              tileWidth > 0, tileHeight > 0 else {
-            return []
-        }
-        var output = [Float](repeating: 0, count: tileWidth * tileHeight)
-        for ty in 0..<tileHeight {
-            for tx in 0..<tileWidth {
-                let canvasX = transform.offsetX
-                    + (CGFloat(tx) + 0.5) * transform.scale
-                let canvasY = transform.offsetY
-                    + (CGFloat(ty) + 0.5) * transform.scale
-                let px = Int(
-                    canvasX * CGFloat(protoWidth) / CGFloat(canvasSize)
-                )
-                let py = Int(
-                    canvasY * CGFloat(protoHeight) / CGFloat(canvasSize)
-                )
-                guard px >= 0, py >= 0,
-                      px < protoWidth, py < protoHeight else {
-                    continue
-                }
-                output[ty * tileWidth + tx] =
-                    protoMask[py * protoWidth + px]
-            }
-        }
-        return output
     }
 
     private static func resizedUIImage(

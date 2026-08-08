@@ -24,6 +24,7 @@ struct WallDefectModelView: View {
     @State private var cameraSurfaceID: UUID?
     @State private var photoCount = 0
     @State private var showSaveConfirm = false
+    @State private var cameraViewSize = CGSize.zero
 
     private var cameraSurface: WallDefectSurface? {
         surfaces.first { $0.id == cameraSurfaceID }
@@ -39,6 +40,33 @@ struct WallDefectModelView: View {
             )
             .ignoresSafeArea()
 
+            GeometryReader { geometry in
+                let side = min(geometry.size.width, geometry.size.height)
+                    * DefectCameraModel.squareCropInset
+                ZStack {
+                    Color.clear
+                    RoundedRectangle(cornerRadius: 0)
+                        .stroke(.yellow, lineWidth: 2)
+                        .frame(width: side, height: side)
+                    Text("将目标放入方框")
+                        .font(.caption.bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(.black.opacity(0.5))
+                        .clipShape(Capsule())
+                        .offset(y: -side / 2 - 18)
+                }
+                .onAppear {
+                    cameraViewSize = geometry.size
+                }
+                .onChange(of: geometry.size) { _, newValue in
+                    cameraViewSize = newValue
+                }
+            }
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+
             VStack(spacing: 0) {
                 topBar
                 Spacer()
@@ -47,6 +75,7 @@ struct WallDefectModelView: View {
                     room: room,
                     surfaces: surfaces,
                     yaw: cameraModel.yaw,
+                    pitch: cameraModel.pitch,
                     selectedSurfaceID: cameraSurfaceID
                 )
                 .frame(height: 180)
@@ -121,7 +150,13 @@ struct WallDefectModelView: View {
 
             HStack(spacing: 14) {
                 Button {
-                    guard let capture = cameraModel.capture() else { return }
+                    let config = CrackRecognitionSettings.load()
+                    guard let capture = cameraModel.capture(
+                        viewSize: cameraViewSize == .zero
+                            ? nil
+                            : cameraViewSize,
+                        outputSide: CGFloat(config.captureResolution)
+                    ) else { return }
                     let associations = WallDefectProjection.associations(
                         pose: capture.pose,
                         intrinsics: capture.intrinsics,
@@ -320,6 +355,7 @@ private struct RoomMiniMapView: UIViewRepresentable {
     let room: CapturedRoom
     let surfaces: [WallDefectSurface]
     let yaw: Float
+    let pitch: Float
     let selectedSurfaceID: UUID?
 
     func makeUIView(context: Context) -> SCNView {
@@ -366,7 +402,10 @@ private struct RoomMiniMapView: UIViewRepresentable {
     private func update(camera: SCNNode) {
         let center = roomCenter
         let radius = max(roomRadius, 0.5)
-        let elevation = Float.pi / 4
+        let elevation = min(
+            max(Float.pi / 4 + pitch * 0.6, 0.12),
+            1.35
+        )
         let distance = radius * 3.4
         let horizontal = distance * cos(elevation)
 

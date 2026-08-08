@@ -56,6 +56,9 @@ struct CrackRecognitionSettingsView: View {
                     step: 0.05,
                     format: "%.2f"
                 )
+                Text("置信度越高误报越少，但会漏掉细小裂缝；越低越容易识别，但误报增加。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 sliderRow(
                     title: "IoU",
                     value: $config.iou,
@@ -63,6 +66,18 @@ struct CrackRecognitionSettingsView: View {
                     step: 0.05,
                     format: "%.2f"
                 )
+                Text("IoU 越大越容易保留重叠框；越小越倾向合并相近候选框。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                stepperRow(
+                    title: "候选框上限",
+                    value: $config.maxDetections,
+                    range: 1...25,
+                    step: 1
+                )
+                Text("候选框越多识别越全，但掩码生成更慢。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 stepperRow(
                     title: "发丝级分块尺寸",
                     value: $config.tileSize,
@@ -110,6 +125,18 @@ struct CrackRecognitionSettingsView: View {
                 )
             }
 
+            Section("补拍输出") {
+                stepperRow(
+                    title: "方形裁剪分辨率",
+                    value: $config.captureResolution,
+                    range: 512...2048,
+                    step: 128
+                )
+                Text("补拍时按该分辨率输出方形照片送模型识别。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("长度单位") {
                 Picker("长度单位", selection: $config.lengthUnit) {
                     Text("像素").tag("pixel")
@@ -136,6 +163,9 @@ struct CrackRecognitionSettingsView: View {
         .navigationTitle("识别设置")
         .onChange(of: config) { _, newValue in
             CrackRecognitionSettings.save(newValue)
+        }
+        .onDisappear {
+            CrackRecognitionSettings.save(config)
         }
     }
 

@@ -17,15 +17,20 @@ struct DefectCameraCapture {
 
 @MainActor
 final class DefectCameraModel: ObservableObject {
+    static let squareCropInset: CGFloat = 0.92
+
     @Published var latestFrame: ARFrame?
     @Published var lastError: String?
     @Published var yaw: Float = 0
+    @Published var pitch: Float = 0
 
     private let ciContext = CIContext()
 
     func update(frame: ARFrame) {
         latestFrame = frame
-        yaw = frame.camera.eulerAngles.y
+        let euler = frame.camera.eulerAngles
+        yaw = euler.y
+        pitch = euler.x
     }
 
     func poseArray() -> [Float]? {
@@ -52,22 +57,44 @@ final class DefectCameraModel: ObservableObject {
         )
     }
 
-    func capture() -> DefectCameraCapture? {
+    func capture(
+        viewSize: CGSize? = nil,
+        outputSide: CGFloat = 1024
+    ) -> DefectCameraCapture? {
         guard let frame = latestFrame else {
             lastError = "尚未获取 ARKit 画面"
             return nil
         }
-        guard let image = snapshot(from: frame) else {
+        guard let fullImage = snapshot(from: frame) else {
             lastError = "无法读取相机画面"
             return nil
         }
+        let cropRect = squareCropRect(
+            imageSize: fullImage.size,
+            viewSize: viewSize
+        )
+        guard cropRect.width > 4, cropRect.height > 4,
+              let cgImage = fullImage.cgImage,
+              let croppedCG = cgImage.cropping(to: cropRect) else {
+            lastError = "无法裁剪方形识别区域"
+            return nil
+        }
+        let image = resizedSquare(
+            UIImage(cgImage: croppedCG),
+            side: outputSide
+        )
 
         let pose = flatten(matrix: frame.camera.transform)
         let buffer = frame.capturedImage
-        let intrinsics = WallDefectProjection.portraitIntrinsics(
+        var intrinsics = WallDefectProjection.portraitIntrinsics(
             intrinsics: flatten(matrix: frame.camera.intrinsics),
             rawWidth: CVPixelBufferGetWidth(buffer),
             rawHeight: CVPixelBufferGetHeight(buffer)
+        )
+        intrinsics = adjustedIntrinsics(
+            intrinsics,
+            cropRect: cropRect,
+            outputSide: image.size.width
         )
 
         var depth: Data?
@@ -88,6 +115,74 @@ final class DefectCameraModel: ObservableObject {
             depthWidth: depthWidth,
             depthHeight: depthHeight
         )
+    }
+
+    private func squareCropRect(
+        imageSize: CGSize,
+        viewSize: CGSize?
+    ) -> CGRect {
+        guard imageSize.width > 0, imageSize.height > 0 else {
+            return .zero
+        }
+        if let viewSize, viewSize.width > 0, viewSize.height > 0 {
+            let scale = max(
+                viewSize.width / imageSize.width,
+                viewSize.height / imageSize.height
+            )
+            let viewSide = min(viewSize.width, viewSize.height)
+                * Self.squareCropInset
+            let cropSide = min(
+                viewSide / scale,
+                min(imageSize.width, imageSize.height)
+            )
+            return CGRect(
+                x: (imageSize.width - cropSide) / 2,
+                y: (imageSize.height - cropSide) / 2,
+                width: cropSide,
+                height: cropSide
+            )
+        }
+        let side = min(imageSize.width, imageSize.height)
+            * Self.squareCropInset
+        return CGRect(
+            x: (imageSize.width - side) / 2,
+            y: (imageSize.height - side) / 2,
+            width: side,
+            height: side
+        )
+    }
+
+    private func resizedSquare(
+        _ image: UIImage,
+        side: CGFloat
+    ) -> UIImage {
+        let side = max(1, Int(side.rounded()))
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let size = CGSize(width: side, height: side)
+        return UIGraphicsImageRenderer(size: size, format: format)
+            .image { rendererContext in
+                rendererContext.cgContext.interpolationQuality = .high
+                image.draw(in: CGRect(origin: .zero, size: size))
+            }
+    }
+
+    private func adjustedIntrinsics(
+        _ intrinsics: [Float],
+        cropRect: CGRect,
+        outputSide: CGFloat
+    ) -> [Float] {
+        guard intrinsics.count == 9, cropRect.width > 0 else {
+            return intrinsics
+        }
+        let scale = Float(outputSide / cropRect.width)
+        return [
+            intrinsics[0] * scale, 0,
+            (intrinsics[2] - Float(cropRect.minX)) * scale,
+            0, intrinsics[4] * scale,
+            (intrinsics[5] - Float(cropRect.minY)) * scale,
+            0, 0, 1
+        ]
     }
 
     private func snapshot(from frame: ARFrame) -> UIImage? {

@@ -98,6 +98,9 @@ targets:
       - path: Robo/Views/WallDefectScanView.swift
       - path: Robo/Views/WallDefectModelView.swift
       - path: Robo/Views/WallDefectScanDetailView.swift
+      - path: Robo/Views/RoomScanSettingsView.swift
+      - path: Robo/Views/ObjectScanSettingsView.swift
+      - path: Robo/Views/WallDefectSettingsView.swift
       - path: Robo/Views/CrackRecognitionSettingsView.swift
       - path: Robo/Views/CrackPhotoLabView.swift
       - path: Robo/Views/CrackModelValidationView.swift

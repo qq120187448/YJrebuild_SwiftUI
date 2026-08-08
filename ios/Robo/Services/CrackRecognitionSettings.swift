@@ -6,7 +6,9 @@ struct CrackRecognitionConfig: Codable, Equatable {
     var engine: String = "yolo"            // yolo / mobilesam
     var computeMode: String = "neural"     // neural / cpu
     var inferenceBackend: String = "direct" // direct / vision
-    var confidence: Double = 0.15
+    var maxDetections: Int = 8
+    var captureResolution: Int = 1024
+    var confidence: Double = 0.3
     var iou: Double = 0.5
     var tileSize: Int = 1024
     var tileOverlap: Int = 192
@@ -30,6 +32,8 @@ struct CrackRecognitionConfig: Codable, Equatable {
         engine = engine == "mobilesam" ? "mobilesam" : "yolo"
         computeMode = computeMode == "cpu" ? "cpu" : "neural"
         inferenceBackend = inferenceBackend == "vision" ? "vision" : "direct"
+        maxDetections = min(max(maxDetections, 1), 25)
+        captureResolution = min(max(captureResolution, 512), 2048)
         confidence = min(max(confidence, 0.1), 0.9)
         iou = min(max(iou, 0.1), 0.9)
         tileSize = min(max(tileSize, 512), 1600)
@@ -88,6 +92,14 @@ enum CrackRecognitionSettings {
         }
         if let value = components.queryItems?.first(where: { $0.name == "backend" })?.value {
             config.inferenceBackend = value == "vision" ? "vision" : "direct"
+        }
+        if let value = components.queryItems?.first(where: { $0.name == "maxdet" })?.value,
+           let number = Int(value) {
+            config.maxDetections = number
+        }
+        if let value = components.queryItems?.first(where: { $0.name == "capture" })?.value,
+           let number = Int(value) {
+            config.captureResolution = number
         }
         if let value = components.queryItems?.first(where: { $0.name == "conf" })?.value,
            let number = Double(value) {

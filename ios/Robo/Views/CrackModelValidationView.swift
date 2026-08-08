@@ -14,7 +14,7 @@ struct CrackModelValidationView: View {
     @State private var timeoutWorkItem: DispatchWorkItem?
     @State private var didTimeout = false
 
-    private let resolutions = [640, 800, 960, 1280, 1600, 1920, 2240]
+    private let resolutions = [640, 1280, 1920, 2240, 3200, 4096]
     private var engineConfig: CrackRecognitionConfig {
         CrackRecognitionSettings.load()
     }
