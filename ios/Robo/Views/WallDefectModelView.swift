@@ -169,10 +169,19 @@ struct WallDefectModelView: View {
                 Text("当前目标：\(cameraSurface.label)")
                     .font(.caption.bold())
                     .foregroundStyle(.white)
-            } else {
-                Text("把相机对准墙或地面，自动识别目标")
+            } else if isRecognizing {
+                Text("正在识别照片，暂时不能拍照")
                     .font(.caption.bold())
                     .foregroundStyle(.white.opacity(0.75))
+            } else {
+                Text("未识别到墙面/地面/天面，请对准已建模表面")
+                    .font(.caption.bold())
+                    .foregroundStyle(.white.opacity(0.75))
+            }
+            if let error = cameraModel.lastError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
 
             HStack(spacing: 14) {
@@ -191,7 +200,10 @@ struct WallDefectModelView: View {
                         imageSize: capture.image.size,
                         surfaces: surfaces
                     )
-                    guard !associations.isEmpty else { return }
+                    guard !associations.isEmpty else {
+                        cameraModel.lastError = "未识别到目标表面，请对准墙面/地面/天面"
+                        return
+                    }
                     photoCount += 1
                     onPhoto(associations, capture)
                 } label: {
@@ -204,8 +216,8 @@ struct WallDefectModelView: View {
                             .frame(width: 52, height: 52)
                     }
                 }
-                .disabled(cameraSurface == nil || isRecognizing)
-                .opacity(cameraSurface == nil || isRecognizing ? 0.45 : 1)
+                .disabled(isRecognizing)
+                .opacity(isRecognizing ? 0.45 : 1)
 
                 Button {
                     showSaveConfirm = true
@@ -394,6 +406,9 @@ private struct WallDefectARView: UIViewRepresentable {
             let nextID = associations.first?.surfaceID
             if cameraSurfaceID.wrappedValue != nextID {
                 cameraSurfaceID.wrappedValue = nextID
+                if nextID != nil {
+                    cameraModel.lastError = nil
+                }
             }
         }
 
@@ -564,9 +579,9 @@ private struct RoomMiniMapView: UIViewRepresentable {
                 ? up
                 : SCNVector3(0, 1, 0)
             camera.position = SCNVector3(
-                center.x + forward.x * distance,
-                center.y + forward.y * distance,
-                center.z + forward.z * distance
+                center.x - forward.x * distance,
+                center.y - forward.y * distance,
+                center.z - forward.z * distance
             )
             camera.look(
                 at: SCNVector3(center.x, center.y, center.z),
