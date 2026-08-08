@@ -55,8 +55,8 @@ struct WallDefectModelView: View {
                 surfaces: surfaces,
                 arSession: arSession,
                 cameraModel: cameraModel,
-                cameraSurfaceID: $cameraSurfaceID,
-                latestARSkeleton: latestRecognition?.arSkeleton ?? []
+                latestARSkeleton: latestRecognition?.arSkeleton ?? [],
+                cameraSurfaceID: $cameraSurfaceID
             )
             .ignoresSafeArea()
 
@@ -444,7 +444,8 @@ private struct WallDefectARView: UIViewRepresentable {
                         )
                         if let neighborIndex = indexByPoint[neighbor],
                            index < neighborIndex,
-                           point.surfaceID == points[neighborIndex].surfaceID {
+                           points[index].surfaceID
+                               == points[neighborIndex].surfaceID {
                             indices.append(Int32(index))
                             indices.append(Int32(neighborIndex))
                         }
