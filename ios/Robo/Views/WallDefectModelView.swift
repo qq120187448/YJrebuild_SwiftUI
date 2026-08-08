@@ -12,6 +12,19 @@ struct WallDefectPhotoRecognitionResult {
     let timings: [String: Double]
 }
 
+struct WallDefectModelDebugSettings: Equatable {
+    var modelPitchDeg: Double = 0
+    var modelYawDeg: Double = 0
+    var modelRollDeg: Double = 0
+    var modelFlipX = false
+    var modelFlipY = false
+    var modelFlipZ = false
+    var cameraForwardReversed = true
+    var cameraUpReversed = false
+    var cameraRollDeg: Double = 0
+    var swapPitchYaw = false
+}
+
 struct WallDefectModelView: View {
     let room: CapturedRoom
     let surfaces: [WallDefectSurface]
@@ -27,6 +40,43 @@ struct WallDefectModelView: View {
     @State private var cameraSurfaceID: UUID?
     @State private var showSaveConfirm = false
     @State private var cameraViewSize = CGSize.zero
+    @State private var showDebugPanel = false
+
+    @AppStorage("wallDefectDebug.modelPitchDeg")
+    private var debugModelPitchDeg = 0.0
+    @AppStorage("wallDefectDebug.modelYawDeg")
+    private var debugModelYawDeg = 0.0
+    @AppStorage("wallDefectDebug.modelRollDeg")
+    private var debugModelRollDeg = 0.0
+    @AppStorage("wallDefectDebug.modelFlipX")
+    private var debugModelFlipX = false
+    @AppStorage("wallDefectDebug.modelFlipY")
+    private var debugModelFlipY = false
+    @AppStorage("wallDefectDebug.modelFlipZ")
+    private var debugModelFlipZ = false
+    @AppStorage("wallDefectDebug.cameraForwardReversed")
+    private var debugCameraForwardReversed = true
+    @AppStorage("wallDefectDebug.cameraUpReversed")
+    private var debugCameraUpReversed = false
+    @AppStorage("wallDefectDebug.cameraRollDeg")
+    private var debugCameraRollDeg = 0.0
+    @AppStorage("wallDefectDebug.swapPitchYaw")
+    private var debugSwapPitchYaw = false
+
+    private var debugSettings: WallDefectModelDebugSettings {
+        WallDefectModelDebugSettings(
+            modelPitchDeg: debugModelPitchDeg,
+            modelYawDeg: debugModelYawDeg,
+            modelRollDeg: debugModelRollDeg,
+            modelFlipX: debugModelFlipX,
+            modelFlipY: debugModelFlipY,
+            modelFlipZ: debugModelFlipZ,
+            cameraForwardReversed: debugCameraForwardReversed,
+            cameraUpReversed: debugCameraUpReversed,
+            cameraRollDeg: debugCameraRollDeg,
+            swapPitchYaw: debugSwapPitchYaw
+        )
+    }
 
     private var cameraSurface: WallDefectSurface? {
         surfaces.first { $0.id == cameraSurfaceID }
@@ -90,7 +140,8 @@ struct WallDefectModelView: View {
                     RoomMiniMapView(
                         room: room,
                         surfaces: surfaces,
-                        cameraTransform: cameraModel.cameraTransform
+                        cameraTransform: cameraModel.cameraTransform,
+                        settings: debugSettings
                     )
                     .frame(height: 150)
                     .frame(maxWidth: .infinity)
@@ -103,6 +154,10 @@ struct WallDefectModelView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .padding(.horizontal, 8)
+                if showDebugPanel {
+                    debugPanel
+                        .padding(.top, 6)
+                }
                 bottomBar
             }
         }
@@ -154,6 +209,20 @@ struct WallDefectModelView: View {
                             .clipShape(Capsule())
                     }
                     Spacer()
+                    Button {
+                        showDebugPanel.toggle()
+                    } label: {
+                        Label(
+                            showDebugPanel ? "收起" : "调试",
+                            systemImage: "slider.horizontal.3"
+                        )
+                        .font(.subheadline.bold())
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(.black.opacity(0.45))
+                        .foregroundStyle(.white)
+                        .clipShape(Capsule())
+                    }
                 }
 
                 Button {
@@ -191,6 +260,207 @@ struct WallDefectModelView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, 12)
         .padding(.bottom, 10)
+    }
+
+    private var debugPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("模型调试")
+                    .font(.caption.bold())
+                    .foregroundStyle(.white)
+                Spacer()
+                Button("复位") {
+                    resetDebugSettings()
+                }
+                .font(.caption.bold())
+                .foregroundStyle(.orange)
+            }
+
+            Text("模型初始参数")
+                .font(.caption2.bold())
+                .foregroundStyle(.white.opacity(0.7))
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    debugStepButton(
+                        title: "X旋转",
+                        value: debugModelPitchDeg,
+                        minus: { debugModelPitchDeg -= 90 },
+                        plus: { debugModelPitchDeg += 90 }
+                    )
+                    debugStepButton(
+                        title: "Y旋转",
+                        value: debugModelYawDeg,
+                        minus: { debugModelYawDeg -= 90 },
+                        plus: { debugModelYawDeg += 90 }
+                    )
+                    debugStepButton(
+                        title: "Z旋转",
+                        value: debugModelRollDeg,
+                        minus: { debugModelRollDeg -= 90 },
+                        plus: { debugModelRollDeg += 90 }
+                    )
+                }
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    debugToggleButton(
+                        title: "X翻转",
+                        isOn: debugModelFlipX,
+                        onText: "反转",
+                        offText: "正常"
+                    ) {
+                        debugModelFlipX.toggle()
+                    }
+                    debugToggleButton(
+                        title: "Y翻转",
+                        isOn: debugModelFlipY,
+                        onText: "反转",
+                        offText: "正常"
+                    ) {
+                        debugModelFlipY.toggle()
+                    }
+                    debugToggleButton(
+                        title: "Z翻转",
+                        isOn: debugModelFlipZ,
+                        onText: "反转",
+                        offText: "正常"
+                    ) {
+                        debugModelFlipZ.toggle()
+                    }
+                }
+            }
+
+            Text("转动方向参数")
+                .font(.caption2.bold())
+                .foregroundStyle(.white.opacity(0.7))
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    debugToggleButton(
+                        title: "前向反向",
+                        isOn: debugCameraForwardReversed,
+                        onText: "反向",
+                        offText: "正向"
+                    ) {
+                        debugCameraForwardReversed.toggle()
+                    }
+                    debugToggleButton(
+                        title: "上向反向",
+                        isOn: debugCameraUpReversed,
+                        onText: "反向",
+                        offText: "正向"
+                    ) {
+                        debugCameraUpReversed.toggle()
+                    }
+                    debugToggleButton(
+                        title: "左右上下互换",
+                        isOn: debugSwapPitchYaw,
+                        onText: "开",
+                        offText: "关"
+                    ) {
+                        debugSwapPitchYaw.toggle()
+                    }
+                }
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    debugStepButton(
+                        title: "相机横滚",
+                        value: debugCameraRollDeg,
+                        minus: { debugCameraRollDeg -= 90 },
+                        plus: { debugCameraRollDeg += 90 }
+                    )
+                }
+            }
+
+            Text(debugParameterSummary)
+                .font(.caption2.monospaced())
+                .foregroundStyle(.white.opacity(0.8))
+                .lineLimit(2)
+        }
+        .padding(10)
+        .background(.black.opacity(0.78))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 10)
+    }
+
+    private var debugParameterSummary: String {
+        let flips = (debugModelFlipX ? "X" : "")
+            + (debugModelFlipY ? "Y" : "")
+            + (debugModelFlipZ ? "Z" : "")
+        return "模型旋转 \(Int(debugModelPitchDeg))/\(Int(debugModelYawDeg))/\(Int(debugModelRollDeg))° "
+            + "翻转 \(flips.isEmpty ? "无" : flips) | "
+            + "前向 \(debugCameraForwardReversed ? "反" : "正") "
+            + "上向 \(debugCameraUpReversed ? "反" : "正") "
+            + "横滚 \(Int(debugCameraRollDeg))° "
+            + "互换 \(debugSwapPitchYaw ? "开" : "关")"
+    }
+
+    private func resetDebugSettings() {
+        debugModelPitchDeg = 0
+        debugModelYawDeg = 0
+        debugModelRollDeg = 0
+        debugModelFlipX = false
+        debugModelFlipY = false
+        debugModelFlipZ = false
+        debugCameraForwardReversed = true
+        debugCameraUpReversed = false
+        debugCameraRollDeg = 0
+        debugSwapPitchYaw = false
+    }
+
+    private func debugStepButton(
+        title: String,
+        value: Double,
+        minus: @escaping () -> Void,
+        plus: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 6) {
+            Button(action: minus) {
+                Text("-")
+                    .frame(width: 30, height: 28)
+                    .background(Color.gray.opacity(0.35))
+                    .clipShape(Circle())
+            }
+            Text("\(title) \(Int(value))°")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.white)
+                .frame(minWidth: 84)
+            Button(action: plus) {
+                Text("+")
+                    .frame(width: 30, height: 28)
+                    .background(Color.gray.opacity(0.35))
+                    .clipShape(Circle())
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+    }
+
+    private func debugToggleButton(
+        title: String,
+        isOn: Bool,
+        onText: String,
+        offText: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text("\(title) \(isOn ? onText : offText)")
+                .font(.caption2.bold())
+                .foregroundStyle(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(
+                    isOn
+                        ? Color.orange.opacity(0.85)
+                        : Color.gray.opacity(0.35)
+                )
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -451,6 +721,7 @@ private struct RoomMiniMapView: UIViewRepresentable {
     let room: CapturedRoom
     let surfaces: [WallDefectSurface]
     let cameraTransform: simd_float4x4?
+    let settings: WallDefectModelDebugSettings
 
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView()
@@ -474,11 +745,15 @@ private struct RoomMiniMapView: UIViewRepresentable {
 
     func updateUIView(_ uiView: SCNView, context: Context) {
         guard let camera = uiView.pointOfView else { return }
+        updateModelTransform(in: uiView)
         update(camera: camera)
     }
 
     private func loadScene() -> SCNScene {
         let scene = SCNScene()
+        let modelRoot = SCNNode()
+        modelRoot.name = "DebugModelRoot"
+        modelRoot.simdTransform = debugModelTransform()
         for surface in surfaces {
             let box = SCNBox(
                 width: CGFloat(surface.width),
@@ -506,8 +781,9 @@ private struct RoomMiniMapView: UIViewRepresentable {
 
             let node = SCNNode(geometry: box)
             node.simdTransform = surfaceTransform(surface)
-            scene.rootNode.addChildNode(node)
+            modelRoot.addChildNode(node)
         }
+        scene.rootNode.addChildNode(modelRoot)
         return scene
     }
 
@@ -518,25 +794,76 @@ private struct RoomMiniMapView: UIViewRepresentable {
 
         if let transform = cameraTransform {
             let forward = SCNVector3(
-                -transform.columns.2.x,
-                -transform.columns.2.y,
-                -transform.columns.2.z
+                settings.cameraForwardReversed
+                    ? -transform.columns.2.x
+                    : transform.columns.2.x,
+                settings.cameraForwardReversed
+                    ? -transform.columns.2.y
+                    : transform.columns.2.y,
+                settings.cameraForwardReversed
+                    ? -transform.columns.2.z
+                    : transform.columns.2.z
             )
-            let up = SCNVector3(
-                transform.columns.1.x,
-                transform.columns.1.y,
-                transform.columns.1.z
+            var up = SCNVector3(
+                settings.cameraUpReversed
+                    ? -transform.columns.1.x
+                    : transform.columns.1.x,
+                settings.cameraUpReversed
+                    ? -transform.columns.1.y
+                    : transform.columns.1.y,
+                settings.cameraUpReversed
+                    ? -transform.columns.1.z
+                    : transform.columns.1.z
             )
-            let dot = forward.x * up.x
-                + forward.y * up.y
-                + forward.z * up.z
-            let safeUp = abs(dot) < 0.95
-                ? up
+            let forwardLength = simd_length(SIMD3<Float>(
+                forward.x, forward.y, forward.z
+            ))
+            let normalizedForward = forwardLength > 0.0001
+                ? SCNVector3(
+                    forward.x / forwardLength,
+                    forward.y / forwardLength,
+                    forward.z / forwardLength
+                )
+                : SCNVector3(0, 0, -1)
+            let dot = normalizedForward.x * up.x
+                + normalizedForward.y * up.y
+                + normalizedForward.z * up.z
+            up = SCNVector3(
+                up.x - normalizedForward.x * dot,
+                up.y - normalizedForward.y * dot,
+                up.z - normalizedForward.z * dot
+            )
+            let upLength = simd_length(SIMD3<Float>(up.x, up.y, up.z))
+            let baseUp = upLength > 0.0001
+                ? SCNVector3(
+                    up.x / upLength,
+                    up.y / upLength,
+                    up.z / upLength
+                )
+                : (abs(normalizedForward.y) < 0.95
+                    ? SCNVector3(0, 1, 0)
+                    : SCNVector3(0, 0, 1))
+
+            let rollDegrees = settings.cameraRollDeg
+                + (settings.swapPitchYaw ? 90 : 0)
+            let roll = Float(rollDegrees * .pi / 180)
+            let right = crossVector(normalizedForward, baseUp)
+            let rotatedUp = SCNVector3(
+                baseUp.x * cosf(roll) + right.x * sinf(roll),
+                baseUp.y * cosf(roll) + right.y * sinf(roll),
+                baseUp.z * cosf(roll) + right.z * sinf(roll)
+            )
+            let safeUp = abs(
+                normalizedForward.x * rotatedUp.x
+                    + normalizedForward.y * rotatedUp.y
+                    + normalizedForward.z * rotatedUp.z
+            ) < 0.95
+                ? rotatedUp
                 : SCNVector3(0, 1, 0)
             camera.position = SCNVector3(
-                center.x - forward.x * distance,
-                center.y - forward.y * distance,
-                center.z - forward.z * distance
+                center.x - normalizedForward.x * distance,
+                center.y - normalizedForward.y * distance,
+                center.z - normalizedForward.z * distance
             )
             camera.look(
                 at: SCNVector3(center.x, center.y, center.z),
@@ -555,6 +882,71 @@ private struct RoomMiniMapView: UIViewRepresentable {
             center.z + horizontal * 0.8
         )
         camera.look(at: SCNVector3(center.x, center.y, center.z))
+    }
+
+    private func updateModelTransform(in view: SCNView) {
+        view.scene.rootNode.childNode(
+            withName: "DebugModelRoot",
+            recursively: false
+        )?.simdTransform = debugModelTransform()
+    }
+
+    private func debugModelTransform() -> simd_float4x4 {
+        let center = roomCenter
+        let toCenter = translationMatrix(center)
+        let fromCenter = translationMatrix(SCNVector3(
+            -center.x,
+            -center.y,
+            -center.z
+        ))
+        return simd_mul(
+            simd_mul(toCenter, modelCorrectionMatrix()),
+            fromCenter
+        )
+    }
+
+    private func modelCorrectionMatrix() -> simd_float4x4 {
+        var flip = matrix_identity_float4x4
+        flip.columns.0.x = settings.modelFlipX ? -1 : 1
+        flip.columns.1.y = settings.modelFlipY ? -1 : 1
+        flip.columns.2.z = settings.modelFlipZ ? -1 : 1
+
+        let pitch = simd_quatf(
+            angle: Float(settings.modelPitchDeg * .pi / 180),
+            axis: SIMD3<Float>(1, 0, 0)
+        )
+        let yaw = simd_quatf(
+            angle: Float(settings.modelYawDeg * .pi / 180),
+            axis: SIMD3<Float>(0, 1, 0)
+        )
+        let roll = simd_quatf(
+            angle: Float(settings.modelRollDeg * .pi / 180),
+            axis: SIMD3<Float>(0, 0, 1)
+        )
+        let rotation = simd_float4x4(roll * yaw * pitch)
+        return simd_mul(rotation, flip)
+    }
+
+    private func translationMatrix(_ position: SCNVector3) -> simd_float4x4 {
+        var matrix = matrix_identity_float4x4
+        matrix.columns.3 = SIMD4<Float>(
+            position.x,
+            position.y,
+            position.z,
+            1
+        )
+        return matrix
+    }
+
+    private func crossVector(
+        _ lhs: SCNVector3,
+        _ rhs: SCNVector3
+    ) -> SCNVector3 {
+        SCNVector3(
+            lhs.y * rhs.z - lhs.z * rhs.y,
+            lhs.z * rhs.x - lhs.x * rhs.z,
+            lhs.x * rhs.y - lhs.y * rhs.x
+        )
     }
 
     private var roomCenter: SCNVector3 {
