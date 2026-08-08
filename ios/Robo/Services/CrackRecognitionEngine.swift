@@ -50,11 +50,15 @@ enum CrackRecognitionEngine {
 
     private struct LoadedModel {
         let mlModel: MLModel
-        let visionModel: VNCoreMLModel?
+        let visionRequest: VNCoreMLRequest?
     }
 
     private static var modelCache: [String: LoadedModel] = [:]
     private static let modelLock = NSLock()
+    private static let inferenceQueue = DispatchQueue(
+        label: "com.silv.RoboScan.crackInference",
+        qos: .userInitiated
+    )
 
     static func analyze(
         image: UIImage,
@@ -222,7 +226,7 @@ enum CrackRecognitionEngine {
                 let canvasWidth = canvas.width
                 let canvasHeight = canvas.height
                 progress?(
-                    "\(resolution) 输入图已生成，开始 \(backendLabel) 推理",
+                    "\(resolution) 输入图已生成，进入 \(backendLabel) 推理队列",
                     results
                 )
                 let detections = try runSingleDetection(
@@ -233,7 +237,7 @@ enum CrackRecognitionEngine {
                     tileSize: CGSize(width: canvasWidth, height: canvasHeight),
                     config: config
                 )
-                progress?("\(resolution) 推理完成，正在生成标注图", results)
+                progress?("\(resolution) 推理返回，正在生成标注图", results)
                 let mask = mergedMask(
                     detections: detections,
                     width: canvasWidth,
@@ -354,7 +358,16 @@ enum CrackRecognitionEngine {
             throw CrackRecognitionError.modelNotFound
         }
         let visionModel = try? VNCoreMLModel(for: mlModel)
-        return LoadedModel(mlModel: mlModel, visionModel: visionModel)
+        var visionRequest: VNCoreMLRequest?
+        if let visionModel {
+            let request = VNCoreMLRequest(model: visionModel)
+            request.imageCropAndScaleOption = .scaleFit
+            visionRequest = request
+        }
+        return LoadedModel(
+            mlModel: mlModel,
+            visionRequest: visionRequest
+        )
     }
 
     private static func runDetections(
@@ -423,11 +436,15 @@ enum CrackRecognitionEngine {
             cgImage,
             canvasSize: inputSize
         )
+        print(
+            "[CrackCoreML] letterbox complete \(resized.width)x\(resized.height)"
+        )
         let (prediction, protos) = try predict(
             model: model,
             cgImage: resized,
             config: config
         )
+        print("[CrackCoreML] prediction returned, starting decode")
         var detections = CrackYOLODecoder.decode(
             prediction: prediction,
             protos: protos,
@@ -474,13 +491,18 @@ enum CrackRecognitionEngine {
         cgImage: CGImage,
         config: CrackRecognitionConfig
     ) throws -> (prediction: MLMultiArray, protos: MLMultiArray) {
-        if config.inferenceBackend == "vision" {
-            return try predictWithVision(
-                model: model,
-                cgImage: cgImage
-            )
+        print("[CrackCoreML] entering serial inference queue")
+        let result = try inferenceQueue.sync {
+            if config.inferenceBackend == "vision" {
+                return try predictWithVision(
+                    model: model,
+                    cgImage: cgImage
+                )
+            }
+            return try predictDirect(model: model, cgImage: cgImage)
         }
-        return try predictDirect(model: model, cgImage: cgImage)
+        print("[CrackCoreML] leaving serial inference queue")
+        return result
     }
 
     private static func predictDirect(
@@ -514,11 +536,9 @@ enum CrackRecognitionEngine {
         model: LoadedModel,
         cgImage: CGImage
     ) throws -> (prediction: MLMultiArray, protos: MLMultiArray) {
-        guard let visionModel = model.visionModel else {
+        guard let request = model.visionRequest else {
             throw CrackRecognitionError.visionModelUnavailable
         }
-        let request = VNCoreMLRequest(model: visionModel)
-        request.imageCropAndScaleOption = .scaleFit
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
         print(
             "[CrackCoreML] vision prediction start \(cgImage.width)x\(cgImage.height)"
