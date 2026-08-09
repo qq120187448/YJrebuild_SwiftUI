@@ -25,8 +25,9 @@ struct WallDefectModelDebugSettings: Equatable {
     var modelFlipZ = false
     var cameraForwardReversed = true
     var cameraUpReversed = false
-    var cameraRollDeg: Double = 0
+    var cameraRollDeg: Double = 90
     var swapPitchYaw = false
+    var miniYawReversed = true
 }
 
 struct WallDefectModelView: View {
@@ -39,6 +40,7 @@ struct WallDefectModelView: View {
     let onPhoto: ([WallDefectSurfaceAssociation], DefectCameraCapture) -> Void
     let onSave: () -> Void
     let onDiscard: () -> Void
+    var surfaceSourceText: String = ""
 
     @StateObject private var cameraModel = DefectCameraModel()
     @State private var cameraSurfaceID: UUID?
@@ -65,9 +67,11 @@ struct WallDefectModelView: View {
     @AppStorage("wallDefectDebug3.cameraUpReversed")
     private var debugCameraUpReversed = false
     @AppStorage("wallDefectDebug3.cameraRollCompensation")
-    private var debugCameraRollDeg = 0.0
+    private var debugCameraRollDeg = 90.0
     @AppStorage("wallDefectDebug3.swapPitchYaw")
     private var debugSwapPitchYaw = false
+    @AppStorage("wallDefectDebug3.miniYawReversed")
+    private var debugMiniYawReversed = true
 
     private var debugSettings: WallDefectModelDebugSettings {
         WallDefectModelDebugSettings(
@@ -80,7 +84,8 @@ struct WallDefectModelView: View {
             cameraForwardReversed: debugCameraForwardReversed,
             cameraUpReversed: debugCameraUpReversed,
             cameraRollDeg: debugCameraRollDeg,
-            swapPitchYaw: debugSwapPitchYaw
+            swapPitchYaw: debugSwapPitchYaw,
+            miniYawReversed: debugMiniYawReversed
         )
     }
 
@@ -223,6 +228,11 @@ struct WallDefectModelView: View {
                 )
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.white.opacity(0.55))
+            }
+            if !surfaceSourceText.isEmpty {
+                Text(surfaceSourceText)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.5))
             }
 
             ZStack {
@@ -407,6 +417,17 @@ struct WallDefectModelView: View {
                     debugSwapPitchYaw.toggle()
                 }
             }
+            HStack(spacing: 8) {
+                debugToggleButton(
+                    title: "mini转向",
+                    isOn: debugMiniYawReversed,
+                    onText: "反向",
+                    offText: "同向"
+                ) {
+                    debugMiniYawReversed.toggle()
+                }
+                .frame(maxWidth: .infinity)
+            }
 
             debugStepButton(
                 title: "相机横滚",
@@ -440,7 +461,8 @@ struct WallDefectModelView: View {
             + "跟随 \(debugCameraForwardReversed ? "反" : "正") "
             + "上向 \(debugCameraUpReversed ? "反" : "正") "
             + "横滚 \(Int(debugCameraRollDeg))° "
-            + "互换 \(debugSwapPitchYaw ? "开" : "关")"
+            + "互换 \(debugSwapPitchYaw ? "开" : "关") "
+            + "转向 \(debugMiniYawReversed ? "反" : "同")"
     }
 
     private func resetDebugSettings() {
@@ -452,8 +474,9 @@ struct WallDefectModelView: View {
         debugModelFlipZ = false
         debugCameraForwardReversed = true
         debugCameraUpReversed = false
-        debugCameraRollDeg = 0
+        debugCameraRollDeg = 90
         debugSwapPitchYaw = false
+        debugMiniYawReversed = true
     }
 
     private func debugStepButton(
@@ -878,7 +901,14 @@ private struct RoomMiniMapView: UIViewRepresentable {
         let modelRoot = SCNNode()
         modelRoot.name = "DebugModelRoot"
 
-        for surface in surfaces {
+        if let roomPlanScene = loadRoomPlanScene() {
+            for child in roomPlanScene.rootNode.childNodes {
+                child.removeFromParentNode()
+                modelRoot.addChildNode(child)
+            }
+            addHighlightOverlays(to: modelRoot)
+        } else {
+            for surface in surfaces {
             guard surface.kind != .ceiling else { continue }
             let material = makeMaterial(
                 for: surface,
@@ -926,11 +956,48 @@ private struct RoomMiniMapView: UIViewRepresentable {
             wrapper.simdTransform = surfaceTransform(surface)
             wrapper.addChildNode(geometryNode)
             modelRoot.addChildNode(wrapper)
+            }
         }
 
         modelRoot.simdTransform = debugModelTransform()
         scene.rootNode.addChildNode(modelRoot)
         return scene
+    }
+
+    private func loadRoomPlanScene() -> SCNScene? {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).usdz")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+        }
+        do {
+            try room.export(to: url, exportOptions: .model)
+            return try SCNScene(url: url, options: [.checkConsistency: true])
+        } catch {
+            return nil
+        }
+    }
+
+    private func addHighlightOverlays(to root: SCNNode) {
+        for surface in surfaces where surface.kind != .ceiling {
+            let box = SCNBox(
+                width: CGFloat(surface.width),
+                height: CGFloat(surface.height),
+                length: 0.012,
+                chamferRadius: 0
+            )
+            let material = SCNMaterial()
+            material.diffuse.contents = UIColor.systemCyan.withAlphaComponent(0.45)
+            material.emission.contents = UIColor.systemCyan.withAlphaComponent(0.55)
+            material.transparency = 0.55
+            material.isDoubleSided = true
+            box.materials = [material]
+            let node = SCNNode(geometry: box)
+            node.name = "Highlight-\(surface.id.uuidString)"
+            node.simdTransform = surfaceTransform(surface)
+            node.isHidden = surface.id != cameraSurfaceID
+            root.addChildNode(node)
+        }
     }
 
     private func update(camera: SCNNode) {
@@ -997,7 +1064,8 @@ private struct RoomMiniMapView: UIViewRepresentable {
         let compensation = (settings.swapPitchYaw ? 90 : 0)
             + (settings.cameraUpReversed ? 180 : 0)
             + settings.cameraRollDeg
-        return yaw + compensation
+        let direction = settings.miniYawReversed ? -1.0 : 1.0
+        return direction * yaw + compensation
     }
 
     private func makeMaterial(

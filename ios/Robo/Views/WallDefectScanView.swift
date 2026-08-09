@@ -58,7 +58,8 @@ struct WallDefectScanView: View {
                                 },
                                 onDiscard: {
                                     dismiss()
-                                }
+                                },
+                                surfaceSourceText: "live \(liveRoom?.walls.count ?? -1) / 最终 \(capturedRoom.walls.count)"
                             )
                         }
                     }

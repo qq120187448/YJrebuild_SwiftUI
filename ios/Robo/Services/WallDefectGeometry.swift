@@ -173,13 +173,13 @@ enum WallDefectGeometry {
             transform.columns.0.z
         ))
         let vDir = simd_normalize(SIMD3<Float>(
-            transform.columns.1.x,
-            transform.columns.1.y,
-            transform.columns.1.z
+            transform.columns.2.x,
+            transform.columns.2.y,
+            transform.columns.2.z
         ))
         let normalDir = SIMD3<Float>(0, 1, 0)
         let width = Double(dimensions.x)
-        let depth = Double(dimensions.y)
+        let depth = Double(dimensions.z)
 
         let origin = center - uDir * Float(width / 2) - vDir * Float(depth / 2)
         let uVec = uDir * Float(width)
@@ -216,13 +216,13 @@ enum WallDefectGeometry {
             floor.transform.columns.0.z
         ))
         let vDir = simd_normalize(SIMD3<Float>(
-            floor.transform.columns.1.x,
-            floor.transform.columns.1.y,
-            floor.transform.columns.1.z
+            floor.transform.columns.2.x,
+            floor.transform.columns.2.y,
+            floor.transform.columns.2.z
         ))
         let up = SIMD3<Float>(0, 1, 0)
         let width = Double(floor.dimensions.x)
-        let depth = Double(floor.dimensions.y)
+        let depth = Double(floor.dimensions.z)
         let elevated = center + up * Float(ceilingHeight)
         let origin = elevated - uDir * Float(width / 2) - vDir * Float(depth / 2)
         let uVec = uDir * Float(width)
