@@ -48,25 +48,25 @@ struct WallDefectModelView: View {
     @State private var debugCaptureResolution =
         CrackRecognitionSettings.load().captureResolution
 
-    @AppStorage("wallDefectDebug2.modelPitchDeg")
+    @AppStorage("wallDefectDebug3.modelPitchDeg")
     private var debugModelPitchDeg = 0.0
-    @AppStorage("wallDefectDebug2.modelYawDeg")
+    @AppStorage("wallDefectDebug3.modelYawDeg")
     private var debugModelYawDeg = 0.0
-    @AppStorage("wallDefectDebug2.modelRollDeg")
+    @AppStorage("wallDefectDebug3.modelRollDeg")
     private var debugModelRollDeg = 0.0
-    @AppStorage("wallDefectDebug2.modelFlipX")
+    @AppStorage("wallDefectDebug3.modelFlipX")
     private var debugModelFlipX = false
-    @AppStorage("wallDefectDebug2.modelFlipY")
+    @AppStorage("wallDefectDebug3.modelFlipY")
     private var debugModelFlipY = false
-    @AppStorage("wallDefectDebug2.modelFlipZ")
+    @AppStorage("wallDefectDebug3.modelFlipZ")
     private var debugModelFlipZ = false
-    @AppStorage("wallDefectDebug2.cameraForwardReversed")
+    @AppStorage("wallDefectDebug3.cameraForwardReversed")
     private var debugCameraForwardReversed = true
-    @AppStorage("wallDefectDebug2.cameraUpReversed")
+    @AppStorage("wallDefectDebug3.cameraUpReversed")
     private var debugCameraUpReversed = false
-    @AppStorage("wallDefectDebug2.cameraRollCompensation")
+    @AppStorage("wallDefectDebug3.cameraRollCompensation")
     private var debugCameraRollDeg = 0.0
-    @AppStorage("wallDefectDebug2.swapPitchYaw")
+    @AppStorage("wallDefectDebug3.swapPitchYaw")
     private var debugSwapPitchYaw = false
 
     private var debugSettings: WallDefectModelDebugSettings {
@@ -211,6 +211,18 @@ struct WallDefectModelView: View {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.orange)
+            }
+            if let transform = cameraModel.cameraTransform {
+                Text(
+                    String(
+                        format: "相机 %.2f, %.2f, %.2f",
+                        transform.columns.3.x,
+                        transform.columns.3.y,
+                        transform.columns.3.z
+                    )
+                )
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.white.opacity(0.55))
             }
 
             ZStack {
@@ -371,7 +383,7 @@ struct WallDefectModelView: View {
 
             HStack(spacing: 8) {
                 debugToggleButton(
-                    title: "前向反向",
+                    title: "mini跟随方向",
                     isOn: debugCameraForwardReversed,
                     onText: "反向",
                     offText: "正向"
@@ -425,7 +437,7 @@ struct WallDefectModelView: View {
             + (debugModelFlipZ ? "Z" : "")
         return "模型旋转 \(Int(debugModelPitchDeg))/\(Int(debugModelYawDeg))/\(Int(debugModelRollDeg))° "
             + "翻转 \(flips.isEmpty ? "无" : flips) | "
-            + "前向 \(debugCameraForwardReversed ? "反" : "正") "
+            + "跟随 \(debugCameraForwardReversed ? "反" : "正") "
             + "上向 \(debugCameraUpReversed ? "反" : "正") "
             + "横滚 \(Int(debugCameraRollDeg))° "
             + "互换 \(debugSwapPitchYaw ? "开" : "关")"

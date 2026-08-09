@@ -332,13 +332,16 @@ enum WallDefectProjection {
         }
 
         func ray(pixel: CGPoint) -> (origin: SIMD3<Double>, direction: SIMD3<Double>) {
+            // portraitIntrinsics() returns K' = [[fy, 0, H-cy], [0, fx, cx], [0,0,1]].
+            // For a portrait pixel (x, y), the camera-space ray is
+            // ((y - cy')/fy', (x - cx')/fx', -1); ARKit camera looks along -Z.
             let fx = Double(intrinsics.columns.0.x)
             let fy = Double(intrinsics.columns.1.y)
             let cx = Double(intrinsics.columns.2.x)
             let cy = Double(intrinsics.columns.2.y)
             let local = SIMD3<Float>(
+                Float((Double(pixel.y) - cy) / fy),
                 Float((Double(pixel.x) - cx) / fx),
-                Float(-(Double(pixel.y) - cy) / fy),
                 -1
             )
             let rotation = simd_float3x3(columns: (
