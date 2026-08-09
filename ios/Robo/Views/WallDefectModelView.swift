@@ -664,6 +664,7 @@ private struct WallDefectARView: UIViewRepresentable {
             }
         }
 
+        @MainActor
         private func updateCameraSurface(
             pose: [Float],
             intrinsics: [Float],

@@ -212,11 +212,11 @@ struct WallDefectScanView: View {
                 onCaptureError: { error in
                     errorMessage = error.localizedDescription
                 },
-                onARSessionReady: { session in
-                    defectARSession = session
-                },
                 onLiveRoomUpdate: { room in
                     liveRoom = room
+                },
+                onARSessionReady: { session in
+                    defectARSession = session
                 },
                 keepARSessionAlive: true
             )
