@@ -13,6 +13,7 @@ struct WallDefectPhotoRecognitionResult {
     let rawDetectionCount: Int
     let skeletonComponentCount: Int
     let projectedComponentCount: Int
+    let pixelLengthReported: Double
 }
 
 struct WallDefectModelDebugSettings: Equatable {
@@ -284,106 +285,6 @@ struct WallDefectModelView: View {
 
             ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 6) {
-            Text("模型初始参数")
-                .font(.caption2.bold())
-                .foregroundStyle(.white.opacity(0.7))
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    debugStepButton(
-                        title: "X旋转",
-                        value: debugModelPitchDeg,
-                        minus: { debugModelPitchDeg -= 45 },
-                        plus: { debugModelPitchDeg += 45 }
-                    )
-                    debugStepButton(
-                        title: "Y旋转",
-                        value: debugModelYawDeg,
-                        minus: { debugModelYawDeg -= 45 },
-                        plus: { debugModelYawDeg += 45 }
-                    )
-                    debugStepButton(
-                        title: "Z旋转",
-                        value: debugModelRollDeg,
-                        minus: { debugModelRollDeg -= 45 },
-                        plus: { debugModelRollDeg += 45 }
-                    )
-                }
-            }
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    debugToggleButton(
-                        title: "X翻转",
-                        isOn: debugModelFlipX,
-                        onText: "反转",
-                        offText: "正常"
-                    ) {
-                        debugModelFlipX.toggle()
-                    }
-                    debugToggleButton(
-                        title: "Y翻转",
-                        isOn: debugModelFlipY,
-                        onText: "反转",
-                        offText: "正常"
-                    ) {
-                        debugModelFlipY.toggle()
-                    }
-                    debugToggleButton(
-                        title: "Z翻转",
-                        isOn: debugModelFlipZ,
-                        onText: "反转",
-                        offText: "正常"
-                    ) {
-                        debugModelFlipZ.toggle()
-                    }
-                }
-            }
-
-            Text("转动方向参数")
-                .font(.caption2.bold())
-                .foregroundStyle(.white.opacity(0.7))
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    debugToggleButton(
-                        title: "前向反向",
-                        isOn: debugCameraForwardReversed,
-                        onText: "反向",
-                        offText: "正向"
-                    ) {
-                        debugCameraForwardReversed.toggle()
-                    }
-                    debugToggleButton(
-                        title: "上向反向",
-                        isOn: debugCameraUpReversed,
-                        onText: "反向",
-                        offText: "正向"
-                    ) {
-                        debugCameraUpReversed.toggle()
-                    }
-                    debugToggleButton(
-                        title: "左右上下互换",
-                        isOn: debugSwapPitchYaw,
-                        onText: "开",
-                        offText: "关"
-                    ) {
-                        debugSwapPitchYaw.toggle()
-                    }
-                }
-            }
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    debugStepButton(
-                        title: "相机横滚",
-                        value: debugCameraRollDeg,
-                        minus: { debugCameraRollDeg -= 45 },
-                        plus: { debugCameraRollDeg += 45 }
-                    )
-                }
-            }
-
             Stepper(
                 "补拍分辨率 \(debugCaptureResolution)",
                 value: $debugCaptureResolution,
@@ -398,9 +299,103 @@ struct WallDefectModelView: View {
                 CrackRecognitionSettings.save(config)
             }
 
+            Text("模型初始参数")
+                .font(.caption2.bold())
+                .foregroundStyle(.white.opacity(0.7))
+
+            VStack(alignment: .leading, spacing: 4) {
+                debugStepButton(
+                    title: "X旋转",
+                    value: debugModelPitchDeg,
+                    minus: { debugModelPitchDeg -= 15 },
+                    plus: { debugModelPitchDeg += 15 }
+                )
+                .frame(maxWidth: .infinity)
+                debugStepButton(
+                    title: "Y旋转",
+                    value: debugModelYawDeg,
+                    minus: { debugModelYawDeg -= 15 },
+                    plus: { debugModelYawDeg += 15 }
+                )
+                .frame(maxWidth: .infinity)
+                debugStepButton(
+                    title: "Z旋转",
+                    value: debugModelRollDeg,
+                    minus: { debugModelRollDeg -= 15 },
+                    plus: { debugModelRollDeg += 15 }
+                )
+                .frame(maxWidth: .infinity)
+            }
+
+            HStack(spacing: 8) {
+                debugToggleButton(
+                    title: "X翻转",
+                    isOn: debugModelFlipX,
+                    onText: "反转",
+                    offText: "正常"
+                ) {
+                    debugModelFlipX.toggle()
+                }
+                debugToggleButton(
+                    title: "Y翻转",
+                    isOn: debugModelFlipY,
+                    onText: "反转",
+                    offText: "正常"
+                ) {
+                    debugModelFlipY.toggle()
+                }
+                debugToggleButton(
+                    title: "Z翻转",
+                    isOn: debugModelFlipZ,
+                    onText: "反转",
+                    offText: "正常"
+                ) {
+                    debugModelFlipZ.toggle()
+                }
+            }
+
+            Text("转动方向参数")
+                .font(.caption2.bold())
+                .foregroundStyle(.white.opacity(0.7))
+
+            HStack(spacing: 8) {
+                debugToggleButton(
+                    title: "前向反向",
+                    isOn: debugCameraForwardReversed,
+                    onText: "反向",
+                    offText: "正向"
+                ) {
+                    debugCameraForwardReversed.toggle()
+                }
+                debugToggleButton(
+                    title: "上向反向",
+                    isOn: debugCameraUpReversed,
+                    onText: "反向",
+                    offText: "正向"
+                ) {
+                    debugCameraUpReversed.toggle()
+                }
+                debugToggleButton(
+                    title: "左右互换",
+                    isOn: debugSwapPitchYaw,
+                    onText: "开",
+                    offText: "关"
+                ) {
+                    debugSwapPitchYaw.toggle()
+                }
+            }
+
+            debugStepButton(
+                title: "相机横滚",
+                value: debugCameraRollDeg,
+                minus: { debugCameraRollDeg -= 15 },
+                plus: { debugCameraRollDeg += 15 }
+            )
+            .frame(maxWidth: .infinity)
+
             }
             }
-            .frame(maxHeight: 170)
+            .frame(maxHeight: 230)
 
             Text(debugParameterSummary)
                 .font(.caption2.monospaced())
@@ -511,9 +506,23 @@ struct WallDefectModelView: View {
             } else if let latestRecognition {
                 let result = latestRecognition.result
                 if result.isEmpty {
-                    Text("未识别到裂缝")
+                    Text(
+                        latestRecognition.rawDetectionCount > 0
+                            ? "未形成有效裂缝"
+                            : "未识别到裂缝"
+                    )
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.7))
+                    if latestRecognition.pixelLengthReported > 0 {
+                        Text(
+                            String(
+                                format: "像素长度 %.0f px",
+                                latestRecognition.pixelLengthReported
+                            )
+                        )
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.orange)
+                    }
                 } else {
                     let longest = result.components
                         .map { $0.lengthM ?? 0 }
@@ -547,13 +556,13 @@ struct WallDefectModelView: View {
                 .foregroundStyle(.white.opacity(0.75))
                 if latestRecognition.rawDetectionCount > 0,
                    latestRecognition.skeletonComponentCount == 0 {
-                    Text("YOLO 检出但骨架被过滤")
+                    Text("YOLO 检出但骨架被过滤，仅显示原始掩码像素")
                         .font(.caption2)
                         .foregroundStyle(.orange)
                 }
                 if latestRecognition.rawDetectionCount > 0,
                    latestRecognition.projectedComponentCount == 0 {
-                    Text("骨架未命中墙面，无长度/AR")
+                    Text("未命中墙面，仅像素长度，无 AR")
                         .font(.caption2)
                         .foregroundStyle(.orange)
                 }
@@ -977,6 +986,7 @@ private struct RoomMiniMapView: UIViewRepresentable {
         guard length > 0.0001 else { return 0 }
         let yaw = Double(atan2(horizontal.x, horizontal.y)) * 180 / .pi
         let compensation = (settings.swapPitchYaw ? 90 : 0)
+            + (settings.cameraUpReversed ? 180 : 0)
             + settings.cameraRollDeg
         return yaw + compensation
     }

@@ -20,6 +20,7 @@ struct CrackRecognitionOutput {
     let rawDetectionCount: Int
     let skeletonComponentCount: Int
     let projectedComponentCount: Int
+    let pixelLengthReported: Double
 }
 
 struct CrackResolutionValidationResult: Identifiable {
@@ -212,6 +213,14 @@ enum CrackRecognitionEngine {
         } else {
             totalMM = nil
         }
+        let pixelLengthReported: Double
+        if skeleton.totalPixelLength > 0 {
+            pixelLengthReported = skeleton.totalPixelLength
+        } else if !sparse.points.isEmpty {
+            pixelLengthReported = Double(sparse.points.count)
+        } else {
+            pixelLengthReported = 0
+        }
 
         let result = CrackRecognitionResult(
             detectedClass: detections.isEmpty ? "无裂缝" : "裂缝",
@@ -235,7 +244,8 @@ enum CrackRecognitionEngine {
             timings: timings,
             rawDetectionCount: detections.count,
             skeletonComponentCount: skeleton.components.count,
-            projectedComponentCount: measurements.components.count
+            projectedComponentCount: measurements.components.count,
+            pixelLengthReported: pixelLengthReported
         )
     }
 

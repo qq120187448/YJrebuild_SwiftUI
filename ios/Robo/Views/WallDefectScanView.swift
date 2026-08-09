@@ -311,9 +311,13 @@ struct WallDefectScanView: View {
                         self.photos[index].crackResult = output.result
                         self.photos[index].annotatedFileName = nil
                         self.photos[index].detectedClass = output.result.detectedClass
-                        self.photos[index].note = output.result.isEmpty
-                            ? "未识别到裂缝"
-                            : "裂缝 \(output.result.components.count) 条 · 总长 \(String(format: "%.3f m", output.result.totalLengthM))"
+                        if output.result.isEmpty {
+                            self.photos[index].note = output.pixelLengthReported > 0
+                                ? "未命中墙面，像素长度 \(Int(output.pixelLengthReported)) px"
+                                : "未识别到裂缝"
+                        } else {
+                            self.photos[index].note = "裂缝 \(output.result.components.count) 条 · 总长 \(String(format: "%.3f m", output.result.totalLengthM))"
+                        }
                         self.latestRecognition = WallDefectPhotoRecognitionResult(
                             result: output.result,
                             annotatedImage: output.annotatedImage,
@@ -321,7 +325,8 @@ struct WallDefectScanView: View {
                             timings: output.timings,
                             rawDetectionCount: output.rawDetectionCount,
                             skeletonComponentCount: output.skeletonComponentCount,
-                            projectedComponentCount: output.projectedComponentCount
+                            projectedComponentCount: output.projectedComponentCount,
+                            pixelLengthReported: output.pixelLengthReported
                         )
                         self.isPhotoAnalyzing = false
                         self.recognitionProgress = ""
