@@ -13,6 +13,7 @@ struct CrackModelValidationView: View {
     @State private var modelStatus = "未检查"
     @State private var timeoutWorkItem: DispatchWorkItem?
     @State private var didTimeout = false
+    @State private var previewImage: UIImage?
 
     private let resolutions = [640, 1280, 1920, 2240, 3200, 4096]
     private var engineConfig: CrackRecognitionConfig {
@@ -116,11 +117,25 @@ struct CrackModelValidationView: View {
                     ForEach(results) { result in
                         HStack(spacing: 12) {
                             if let annotatedImage = result.annotatedImage {
-                                Image(uiImage: annotatedImage)
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: 64, height: 64)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                Button {
+                                    previewImage = annotatedImage
+                                } label: {
+                                    Image(uiImage: annotatedImage)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 64, height: 64)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                        .overlay(
+                                            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                                .font(.caption2)
+                                                .padding(3)
+                                                .background(.black.opacity(0.55))
+                                                .clipShape(Circle())
+                                                .padding(3),
+                                            alignment: .topTrailing
+                                        )
+                                }
+                                .buttonStyle(.plain)
                             } else {
                                 Image(systemName: "photo")
                                     .frame(width: 64, height: 64)
@@ -136,11 +151,13 @@ struct CrackModelValidationView: View {
                                         .font(.caption)
                                         .foregroundStyle(.red)
                                 } else {
-                                    Text("裂缝 \(result.detectionCount) 处")
+                                    Text("YOLO \(result.detectionCount) 处 · 骨架 \(result.skeletonComponentCount) 条")
                                         .font(.subheadline)
                                     Text(
                                         String(
-                                            format: "置信度 %.2f · 掩码 %d px",
+                                            format: "像素总长 %.0f px · 最长 %.0f px · 置信度 %.2f · 掩码 %d px",
+                                            result.totalPixelLength,
+                                            result.longestPixelLength,
                                             result.confidence,
                                             result.maskPixelCount
                                         )
@@ -157,6 +174,14 @@ struct CrackModelValidationView: View {
         }
         .navigationTitle("模型分辨率验证")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: Binding(
+            get: { previewImage != nil },
+            set: { if !$0 { previewImage = nil } }
+        )) {
+            if let previewImage {
+                ZoomableImageView(image: previewImage)
+            }
+        }
     }
 
     private func loadPhoto(from item: PhotosPickerItem?) {
@@ -226,6 +251,54 @@ struct CrackModelValidationView: View {
                 self.didTimeout = false
                 self.isWorking = false
                 self.timeoutWorkItem?.cancel()
+            }
+        }
+    }
+}
+
+private struct ZoomableImageView: View {
+    let image: UIImage
+    @Environment(\.dismiss) private var dismiss
+    @State private var scale: CGFloat = 1
+    @State private var lastScale: CGFloat = 1
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black
+                .ignoresSafeArea()
+
+            GeometryReader { geometry in
+                ScrollView([.horizontal, .vertical]) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(
+                            width: geometry.size.width * scale,
+                            height: geometry.size.height * scale
+                        )
+                        .gesture(
+                            MagnificationGesture()
+                                .onChanged { value in
+                                    scale = max(1, lastScale * value)
+                                }
+                                .onEnded { _ in
+                                    lastScale = scale
+                                }
+                        )
+                        .frame(
+                            width: geometry.size.width,
+                            height: geometry.size.height
+                        )
+                }
+            }
+
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.white)
+                    .padding(12)
             }
         }
     }

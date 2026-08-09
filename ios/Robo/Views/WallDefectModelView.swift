@@ -10,6 +10,9 @@ struct WallDefectPhotoRecognitionResult {
     let annotatedImage: UIImage?
     let arSkeleton: [CrackSkeleton3DPoint]
     let timings: [String: Double]
+    let rawDetectionCount: Int
+    let skeletonComponentCount: Int
+    let projectedComponentCount: Int
 }
 
 struct WallDefectModelDebugSettings: Equatable {
@@ -41,6 +44,8 @@ struct WallDefectModelView: View {
     @State private var showSaveConfirm = false
     @State private var cameraViewSize = CGSize.zero
     @State private var showDebugPanel = false
+    @State private var debugCaptureResolution =
+        CrackRecognitionSettings.load().captureResolution
 
     @AppStorage("wallDefectDebug.modelPitchDeg")
     private var debugModelPitchDeg = 0.0
@@ -379,6 +384,20 @@ struct WallDefectModelView: View {
                 }
             }
 
+            Stepper(
+                "补拍分辨率 \(debugCaptureResolution)",
+                value: $debugCaptureResolution,
+                in: 512...2048,
+                step: 128
+            )
+            .font(.caption2)
+            .foregroundStyle(.white)
+            .onChange(of: debugCaptureResolution) { _, newValue in
+                var config = CrackRecognitionSettings.load()
+                config.captureResolution = newValue
+                CrackRecognitionSettings.save(config)
+            }
+
             }
             }
             .frame(maxHeight: 170)
@@ -520,6 +539,23 @@ struct WallDefectModelView: View {
                             value: String(format: "%.2fs", total)
                         )
                     }
+                }
+                Text(
+                    "YOLO \(latestRecognition.rawDetectionCount)处 · 骨架 \(latestRecognition.skeletonComponentCount)条 · 墙面投影 \(latestRecognition.projectedComponentCount)条"
+                )
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.white.opacity(0.75))
+                if latestRecognition.rawDetectionCount > 0,
+                   latestRecognition.skeletonComponentCount == 0 {
+                    Text("YOLO 检出但骨架被过滤")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+                if latestRecognition.rawDetectionCount > 0,
+                   latestRecognition.projectedComponentCount == 0 {
+                    Text("骨架未命中墙面，无长度/AR")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
                 }
             } else {
                 Text("尚未识别")

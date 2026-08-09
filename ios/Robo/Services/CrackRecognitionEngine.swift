@@ -17,16 +17,46 @@ struct CrackRecognitionOutput {
     let annotatedImage: UIImage?
     let arSkeleton: [CrackSkeleton3DPoint]
     let timings: [String: Double]
+    let rawDetectionCount: Int
+    let skeletonComponentCount: Int
+    let projectedComponentCount: Int
 }
 
 struct CrackResolutionValidationResult: Identifiable {
     let id: Int
     let resolution: Int
     let detectionCount: Int
+    let skeletonComponentCount: Int
+    let totalPixelLength: Double
+    let longestPixelLength: Double
     let confidence: Double
     let maskPixelCount: Int
     let annotatedImage: UIImage?
     let errorMessage: String?
+
+    init(
+        id: Int,
+        resolution: Int,
+        detectionCount: Int,
+        skeletonComponentCount: Int,
+        totalPixelLength: Double,
+        longestPixelLength: Double,
+        confidence: Double,
+        maskPixelCount: Int,
+        annotatedImage: UIImage?,
+        errorMessage: String?
+    ) {
+        self.id = id
+        self.resolution = resolution
+        self.detectionCount = detectionCount
+        self.skeletonComponentCount = skeletonComponentCount
+        self.totalPixelLength = totalPixelLength
+        self.longestPixelLength = longestPixelLength
+        self.confidence = confidence
+        self.maskPixelCount = maskPixelCount
+        self.annotatedImage = annotatedImage
+        self.errorMessage = errorMessage
+    }
 }
 
 private struct LetterboxTransform {
@@ -202,7 +232,10 @@ enum CrackRecognitionEngine {
             result: result,
             annotatedImage: nil,
             arSkeleton: measurements.arPoints,
-            timings: timings
+            timings: timings,
+            rawDetectionCount: detections.count,
+            skeletonComponentCount: skeleton.components.count,
+            projectedComponentCount: measurements.components.count
         )
     }
 
@@ -230,6 +263,9 @@ enum CrackRecognitionEngine {
                     id: index,
                     resolution: resolution,
                     detectionCount: 0,
+                    skeletonComponentCount: 0,
+                    totalPixelLength: 0,
+                    longestPixelLength: 0,
                     confidence: 0,
                     maskPixelCount: 0,
                     annotatedImage: nil,
@@ -244,8 +280,8 @@ enum CrackRecognitionEngine {
 
         let model: LoadedModel
         do {
-            progress?("正在加载 crack_seg_n 模型", [])
-            model = try loadModel(named: "crack_seg_n", config: config)
+            progress?("正在加载 \(config.modelSize) 模型", [])
+            model = try loadModel(size: config.modelSize, config: config)
             progress?("模型加载成功，等待推理", [])
         } catch {
             let errorMessage = error.localizedDescription
@@ -254,6 +290,9 @@ enum CrackRecognitionEngine {
                     id: index,
                     resolution: resolution,
                     detectionCount: 0,
+                    skeletonComponentCount: 0,
+                    totalPixelLength: 0,
+                    longestPixelLength: 0,
                     confidence: 0,
                     maskPixelCount: 0,
                     annotatedImage: nil,
@@ -298,10 +337,23 @@ enum CrackRecognitionEngine {
                     width: canvasWidth,
                     height: canvasHeight
                 )
+                let sparse = sparseMaskPoints(
+                    detections: detections,
+                    width: canvasWidth,
+                    height: canvasHeight
+                )
+                let skeleton = CrackSkeleton.analyzeSparse(
+                    points: sparse.points,
+                    spacing: sparse.spacing,
+                    width: canvasWidth,
+                    height: canvasHeight,
+                    config: config
+                )
                 let annotated = annotatedImageWithBoxes(
                     from: UIImage(cgImage: canvas),
                     mask: mask,
                     boxes: detections.map(\.box),
+                    skeletonPoints: skeleton.skeletonPoints,
                     width: canvasWidth,
                     height: canvasHeight
                 )
@@ -309,9 +361,12 @@ enum CrackRecognitionEngine {
                     id: index,
                     resolution: resolution,
                     detectionCount: detections.count,
+                    skeletonComponentCount: skeleton.components.count,
+                    totalPixelLength: skeleton.totalPixelLength,
+                    longestPixelLength: skeleton.longestPixelLength,
                     confidence: Double(detections.map(\.score).max() ?? 0),
                     maskPixelCount: mask.filter { $0 }.count,
-                    annotatedImage: resizedUIImage(annotated, maxSide: 480),
+                    annotatedImage: resizedUIImage(annotated, maxSide: 1600),
                     errorMessage: nil
                 )
                 results.append(result)
@@ -321,6 +376,9 @@ enum CrackRecognitionEngine {
                     id: index,
                     resolution: resolution,
                     detectionCount: 0,
+                    skeletonComponentCount: 0,
+                    totalPixelLength: 0,
+                    longestPixelLength: 0,
                     confidence: 0,
                     maskPixelCount: 0,
                     annotatedImage: nil,
@@ -1272,6 +1330,7 @@ enum CrackRecognitionEngine {
         from image: UIImage,
         mask: [Bool],
         boxes: [CGRect],
+        skeletonPoints: Set<CrackPoint>,
         width: Int,
         height: Int
     ) -> UIImage {
@@ -1293,6 +1352,19 @@ enum CrackRecognitionEngine {
                 rendererContext.cgContext.setLineWidth(2)
                 for box in boxes {
                     rendererContext.cgContext.stroke(box)
+                }
+                rendererContext.cgContext.setFillColor(
+                    UIColor.systemGreen.cgColor
+                )
+                for point in skeletonPoints {
+                    rendererContext.cgContext.fill(
+                        CGRect(
+                            x: point.x,
+                            y: point.y,
+                            width: 2,
+                            height: 2
+                        )
+                    )
                 }
             }
     }

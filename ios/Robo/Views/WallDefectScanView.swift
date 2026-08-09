@@ -318,7 +318,10 @@ struct WallDefectScanView: View {
                             result: output.result,
                             annotatedImage: output.annotatedImage,
                             arSkeleton: output.arSkeleton,
-                            timings: output.timings
+                            timings: output.timings,
+                            rawDetectionCount: output.rawDetectionCount,
+                            skeletonComponentCount: output.skeletonComponentCount,
+                            projectedComponentCount: output.projectedComponentCount
                         )
                         self.isPhotoAnalyzing = false
                         self.recognitionProgress = ""
