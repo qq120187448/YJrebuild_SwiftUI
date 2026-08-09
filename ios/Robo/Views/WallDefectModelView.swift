@@ -1,4 +1,5 @@
 import ARKit
+import CoreVideo
 import RoomPlan
 import SceneKit
 import simd
@@ -37,7 +38,7 @@ struct WallDefectModelView: View {
     let latestRecognition: WallDefectPhotoRecognitionResult?
     let isRecognizing: Bool
     let progressMessage: String
-    let onPhoto: ([WallDefectSurfaceAssociation], DefectCameraCapture) -> Void
+    let onPhoto: ([WallDefectSurfaceAssociation], DefectCameraCapture, [WallDefectSurface]) -> Void
     let onSave: () -> Void
     let onDiscard: () -> Void
     var surfaceSourceText: String = ""
@@ -234,6 +235,21 @@ struct WallDefectModelView: View {
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.white.opacity(0.5))
             }
+            if let yaw = cameraModel.alignmentYawDeg {
+                Text(
+                    String(
+                        format: "自动对齐 %.0f° · 采样 %d",
+                        yaw,
+                        cameraModel.alignmentSampleCount
+                    )
+                )
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.white.opacity(0.6))
+            } else if cameraModel.alignmentSampleCount > 0 {
+                Text("自动对齐中 · 采样 \(cameraModel.alignmentSampleCount)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.6))
+            }
 
             ZStack {
                 HStack {
@@ -274,13 +290,16 @@ struct WallDefectModelView: View {
                         outputSide: CGFloat(config.captureResolution),
                         centerRatio: captureCenterRatio
                     ) else { return }
+                    let activeSurfaces = cameraModel.alignedSurfaces.isEmpty
+                        ? surfaces
+                        : cameraModel.alignedSurfaces
                     let associations = WallDefectProjection.associations(
                         pose: capture.pose,
                         intrinsics: capture.intrinsics,
                         imageSize: capture.image.size,
-                        surfaces: surfaces
+                        surfaces: activeSurfaces
                     )
-                    onPhoto(associations, capture)
+                    onPhoto(associations, capture, activeSurfaces)
                 } label: {
                     ZStack {
                         Circle()
@@ -314,6 +333,11 @@ struct WallDefectModelView: View {
                 }
                 .font(.caption.bold())
                 .foregroundStyle(.orange)
+                Button("重新对齐") {
+                    cameraModel.requestRealignment()
+                }
+                .font(.caption.bold())
+                .foregroundStyle(.cyan)
             }
 
             ScrollView(.vertical, showsIndicators: false) {
@@ -638,6 +662,7 @@ private struct WallDefectARView: UIViewRepresentable {
         view.session = arSession
         view.session.delegate = context.coordinator
         view.automaticallyUpdatesLighting = true
+        context.coordinator.sceneView = view
         return view
     }
 
@@ -664,8 +689,13 @@ private struct WallDefectARView: UIViewRepresentable {
         let surfaces: [WallDefectSurface]
         let cameraModel: DefectCameraModel
         var cameraSurfaceID: Binding<UUID?>
+        weak var sceneView: ARSCNView?
         private let skeletonNodeName = "CrackARSkeleton"
         private var lastSkeletonHash = Int.min
+        private var alignmentSamples: [WallDefectAligner.Sample] = []
+        private var lastAlignmentSampleTime: TimeInterval = 0
+        private var lastAlignmentRunTime: TimeInterval = 0
+        private var lastRealignmentCount = 0
 
         init(
             surfaces: [WallDefectSurface],
@@ -696,6 +726,11 @@ private struct WallDefectARView: UIViewRepresentable {
                     intrinsics: intrinsics,
                     imageSize: imageSize
                 )
+                self.collectAlignmentSample(
+                    frame: frame,
+                    view: self.sceneView,
+                    timestamp: frame.timestamp
+                )
             }
         }
 
@@ -705,18 +740,21 @@ private struct WallDefectARView: UIViewRepresentable {
             intrinsics: [Float],
             imageSize: CGSize
         ) {
+            let activeSurfaces = cameraModel.alignedSurfaces.isEmpty
+                ? surfaces
+                : cameraModel.alignedSurfaces
             let associations = WallDefectProjection.associations(
                 pose: pose,
                 intrinsics: intrinsics,
                 imageSize: imageSize,
-                surfaces: surfaces
+                surfaces: activeSurfaces
             )
             let nextID = associations.first?.surfaceID
             if cameraSurfaceID.wrappedValue != nextID {
                 cameraSurfaceID.wrappedValue = nextID
             }
             if let primary = associations.first,
-               let surface = surfaces.first(
+               let surface = activeSurfaces.first(
                    where: { $0.id == primary.surfaceID }
                ) {
                 cameraModel.updateSurfaceDiagnostics(
@@ -754,6 +792,176 @@ private struct WallDefectARView: UIViewRepresentable {
             return Float(
                 abs(simd_dot(cameraPosition - origin, unitNormal))
             )
+        }
+
+        @MainActor
+        private func collectAlignmentSample(
+            frame: ARFrame,
+            view: ARSCNView?,
+            timestamp: TimeInterval
+        ) {
+            guard let view, timestamp - lastAlignmentSampleTime > 0.35 else { return }
+            guard let sample = depthAlignmentSample(frame: frame, view: view)
+                ?? raycastAlignmentSample(frame: frame, view: view) else {
+                return
+            }
+            alignmentSamples.append(sample)
+            lastAlignmentSampleTime = timestamp
+            if alignmentSamples.count > 400 {
+                alignmentSamples.removeFirst(alignmentSamples.count - 400)
+            }
+            cameraModel.updateAlignmentSampleCount(alignmentSamples.count)
+
+            let shouldRun = timestamp - lastAlignmentRunTime > 1.5
+                || cameraModel.realignmentRequestedCount != lastRealignmentCount
+            guard shouldRun, alignmentSamples.count >= 5 else { return }
+            lastRealignmentCount = cameraModel.realignmentRequestedCount
+            lastAlignmentRunTime = timestamp
+            guard let transform = WallDefectAligner.estimateRoomToWorld(
+                samples: alignmentSamples,
+                surfaces: surfaces
+            ) else { return }
+            let aligned = WallDefectAligner.applyRoomToWorld(transform, to: surfaces)
+            cameraModel.updateAlignedSurfaces(aligned, transform: transform)
+        }
+
+        private func depthAlignmentSample(
+            frame: ARFrame,
+            view: ARSCNView
+        ) -> WallDefectAligner.Sample? {
+            guard let depthMap = frame.smoothedSceneDepth?.depthMap
+                ?? frame.sceneDepth?.depthMap else {
+                return nil
+            }
+            let viewport = view.bounds.size
+            guard viewport.width > 0, viewport.height > 0 else { return nil }
+            let transform = frame.displayTransform(
+                for: UIInterfaceOrientation.portrait,
+                viewportSize: viewport
+            )
+            let screenPoint = CGPoint(
+                x: viewport.width * 0.5,
+                y: viewport.height * 0.5
+            )
+            let imagePoint = screenPoint.applying(transform.inverted())
+            let width = CVPixelBufferGetWidth(depthMap)
+            let height = CVPixelBufferGetHeight(depthMap)
+            let x = Int(imagePoint.x * CGFloat(width))
+            let y = Int(imagePoint.y * CGFloat(height))
+            guard x >= 4, y >= 4, x < width - 4, y < height - 4 else { return nil }
+            guard let center = depthWorldPoint(
+                frame: frame,
+                depthMap: depthMap,
+                x: x,
+                y: y
+            ), let px = depthWorldPoint(
+                frame: frame,
+                depthMap: depthMap,
+                x: x + 4,
+                y: y
+            ), let py = depthWorldPoint(
+                frame: frame,
+                depthMap: depthMap,
+                x: x,
+                y: y + 4
+            ) else {
+                return nil
+            }
+            let tangentX = px - center
+            let tangentY = py - center
+            guard simd_length(tangentX) > 0.002,
+                  simd_length(tangentY) > 0.002 else {
+                return nil
+            }
+            var normal = simd_normalize(simd_cross(tangentY, tangentX))
+            let cameraPosition = SIMD3<Float>(
+                frame.camera.transform.columns.3.x,
+                frame.camera.transform.columns.3.y,
+                frame.camera.transform.columns.3.z
+            )
+            if simd_dot(normal, cameraPosition - center) < 0 {
+                normal = -normal
+            }
+            return WallDefectAligner.Sample(position: center, normal: normal)
+        }
+
+        private func depthWorldPoint(
+            frame: ARFrame,
+            depthMap: CVPixelBuffer,
+            x: Int,
+            y: Int
+        ) -> SIMD3<Float>? {
+            CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+            guard let base = CVPixelBufferGetBaseAddress(depthMap) else { return nil }
+            let bytesPerRow = CVPixelBufferGetBytesPerRow(depthMap)
+            let pointer = base
+                .advanced(by: y * bytesPerRow + x * MemoryLayout<Float32>.size)
+                .assumingMemoryBound(to: Float32.self)
+            let depthValue = pointer.pointee
+            guard depthValue.isFinite, depthValue > 0.05, depthValue < 8 else { return nil }
+
+            let intrinsics = frame.camera.intrinsics
+            let fx = intrinsics.columns.0.x
+            let fy = intrinsics.columns.1.y
+            let cx = intrinsics.columns.2.x
+            let cy = intrinsics.columns.2.y
+            let imageWidth = Float(frame.camera.imageResolution.width)
+            let imageHeight = Float(frame.camera.imageResolution.height)
+            let depthWidth = Float(CVPixelBufferGetWidth(depthMap))
+            let depthHeight = Float(CVPixelBufferGetHeight(depthMap))
+            let u = Float(x) * imageWidth / depthWidth
+            let v = Float(y) * imageHeight / depthHeight
+            let local = SIMD3<Float>(
+                (u - cx) / fx * depthValue,
+                -(v - cy) / fy * depthValue,
+                -depthValue
+            )
+            let world = frame.camera.transform * SIMD4<Float>(
+                local.x,
+                local.y,
+                local.z,
+                1
+            )
+            return SIMD3<Float>(world.x, world.y, world.z)
+        }
+
+        private func raycastAlignmentSample(
+            frame: ARFrame,
+            view: ARSCNView
+        ) -> WallDefectAligner.Sample? {
+            let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+            let targets: [ARRaycastQuery.Target] = [
+                .existingPlaneGeometry,
+                .estimatedPlane
+            ]
+            for target in targets {
+                guard let query = view.raycastQuery(
+                    from: center,
+                    allowing: target,
+                    alignment: .any
+                ), let result = view.session.raycast(query).first else {
+                    continue
+                }
+                let position = SIMD3<Float>(
+                    result.worldTransform.columns.3.x,
+                    result.worldTransform.columns.3.y,
+                    result.worldTransform.columns.3.z
+                )
+                let direction = simd_normalize(query.direction)
+                let normal: SIMD3<Float>
+                if result.targetAlignment == .horizontal {
+                    normal = direction.y > 0
+                        ? SIMD3<Float>(0, -1, 0)
+                        : SIMD3<Float>(0, 1, 0)
+                } else {
+                    normal = simd_normalize(
+                        SIMD3<Float>(-direction.x, 0, -direction.z)
+                    )
+                }
+                return WallDefectAligner.Sample(position: position, normal: normal)
+            }
+            return nil
         }
 
         func updateARSkeleton(

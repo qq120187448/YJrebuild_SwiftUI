@@ -26,6 +26,10 @@ final class DefectCameraModel: ObservableObject {
     @Published var hitSurfaceLabel: String?
     @Published var hitSurfaceDistanceM: Float?
     @Published var hitSurfaceCoverage: Double?
+    @Published var alignedSurfaces: [WallDefectSurface] = []
+    @Published var alignmentYawDeg: Double?
+    @Published var alignmentSampleCount = 0
+    @Published var realignmentRequestedCount = 0
 
     private let ciContext = CIContext()
 
@@ -42,6 +46,22 @@ final class DefectCameraModel: ObservableObject {
         hitSurfaceLabel = label
         hitSurfaceDistanceM = distanceM
         hitSurfaceCoverage = coverage
+    }
+
+    func updateAlignmentSampleCount(_ count: Int) {
+        alignmentSampleCount = count
+    }
+
+    func updateAlignedSurfaces(
+        _ surfaces: [WallDefectSurface],
+        transform: simd_float4x4
+    ) {
+        alignedSurfaces = surfaces
+        alignmentYawDeg = WallDefectAligner.yawDegrees(from: transform)
+    }
+
+    func requestRealignment() {
+        realignmentRequestedCount += 1
     }
 
     func poseArray() -> [Float]? {

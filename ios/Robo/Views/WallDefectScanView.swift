@@ -50,8 +50,12 @@ struct WallDefectScanView: View {
                                 latestRecognition: latestRecognition,
                                 isRecognizing: isPhotoAnalyzing,
                                 progressMessage: recognitionProgress,
-                                onPhoto: { associations, capture in
-                                    handlePhoto(associations: associations, capture: capture)
+                                onPhoto: { associations, capture, alignedSurfaces in
+                                    handlePhoto(
+                                        associations: associations,
+                                        capture: capture,
+                                        alignedSurfaces: alignedSurfaces
+                                    )
                                 },
                                 onSave: {
                                     saveDocument()
@@ -255,7 +259,8 @@ struct WallDefectScanView: View {
 
     private func handlePhoto(
         associations: [WallDefectSurfaceAssociation],
-        capture: DefectCameraCapture
+        capture: DefectCameraCapture,
+        alignedSurfaces: [WallDefectSurface]
     ) {
         let primary = associations.first
             ?? WallDefectSurfaceAssociation(
@@ -291,7 +296,7 @@ struct WallDefectScanView: View {
             photos.append(photo)
 
             let config = CrackRecognitionSettings.load()
-            let capturedSurfaces = hitSurfaces
+            let capturedSurfaces = alignedSurfaces.isEmpty ? hitSurfaces : alignedSurfaces
             let capturedImage = capture.image
             let capturedPose = capture.pose
             let capturedIntrinsics = capture.intrinsics

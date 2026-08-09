@@ -69,6 +69,7 @@ targets:
       - path: Robo/Services/WallDefectStore.swift
       - path: Robo/Services/WallDefectARSessionStore.swift
       - path: Robo/Services/WallDefectProjection.swift
+      - path: Robo/Services/WallDefectAligner.swift
       - path: Robo/Services/CrackRecognitionSettings.swift
       - path: Robo/Services/CrackSkeleton.swift
       - path: Robo/Services/CrackYOLODecoder.swift
