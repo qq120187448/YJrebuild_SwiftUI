@@ -25,7 +25,7 @@ struct WallDefectModelDebugSettings: Equatable {
     var modelFlipZ = false
     var cameraForwardReversed = true
     var cameraUpReversed = false
-    var cameraRollDeg: Double = 90
+    var cameraRollDeg: Double = 0
     var swapPitchYaw = false
 }
 
@@ -48,25 +48,25 @@ struct WallDefectModelView: View {
     @State private var debugCaptureResolution =
         CrackRecognitionSettings.load().captureResolution
 
-    @AppStorage("wallDefectDebug.modelPitchDeg")
+    @AppStorage("wallDefectDebug2.modelPitchDeg")
     private var debugModelPitchDeg = 0.0
-    @AppStorage("wallDefectDebug.modelYawDeg")
+    @AppStorage("wallDefectDebug2.modelYawDeg")
     private var debugModelYawDeg = 0.0
-    @AppStorage("wallDefectDebug.modelRollDeg")
+    @AppStorage("wallDefectDebug2.modelRollDeg")
     private var debugModelRollDeg = 0.0
-    @AppStorage("wallDefectDebug.modelFlipX")
+    @AppStorage("wallDefectDebug2.modelFlipX")
     private var debugModelFlipX = false
-    @AppStorage("wallDefectDebug.modelFlipY")
+    @AppStorage("wallDefectDebug2.modelFlipY")
     private var debugModelFlipY = false
-    @AppStorage("wallDefectDebug.modelFlipZ")
+    @AppStorage("wallDefectDebug2.modelFlipZ")
     private var debugModelFlipZ = false
-    @AppStorage("wallDefectDebug.cameraForwardReversed")
+    @AppStorage("wallDefectDebug2.cameraForwardReversed")
     private var debugCameraForwardReversed = true
-    @AppStorage("wallDefectDebug.cameraUpReversed")
+    @AppStorage("wallDefectDebug2.cameraUpReversed")
     private var debugCameraUpReversed = false
-    @AppStorage("wallDefectDebug.cameraRollCompensation")
-    private var debugCameraRollDeg = 90.0
-    @AppStorage("wallDefectDebug.swapPitchYaw")
+    @AppStorage("wallDefectDebug2.cameraRollCompensation")
+    private var debugCameraRollDeg = 0.0
+    @AppStorage("wallDefectDebug2.swapPitchYaw")
     private var debugSwapPitchYaw = false
 
     private var debugSettings: WallDefectModelDebugSettings {
@@ -184,7 +184,18 @@ struct WallDefectModelView: View {
     private var bottomBar: some View {
         VStack(spacing: 10) {
             if let cameraSurface {
-                Text("当前目标：\(cameraSurface.label)")
+                let distance = cameraModel.hitSurfaceDistanceM ?? 0
+                let coverage = Int(
+                    (cameraModel.hitSurfaceCoverage ?? 0) * 100
+                )
+                Text(
+                    String(
+                        format: "当前目标：%@ · 距离 %.2f m · 覆盖 %d%%",
+                        cameraSurface.label,
+                        distance,
+                        coverage
+                    )
+                )
                     .font(.caption.bold())
                     .foregroundStyle(.white)
             } else if isRecognizing {
@@ -429,7 +440,7 @@ struct WallDefectModelView: View {
         debugModelFlipZ = false
         debugCameraForwardReversed = true
         debugCameraUpReversed = false
-        debugCameraRollDeg = 90
+        debugCameraRollDeg = 0
         debugSwapPitchYaw = false
     }
 
@@ -592,16 +603,6 @@ private struct WallDefectARView: UIViewRepresentable {
         view.session = arSession
         view.session.delegate = context.coordinator
         view.automaticallyUpdatesLighting = true
-
-        let configuration = ARWorldTrackingConfiguration()
-        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
-            configuration.frameSemantics.insert(.sceneDepth)
-        }
-        if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
-            configuration.frameSemantics.insert(.smoothedSceneDepth)
-        }
-        arSession.run(configuration, options: [])
-
         return view
     }
 
@@ -678,6 +679,45 @@ private struct WallDefectARView: UIViewRepresentable {
             if cameraSurfaceID.wrappedValue != nextID {
                 cameraSurfaceID.wrappedValue = nextID
             }
+            if let primary = associations.first,
+               let surface = surfaces.first(
+                   where: { $0.id == primary.surfaceID }
+               ) {
+                cameraModel.updateSurfaceDiagnostics(
+                    label: primary.label ?? surface.label,
+                    distanceM: distanceToSurface(
+                        surface,
+                        cameraPose: pose
+                    ),
+                    coverage: primary.coverageRatio
+                )
+            } else {
+                cameraModel.updateSurfaceDiagnostics(
+                    label: nil,
+                    distanceM: nil,
+                    coverage: nil
+                )
+            }
+        }
+
+        private func distanceToSurface(
+            _ surface: WallDefectSurface,
+            cameraPose: [Float]
+        ) -> Float? {
+            guard cameraPose.count == 16 else { return nil }
+            let origin = WallDefectGeometry.planeOrigin(for: surface)
+            let normal = WallDefectGeometry.planeNormal(for: surface)
+            let length = simd_length(normal)
+            guard length > 0.0001 else { return nil }
+            let unitNormal = normal / Double(length)
+            let cameraPosition = SIMD3<Double>(
+                Double(cameraPose[12]),
+                Double(cameraPose[13]),
+                Double(cameraPose[14])
+            )
+            return Float(
+                abs(simd_dot(cameraPosition - origin, unitNormal))
+            )
         }
 
         func updateARSkeleton(
@@ -825,103 +865,59 @@ private struct RoomMiniMapView: UIViewRepresentable {
         let modelRoot = SCNNode()
         modelRoot.name = "DebugModelRoot"
 
-        if let roomPlanScene = loadRoomPlanScene() {
-            for child in roomPlanScene.rootNode.childNodes {
-                child.removeFromParentNode()
-                modelRoot.addChildNode(child)
-            }
-            addHighlightOverlays(to: modelRoot)
-        } else {
-            for surface in surfaces {
-                guard surface.kind != .ceiling else { continue }
-                let material = makeMaterial(
-                    for: surface,
-                    isIncomplete: incompleteWallIDs.contains(surface.id),
-                    isHighlighted: surface.id == cameraSurfaceID
+        for surface in surfaces {
+            guard surface.kind != .ceiling else { continue }
+            let material = makeMaterial(
+                for: surface,
+                isIncomplete: incompleteWallIDs.contains(surface.id),
+                isHighlighted: surface.id == cameraSurfaceID
+            )
+            let geometry: SCNGeometry
+            if surface.kind == .wall {
+                let wallRect = CGRect(
+                    x: 0,
+                    y: 0,
+                    width: CGFloat(surface.width),
+                    height: CGFloat(surface.height)
                 )
-                let geometry: SCNGeometry
-                if surface.kind == .wall {
-                    let wallRect = CGRect(
-                        x: 0,
-                        y: 0,
-                        width: CGFloat(surface.width),
-                        height: CGFloat(surface.height)
-                    )
-                    let path = UIBezierPath(rect: wallRect)
-                    path.usesEvenOddFillRule = true
-                    for rect in openingRects(for: surface.id) {
-                        let inner = UIBezierPath(rect: rect)
-                        inner.usesEvenOddFillRule = true
-                        path.append(inner)
-                    }
-                    let shape = SCNShape(
-                        path: path,
-                        extrusionDepth: 0.03
-                    )
-                    shape.materials = [material]
-                    geometry = shape
-                } else {
-                    let box = SCNBox(
-                        width: CGFloat(surface.width),
-                        height: CGFloat(surface.height),
-                        length: 0.03,
-                        chamferRadius: 0
-                    )
-                    box.materials = [material]
-                    geometry = box
+                let path = UIBezierPath(rect: wallRect)
+                path.usesEvenOddFillRule = true
+                for rect in openingRects(for: surface.id) {
+                    let inner = UIBezierPath(rect: rect)
+                    inner.usesEvenOddFillRule = true
+                    path.append(inner)
                 }
-                let geometryNode = SCNNode(geometry: geometry)
-                geometryNode.name = surface.id.uuidString
-                if surface.kind == .wall {
-                    geometryNode.simdPosition = SIMD3<Float>(0, 0, -0.015)
-                }
-                let wrapper = SCNNode()
-                wrapper.name = "SurfaceNode-\(surface.id.uuidString)"
-                wrapper.simdTransform = surfaceTransform(surface)
-                wrapper.addChildNode(geometryNode)
-                modelRoot.addChildNode(wrapper)
+                let shape = SCNShape(
+                    path: path,
+                    extrusionDepth: 0.03
+                )
+                shape.materials = [material]
+                geometry = shape
+            } else {
+                let box = SCNBox(
+                    width: CGFloat(surface.width),
+                    height: CGFloat(surface.height),
+                    length: 0.03,
+                    chamferRadius: 0
+                )
+                box.materials = [material]
+                geometry = box
             }
+            let geometryNode = SCNNode(geometry: geometry)
+            geometryNode.name = surface.id.uuidString
+            if surface.kind == .wall {
+                geometryNode.simdPosition = SIMD3<Float>(0, 0, -0.015)
+            }
+            let wrapper = SCNNode()
+            wrapper.name = "SurfaceNode-\(surface.id.uuidString)"
+            wrapper.simdTransform = surfaceTransform(surface)
+            wrapper.addChildNode(geometryNode)
+            modelRoot.addChildNode(wrapper)
         }
 
         modelRoot.simdTransform = debugModelTransform()
         scene.rootNode.addChildNode(modelRoot)
         return scene
-    }
-
-    private func loadRoomPlanScene() -> SCNScene? {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(UUID().uuidString).usdz")
-        defer {
-            try? FileManager.default.removeItem(at: url)
-        }
-        do {
-            try room.export(to: url, exportOptions: .model)
-            return try SCNScene(url: url, options: [.checkConsistency: true])
-        } catch {
-            return nil
-        }
-    }
-
-    private func addHighlightOverlays(to root: SCNNode) {
-        for surface in surfaces where surface.kind != .ceiling {
-            let box = SCNBox(
-                width: CGFloat(surface.width),
-                height: CGFloat(surface.height),
-                length: 0.012,
-                chamferRadius: 0
-            )
-            let material = SCNMaterial()
-            material.diffuse.contents = UIColor.systemCyan.withAlphaComponent(0.45)
-            material.emission.contents = UIColor.systemCyan.withAlphaComponent(0.55)
-            material.transparency = 0.55
-            material.isDoubleSided = true
-            box.materials = [material]
-            let node = SCNNode(geometry: box)
-            node.name = "Highlight-\(surface.id.uuidString)"
-            node.simdTransform = surfaceTransform(surface)
-            node.isHidden = surface.id != cameraSurfaceID
-            root.addChildNode(node)
-        }
     }
 
     private func update(camera: SCNNode) {

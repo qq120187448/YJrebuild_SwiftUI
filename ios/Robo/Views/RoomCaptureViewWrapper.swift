@@ -13,6 +13,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
     var onComponentCaptured: (UIImage, String, String) -> Void = { _, _, _ in }
     var onStatusUpdate: (Int, Int) -> Void = { _, _ in }
     var onPendingUpdate: ([String]) -> Void = { _ in }
+    var onLiveRoomUpdate: ((CapturedRoom) -> Void) = { _ in }
     var initialWorldMap: ARWorldMap? = nil
     var onARSessionReady: ((ARSession) -> Void)? = { _ in }
     var keepARSessionAlive = false
@@ -59,6 +60,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
             onComponentCaptured: onComponentCaptured,
             onStatusUpdate: onStatusUpdate,
             onPendingUpdate: onPendingUpdate,
+            onLiveRoomUpdate: onLiveRoomUpdate,
             keepARSessionAlive: keepARSessionAlive
         )
     }
@@ -70,6 +72,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
         let onComponentCaptured: (UIImage, String, String) -> Void
         let onStatusUpdate: (Int, Int) -> Void
         let onPendingUpdate: ([String]) -> Void
+        let onLiveRoomUpdate: (CapturedRoom) -> Void
         let keepARSessionAlive: Bool
         private var seenComponentIDs: Set<String> = []
         private var deliveredComponentIDs: Set<String> = []
@@ -124,6 +127,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
             onComponentCaptured: @escaping (UIImage, String, String) -> Void,
             onStatusUpdate: @escaping (Int, Int) -> Void,
             onPendingUpdate: @escaping ([String]) -> Void = { _ in },
+            onLiveRoomUpdate: @escaping (CapturedRoom) -> Void = { _ in },
             keepARSessionAlive: Bool = false
         ) {
             self.onCaptureComplete = onCaptureComplete
@@ -131,6 +135,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
             self.onComponentCaptured = onComponentCaptured
             self.onStatusUpdate = onStatusUpdate
             self.onPendingUpdate = onPendingUpdate
+            self.onLiveRoomUpdate = onLiveRoomUpdate
             self.keepARSessionAlive = keepARSessionAlive
             super.init()
         }
@@ -146,6 +151,9 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
         }
 
         func captureSession(_ session: RoomCaptureSession, didUpdate room: CapturedRoom) {
+            DispatchQueue.main.async {
+                self.onLiveRoomUpdate(room)
+            }
             var found: [String: String] = [:]
             for (index, door) in room.doors.enumerated() {
                 found[door.identifier.uuidString] = "门\(index + 1)"

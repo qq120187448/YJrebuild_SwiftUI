@@ -23,12 +23,25 @@ final class DefectCameraModel: ObservableObject {
     private(set) var latestFrame: ARFrame?
     @Published var lastError: String?
     @Published var cameraTransform: simd_float4x4?
+    @Published var hitSurfaceLabel: String?
+    @Published var hitSurfaceDistanceM: Float?
+    @Published var hitSurfaceCoverage: Double?
 
     private let ciContext = CIContext()
 
     func update(frame: ARFrame) {
         latestFrame = frame
         cameraTransform = frame.camera.transform
+    }
+
+    func updateSurfaceDiagnostics(
+        label: String?,
+        distanceM: Float?,
+        coverage: Double?
+    ) {
+        hitSurfaceLabel = label
+        hitSurfaceDistanceM = distanceM
+        hitSurfaceCoverage = coverage
     }
 
     func poseArray() -> [Float]? {

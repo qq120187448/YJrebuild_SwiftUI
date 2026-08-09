@@ -15,7 +15,8 @@ struct WallDefectScanView: View {
     @State private var phase: Phase = .instructions
     @State private var scanID = UUID()
     @State private var capturedRoom: CapturedRoom?
-    @State private var surfaces: [WallDefectSurface] = []
+    @State private var liveRoom: CapturedRoom?
+    @State private var hitSurfaces: [WallDefectSurface] = []
     @State private var photos: [WallDefectPhoto] = []
     @State private var defectARSession: ARSession?
     @State private var stopRequested = false
@@ -43,8 +44,8 @@ struct WallDefectScanView: View {
                     case .model:
                         if let capturedRoom, let defectARSession {
                             WallDefectModelView(
-                                room: capturedRoom,
-                                surfaces: surfaces,
+                                room: liveRoom ?? capturedRoom,
+                                surfaces: hitSurfaces,
                                 arSession: defectARSession,
                                 latestRecognition: latestRecognition,
                                 isRecognizing: isPhotoAnalyzing,
@@ -203,7 +204,8 @@ struct WallDefectScanView: View {
                 onCaptureComplete: { room in
                     withAnimation(.easeInOut(duration: 0.45)) {
                         capturedRoom = room
-                        surfaces = WallDefectGeometry.surfaces(from: room)
+                        let alignedRoom = liveRoom ?? room
+                        hitSurfaces = WallDefectGeometry.surfaces(from: alignedRoom)
                         phase = .model
                     }
                 },
@@ -212,6 +214,9 @@ struct WallDefectScanView: View {
                 },
                 onARSessionReady: { session in
                     defectARSession = session
+                },
+                onLiveRoomUpdate: { room in
+                    liveRoom = room
                 },
                 keepARSessionAlive: true
             )
@@ -235,7 +240,8 @@ struct WallDefectScanView: View {
         WallDefectARSessionStore.clear()
         scanID = UUID()
         capturedRoom = nil
-        surfaces = []
+        liveRoom = nil
+        hitSurfaces = []
         photos = []
         defectARSession = nil
         errorMessage = nil
@@ -252,7 +258,7 @@ struct WallDefectScanView: View {
     ) {
         let primary = associations.first
             ?? WallDefectSurfaceAssociation(
-                surfaceID: surfaces.first?.id ?? UUID(),
+                surfaceID: hitSurfaces.first?.id ?? UUID(),
                 coverageRatio: 0
             )
         isPhotoAnalyzing = true
@@ -284,7 +290,7 @@ struct WallDefectScanView: View {
             photos.append(photo)
 
             let config = CrackRecognitionSettings.load()
-            let capturedSurfaces = surfaces
+            let capturedSurfaces = hitSurfaces
             let capturedImage = capture.image
             let capturedPose = capture.pose
             let capturedIntrinsics = capture.intrinsics
@@ -363,7 +369,7 @@ struct WallDefectScanView: View {
                 id: scanID,
                 name: "墙地面缺陷扫描 \(formatter.string(from: Date()))",
                 roomJSON: roomJSON,
-                surfaces: surfaces,
+                surfaces: hitSurfaces,
                 photos: photos
             )
             let url = try WallDefectStore.save(document: document)
