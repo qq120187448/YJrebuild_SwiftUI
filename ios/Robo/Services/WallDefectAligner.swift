@@ -34,21 +34,25 @@ enum WallDefectAligner {
         var deltas: [Double] = []
         for sample in wallSamples {
             let nAr = simd_normalize(sample.normal)
-            let a = SIMD2<Double>(Double(nAr.x), Double(nAr.z))
-            let lengthA = simd_length(a)
+            let ax = Double(nAr.x)
+            let az = Double(nAr.z)
+            let lengthA = (ax * ax + az * az).squareRoot()
             guard lengthA > 0.05 else { continue }
-            let na = a / lengthA
+            let naX = ax / lengthA
+            let naZ = az / lengthA
             for normal in wallNormals {
-                let b = SIMD2<Double>(normal.x, normal.z)
-                let lengthB = simd_length(b)
+                let bx = normal.x
+                let bz = normal.z
+                let lengthB = (bx * bx + bz * bz).squareRoot()
                 guard lengthB > 0.05 else { continue }
-                let nb = b / lengthB
+                let nbX = bx / lengthB
+                let nbZ = bz / lengthB
                 var delta = atan2(
-                    na.x * nb.z - na.z * nb.x,
-                    na.x * nb.x + na.z * nb.z
+                    naX * nbZ - naZ * nbX,
+                    naX * nbX + naZ * nbZ
                 )
-                while delta < 0 { delta += .pi }
-                delta = delta.truncatingRemainder(dividingBy: .pi)
+                while delta < 0 { delta += Double.pi }
+                delta = delta.truncatingRemainder(dividingBy: Double.pi)
                 deltas.append(delta)
             }
         }
