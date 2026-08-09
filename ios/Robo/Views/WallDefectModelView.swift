@@ -887,7 +887,7 @@ private struct RoomMiniMapView: UIViewRepresentable {
         let horizontal = SIMD2<Float>(forward.x, forward.z)
         let length = simd_length(horizontal)
         guard length > 0.0001 else { return 0 }
-        let yaw = Double(atan2(horizontal.x, horizontal.z)) * 180 / .pi
+        let yaw = Double(atan2(horizontal.x, horizontal.y)) * 180 / .pi
         let compensation = (settings.swapPitchYaw ? 90 : 0)
             + settings.cameraRollDeg
         return yaw + compensation
