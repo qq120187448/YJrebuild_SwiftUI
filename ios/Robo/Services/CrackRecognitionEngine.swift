@@ -165,18 +165,6 @@ enum CrackRecognitionEngine {
             finalComponents = measurements.components
         } else if !fallbackComponents.isEmpty {
             finalComponents = fallbackComponents
-        } else if !sparse.points.isEmpty {
-            let pixelLength = skeleton.totalPixelLength > 0
-                ? skeleton.totalPixelLength
-                : Double(sparse.points.count)
-            finalComponents = [
-                CrackComponentMeasurement(
-                    id: 1,
-                    pixelLength: pixelLength,
-                    mmLength: nil,
-                    lengthM: nil
-                )
-            ]
         } else {
             finalComponents = []
         }

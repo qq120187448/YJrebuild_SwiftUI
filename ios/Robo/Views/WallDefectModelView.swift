@@ -136,6 +136,10 @@ struct WallDefectModelView: View {
 
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
+                if showDebugPanel {
+                    debugPanel
+                        .padding(.bottom, 6)
+                }
                 HStack(alignment: .top, spacing: 8) {
                     RoomMiniMapView(
                         room: room,
@@ -155,10 +159,6 @@ struct WallDefectModelView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .padding(.horizontal, 8)
-                if showDebugPanel {
-                    debugPanel
-                        .padding(.top, 6)
-                }
                 bottomBar
             }
         }
@@ -288,20 +288,20 @@ struct WallDefectModelView: View {
                     debugStepButton(
                         title: "X旋转",
                         value: debugModelPitchDeg,
-                        minus: { debugModelPitchDeg -= 90 },
-                        plus: { debugModelPitchDeg += 90 }
+                        minus: { debugModelPitchDeg -= 45 },
+                        plus: { debugModelPitchDeg += 45 }
                     )
                     debugStepButton(
                         title: "Y旋转",
                         value: debugModelYawDeg,
-                        minus: { debugModelYawDeg -= 90 },
-                        plus: { debugModelYawDeg += 90 }
+                        minus: { debugModelYawDeg -= 45 },
+                        plus: { debugModelYawDeg += 45 }
                     )
                     debugStepButton(
                         title: "Z旋转",
                         value: debugModelRollDeg,
-                        minus: { debugModelRollDeg -= 90 },
-                        plus: { debugModelRollDeg += 90 }
+                        minus: { debugModelRollDeg -= 45 },
+                        plus: { debugModelRollDeg += 45 }
                     )
                 }
             }
@@ -373,8 +373,8 @@ struct WallDefectModelView: View {
                     debugStepButton(
                         title: "相机横滚",
                         value: debugCameraRollDeg,
-                        minus: { debugCameraRollDeg -= 90 },
-                        plus: { debugCameraRollDeg += 90 }
+                        minus: { debugCameraRollDeg -= 45 },
+                        plus: { debugCameraRollDeg += 45 }
                     )
                 }
             }
@@ -491,29 +491,35 @@ struct WallDefectModelView: View {
                 }
             } else if let latestRecognition {
                 let result = latestRecognition.result
-                let longest = result.components
-                    .map { $0.lengthM ?? 0 }
-                    .max() ?? 0
-                LabeledContent("裂缝", value: "\(result.components.count) 条")
-                LabeledContent(
-                    "总长",
-                    value: String(format: "%.3f m", result.totalLengthM)
-                )
-                LabeledContent(
-                    "最长",
-                    value: String(format: "%.3f m", longest)
-                )
-                if result.totalAreaM2 > 0 {
+                if result.isEmpty {
+                    Text("未识别到裂缝")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.7))
+                } else {
+                    let longest = result.components
+                        .map { $0.lengthM ?? 0 }
+                        .max() ?? 0
+                    LabeledContent("裂缝", value: "\(result.components.count) 条")
                     LabeledContent(
-                        "面积",
-                        value: String(format: "%.4f m²", result.totalAreaM2)
+                        "总长",
+                        value: String(format: "%.3f m", result.totalLengthM)
                     )
-                }
-                if let total = latestRecognition.timings["总计"] {
                     LabeledContent(
-                        "耗时",
-                        value: String(format: "%.2fs", total)
+                        "最长",
+                        value: String(format: "%.3f m", longest)
                     )
+                    if result.totalAreaM2 > 0 {
+                        LabeledContent(
+                            "面积",
+                            value: String(format: "%.4f m²", result.totalAreaM2)
+                        )
+                    }
+                    if let total = latestRecognition.timings["总计"] {
+                        LabeledContent(
+                            "耗时",
+                            value: String(format: "%.2fs", total)
+                        )
+                    }
                 }
             } else {
                 Text("尚未识别")
@@ -773,58 +779,104 @@ private struct RoomMiniMapView: UIViewRepresentable {
         let scene = SCNScene()
         let modelRoot = SCNNode()
         modelRoot.name = "DebugModelRoot"
-        modelRoot.simdTransform = debugModelTransform()
-        for surface in surfaces {
-            guard surface.kind != .ceiling else { continue }
-            let material = makeMaterial(
-                for: surface,
-                isIncomplete: incompleteWallIDs.contains(surface.id),
-                isHighlighted: surface.id == cameraSurfaceID
-            )
-            let geometry: SCNGeometry
-            if surface.kind == .wall {
-                let wallRect = CGRect(
-                    x: 0,
-                    y: 0,
-                    width: CGFloat(surface.width),
-                    height: CGFloat(surface.height)
+
+        if let roomPlanScene = loadRoomPlanScene() {
+            for child in roomPlanScene.rootNode.childNodes {
+                child.removeFromParentNode()
+                modelRoot.addChildNode(child)
+            }
+            addHighlightOverlays(to: modelRoot)
+        } else {
+            for surface in surfaces {
+                guard surface.kind != .ceiling else { continue }
+                let material = makeMaterial(
+                    for: surface,
+                    isIncomplete: incompleteWallIDs.contains(surface.id),
+                    isHighlighted: surface.id == cameraSurfaceID
                 )
-                let path = UIBezierPath(rect: wallRect)
-                path.usesEvenOddFillRule = true
-                for rect in openingRects(for: surface.id) {
-                    let inner = UIBezierPath(rect: rect)
-                    inner.usesEvenOddFillRule = true
-                    path.append(inner)
+                let geometry: SCNGeometry
+                if surface.kind == .wall {
+                    let wallRect = CGRect(
+                        x: 0,
+                        y: 0,
+                        width: CGFloat(surface.width),
+                        height: CGFloat(surface.height)
+                    )
+                    let path = UIBezierPath(rect: wallRect)
+                    path.usesEvenOddFillRule = true
+                    for rect in openingRects(for: surface.id) {
+                        let inner = UIBezierPath(rect: rect)
+                        inner.usesEvenOddFillRule = true
+                        path.append(inner)
+                    }
+                    let shape = SCNShape(
+                        path: path,
+                        extrusionDepth: 0.03
+                    )
+                    shape.materials = [material]
+                    geometry = shape
+                } else {
+                    let box = SCNBox(
+                        width: CGFloat(surface.width),
+                        height: CGFloat(surface.height),
+                        length: 0.03,
+                        chamferRadius: 0
+                    )
+                    box.materials = [material]
+                    geometry = box
                 }
-                let shape = SCNShape(
-                    path: path,
-                    extrusionDepth: 0.03
-                )
-                shape.materials = [material]
-                geometry = shape
-            } else {
-                let box = SCNBox(
-                    width: CGFloat(surface.width),
-                    height: CGFloat(surface.height),
-                    length: 0.03,
-                    chamferRadius: 0
-                )
-                box.materials = [material]
-                geometry = box
+                let geometryNode = SCNNode(geometry: geometry)
+                geometryNode.name = surface.id.uuidString
+                if surface.kind == .wall {
+                    geometryNode.simdPosition = SIMD3<Float>(0, 0, -0.015)
+                }
+                let wrapper = SCNNode()
+                wrapper.name = "SurfaceNode-\(surface.id.uuidString)"
+                wrapper.simdTransform = surfaceTransform(surface)
+                wrapper.addChildNode(geometryNode)
+                modelRoot.addChildNode(wrapper)
             }
-            let geometryNode = SCNNode(geometry: geometry)
-            geometryNode.name = surface.id.uuidString
-            if surface.kind == .wall {
-                geometryNode.simdPosition = SIMD3<Float>(0, 0, -0.015)
-            }
-            let wrapper = SCNNode()
-            wrapper.name = "SurfaceNode-\(surface.id.uuidString)"
-            wrapper.simdTransform = surfaceTransform(surface)
-            wrapper.addChildNode(geometryNode)
-            modelRoot.addChildNode(wrapper)
         }
+
+        modelRoot.simdTransform = debugModelTransform()
         scene.rootNode.addChildNode(modelRoot)
         return scene
+    }
+
+    private func loadRoomPlanScene() -> SCNScene? {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).usdz")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+        }
+        do {
+            try room.export(to: url, exportOptions: .model)
+            return try SCNScene(url: url, options: [.checkConsistency: true])
+        } catch {
+            return nil
+        }
+    }
+
+    private func addHighlightOverlays(to root: SCNNode) {
+        for surface in surfaces where surface.kind != .ceiling {
+            let box = SCNBox(
+                width: CGFloat(surface.width),
+                height: CGFloat(surface.height),
+                length: 0.012,
+                chamferRadius: 0
+            )
+            let material = SCNMaterial()
+            material.diffuse.contents = UIColor.systemCyan.withAlphaComponent(0.45)
+            material.emission.contents = UIColor.systemCyan.withAlphaComponent(0.55)
+            material.transparency = 0.55
+            material.isDoubleSided = true
+            box.materials = [material]
+            let node = SCNNode(geometry: box)
+            node.name = "Highlight-\(surface.id.uuidString)"
+            node.simdTransform = surfaceTransform(surface)
+            node.isHidden = surface.id != cameraSurfaceID
+            root.addChildNode(node)
+        }
     }
 
     private func update(camera: SCNNode) {
@@ -1033,6 +1085,14 @@ private struct RoomMiniMapView: UIViewRepresentable {
             return
         }
         for surface in surfaces {
+            let highlightName = "Highlight-\(surface.id.uuidString)"
+            if let node = modelRoot.childNode(
+                withName: highlightName,
+                recursively: true
+            ) {
+                node.isHidden = surface.id != cameraSurfaceID
+                continue
+            }
             guard let geometryNode = modelRoot.childNode(
                 withName: surface.id.uuidString,
                 recursively: true
