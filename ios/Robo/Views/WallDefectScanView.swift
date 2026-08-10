@@ -81,9 +81,11 @@ struct WallDefectScanView: View {
             }
             .preferredColorScheme(.dark)
             .onAppear {
+                UIApplication.shared.isIdleTimerDisabled = true
                 startSession()
             }
             .onDisappear {
+                UIApplication.shared.isIdleTimerDisabled = false
                 arSession?.pause()
             }
         }
@@ -91,6 +93,7 @@ struct WallDefectScanView: View {
 
     private func startSession() {
         guard arSession == nil else { return }
+        CrackRecognitionSettings.save(.defaultConfig)
         scanID = UUID()
         photos = []
         latestRecognition = nil

@@ -288,8 +288,10 @@ final class DefectCameraModel: ObservableObject {
         return UIGraphicsImageRenderer(size: size, format: format)
             .image { rendererContext in
                 rendererContext.cgContext.interpolationQuality = .high
-                rendererContext.cgContext.draw(
-                    cgImage,
+                // UIImage.draw keeps the CGImage's top-left coordinate space
+                // aligned with ARKit's camera image; drawing the CGImage
+                // directly would flip it inside the UIKit renderer.
+                UIImage(cgImage: cgImage).draw(
                     in: CGRect(origin: .zero, size: size)
                 )
             }
