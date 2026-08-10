@@ -159,6 +159,18 @@ struct CrackRecognitionSettingsView: View {
                     }
                 }
             }
+
+            Section("跨照片去重") {
+                Stepper(
+                    "去重距离：\(Int(config.dedupDistanceMM)) mm",
+                    value: $config.dedupDistanceMM,
+                    in: 1...100,
+                    step: 1
+                )
+                Text("同一面墙上，裂缝 3D 位置相距小于该距离时视为重复拍摄，不重复计入工程量。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .navigationTitle("识别设置")
         .onChange(of: config) { _, newValue in

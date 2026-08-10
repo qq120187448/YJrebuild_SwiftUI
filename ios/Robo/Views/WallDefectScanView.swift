@@ -1,90 +1,53 @@
 import ARKit
-import RoomPlan
+import simd
 import SwiftUI
 import UIKit
 
 struct WallDefectScanView: View {
     @Environment(\.dismiss) private var dismiss
 
-    private enum Phase {
-        case instructions
-        case scanning
-        case model
-    }
-
-    @State private var phase: Phase = .instructions
     @State private var scanID = UUID()
-    @State private var capturedRoom: CapturedRoom?
-    @State private var liveRoom: CapturedRoom?
-    @State private var hitSurfaces: [WallDefectSurface] = []
     @State private var photos: [WallDefectPhoto] = []
-    @State private var defectARSession: ARSession?
-    @State private var stopRequested = false
-    @State private var errorMessage: String?
-    @State private var savedPath: String?
+    @State private var arSession: ARSession?
     @State private var latestRecognition: WallDefectPhotoRecognitionResult?
     @State private var isPhotoAnalyzing = false
     @State private var recognitionProgress = ""
-    @State private var roomResetTransform = matrix_identity_float4x4
-    @StateObject private var headingService = WallDefectHeadingService()
+    @State private var errorMessage: String?
+    @State private var savedPath: String?
 
     var body: some View {
         NavigationStack {
-            Group {
-                if !RoomCaptureSession.isSupported {
-                    ContentUnavailableView(
-                        "不支持 LiDAR",
-                        systemImage: "camera.metering.unknown",
-                        description: Text("墙地面缺陷扫描需要带 LiDAR 的 iPhone Pro 或 iPad Pro。")
+            ZStack {
+                if let arSession {
+                    WallDefectModelView(
+                        arSession: arSession,
+                        latestRecognition: latestRecognition,
+                        isRecognizing: isPhotoAnalyzing,
+                        progressMessage: recognitionProgress,
+                        onPhoto: { capture, plane in
+                            handlePhoto(capture: capture, plane: plane)
+                        },
+                        onSave: {
+                            saveDocument()
+                        },
+                        onDiscard: {
+                            dismiss()
+                        }
                     )
                 } else {
-                    switch phase {
-                    case .instructions:
-                        instructionsView
-                    case .scanning:
-                        scanningView
-                    case .model:
-                        if let capturedRoom, let defectARSession {
-                            WallDefectModelView(
-                                room: liveRoom ?? capturedRoom,
-                                surfaces: hitSurfaces,
-                                arSession: defectARSession,
-                                headingService: headingService,
-                                roomResetTransform: roomResetTransform,
-                                latestRecognition: latestRecognition,
-                                isRecognizing: isPhotoAnalyzing,
-                                progressMessage: recognitionProgress,
-                                onPhoto: { associations, capture, alignedSurfaces in
-                                    handlePhoto(
-                                        associations: associations,
-                                        capture: capture,
-                                        alignedSurfaces: alignedSurfaces
-                                    )
-                                },
-                                onSave: {
-                                    saveDocument()
-                                },
-                                onDiscard: {
-                                    dismiss()
-                                },
-                                surfaceSourceText: "live \(liveRoom?.walls.count ?? -1) / 最终 \(capturedRoom.walls.count)"
-                            )
+                    Color.black
+                        .overlay {
+                            ProgressView("正在启动 ARKit")
+                                .foregroundStyle(.white)
                         }
-                    }
                 }
             }
-            .navigationTitle(navigationTitle)
+            .navigationTitle("墙地面缺陷扫描")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    if phase == .scanning {
-                        Button("完成扫描") {
-                            stopRequested = true
-                        }
-                    } else {
-                        Button("关闭") {
-                            dismiss()
-                        }
+                    Button("关闭") {
+                        dismiss()
                     }
                 }
             }
@@ -97,9 +60,6 @@ struct WallDefectScanView: View {
             ) {
                 Button("好") {
                     errorMessage = nil
-                    if phase == .scanning {
-                        phase = .instructions
-                    }
                 }
             } message: {
                 Text(errorMessage ?? "")
@@ -120,174 +80,44 @@ struct WallDefectScanView: View {
                 }
             }
             .preferredColorScheme(.dark)
-            .onChange(of: phase) { _, newValue in
-                if newValue == .model {
-                    headingService.start()
-                } else {
-                    headingService.stop()
-                }
+            .onAppear {
+                startSession()
             }
             .onDisappear {
-                headingService.stop()
+                arSession?.pause()
             }
         }
     }
 
-    private var navigationTitle: String {
-        switch phase {
-        case .instructions: return "墙地面缺陷扫描"
-        case .scanning: return "RoomPlan 建模"
-        case .model: return "墙体补拍"
-        }
-    }
-
-    private var instructionsView: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.03, green: 0.07, blue: 0.10),
-                    Color(red: 0.07, green: 0.12, blue: 0.18)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-
-            ScrollView {
-                VStack(spacing: 22) {
-                    Spacer(minLength: 18)
-                    Image(systemName: "paintbrush.pointed")
-                        .font(.system(size: 58))
-                        .foregroundStyle(.cyan)
-                    Text("墙地面缺陷扫描")
-                        .font(.title.bold())
-                        .foregroundStyle(.white)
-                    Text("先用 RoomPlan 建立全屋墙体底座，再定点拍摄霉斑、水渍、污渍和裂缝。")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.7))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 28)
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        tipRow(icon: "figure.walk", text: "缓慢环绕房间扫描，覆盖所有墙面和地面")
-                        tipRow(icon: "square.split.2x1", text: "扫描后自动拆分墙体并生成 UV 坐标")
-                        tipRow(icon: "camera.viewfinder", text: "对准缺陷定点拍摄，记录相机位姿和 LiDAR 深度")
-                        tipRow(icon: "bolt.badge.a", text: "识别结果按墙 ID 汇总，输出修缮工程量")
-                    }
-                    .padding(18)
-                    .background(Color.white.opacity(0.08))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .padding(.horizontal, 20)
-
-                    Button {
-                        startScan()
-                    } label: {
-                        Text("开始 RoomPlan 建模")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(
-                                LinearGradient(
-                                    colors: [Color.cyan, Color.blue],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .foregroundStyle(.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                    .padding(.horizontal, 36)
-                    .padding(.top, 8)
-                    .padding(.bottom, 28)
-                }
-            }
-        }
-    }
-
-    private func tipRow(icon: String, text: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.title3)
-                .foregroundStyle(.cyan)
-                .frame(width: 30)
-            Text(text)
-                .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.9))
-        }
-    }
-
-    private var scanningView: some View {
-        ZStack {
-            RoomCaptureViewWrapper(
-                stopRequested: $stopRequested,
-                onCaptureComplete: { room in
-                    withAnimation(.easeInOut(duration: 0.45)) {
-                        capturedRoom = room
-                        let alignedRoom = liveRoom ?? room
-                        hitSurfaces = WallDefectGeometry.surfaces(from: alignedRoom)
-                        var resetTransform = matrix_identity_float4x4
-                        if let session = defectARSession,
-                           let frame = session.currentFrame {
-                            resetTransform = simd_inverse(frame.camera.transform)
-                            session.setWorldOrigin(relativeTransform: resetTransform)
-                            roomResetTransform = resetTransform
-                        }
-                        phase = .model
-                    }
-                },
-                onCaptureError: { error in
-                    errorMessage = error.localizedDescription
-                },
-                onLiveRoomUpdate: { room in
-                    liveRoom = room
-                },
-                onARSessionReady: { session in
-                    defectARSession = session
-                },
-                keepARSessionAlive: true
-            )
-            .ignoresSafeArea()
-
-            VStack {
-                Label("正在扫描，请缓慢移动", systemImage: "figure.walk")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(.black.opacity(0.55))
-                    .clipShape(Capsule())
-                    .padding(.top, 10)
-                Spacer()
-            }
-        }
-    }
-
-    private func startScan() {
-        WallDefectARSessionStore.clear()
+    private func startSession() {
+        guard arSession == nil else { return }
         scanID = UUID()
-        capturedRoom = nil
-        liveRoom = nil
-        hitSurfaces = []
         photos = []
-        defectARSession = nil
-        errorMessage = nil
-        savedPath = nil
         latestRecognition = nil
         isPhotoAnalyzing = false
         recognitionProgress = ""
-        phase = .scanning
+        errorMessage = nil
+        savedPath = nil
+
+        let session = ARSession()
+        let configuration = ARWorldTrackingConfiguration()
+        configuration.worldAlignment = .gravity
+        configuration.planeDetection = [.horizontal, .vertical]
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+            configuration.frameSemantics.insert(.sceneDepth)
+        }
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+            configuration.frameSemantics.insert(.smoothedSceneDepth)
+        }
+        session.run(configuration)
+        arSession = session
     }
 
     private func handlePhoto(
-        associations: [WallDefectSurfaceAssociation],
         capture: DefectCameraCapture,
-        alignedSurfaces: [WallDefectSurface]
+        plane: WallDefectSurface?
     ) {
-        let primary = associations.first
-            ?? WallDefectSurfaceAssociation(
-                surfaceID: hitSurfaces.first?.id ?? UUID(),
-                coverageRatio: 0
-            )
+        let primaryID = plane?.id ?? UUID()
         isPhotoAnalyzing = true
         latestRecognition = nil
         recognitionProgress = "正在保存照片"
@@ -301,7 +131,7 @@ struct WallDefectScanView: View {
             )
             let photo = WallDefectPhoto(
                 id: photoID,
-                wallID: primary.surfaceID,
+                wallID: primaryID,
                 imageFileName: stored.imageFileName,
                 pose: capture.pose,
                 intrinsics: capture.intrinsics,
@@ -310,24 +140,29 @@ struct WallDefectScanView: View {
                 depthHeight: capture.depthHeight,
                 detectedClass: nil,
                 note: "识别中...",
-                surfaceAssociations: associations,
-                annotatedFileName: nil,
-                crackResult: nil
+                surfaceAssociations: plane.map {
+                    [WallDefectSurfaceAssociation(
+                        surfaceID: $0.id,
+                        label: "墙面",
+                        coverageRatio: 1
+                    )]
+                } ?? [],
+                planeSurface: plane
             )
             photos.append(photo)
 
             let config = CrackRecognitionSettings.load()
-            let capturedSurfaces = alignedSurfaces.isEmpty ? hitSurfaces : alignedSurfaces
-            let capturedImage = capture.image
-            let capturedPose = capture.pose
-            let capturedIntrinsics = capture.intrinsics
+            let surfaces = plane.map { [$0] } ?? []
+            let image = capture.image
+            let pose = capture.pose
+            let intrinsics = capture.intrinsics
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
                     let output = try CrackRecognitionEngine.analyze(
-                        image: capturedImage,
-                        pose: capturedPose,
-                        intrinsics: capturedIntrinsics,
-                        surfaces: capturedSurfaces,
+                        image: image,
+                        pose: pose,
+                        intrinsics: intrinsics,
+                        surfaces: surfaces,
                         config: config,
                         progress: { message, _ in
                             DispatchQueue.main.async {
@@ -342,8 +177,16 @@ struct WallDefectScanView: View {
                             return
                         }
                         self.photos[index].crackResult = output.result
-                        self.photos[index].annotatedFileName = nil
                         self.photos[index].detectedClass = output.result.detectedClass
+                        self.photos[index].arSkeleton3D = output.arSkeleton.map {
+                            [
+                                Double($0.pixel.x),
+                                Double($0.pixel.y),
+                                Double($0.world.x),
+                                Double($0.world.y),
+                                Double($0.world.z)
+                            ]
+                        }
                         if output.result.isEmpty {
                             self.photos[index].note = output.pixelLengthReported > 0
                                 ? "未命中墙面，像素长度 \(Int(output.pixelLengthReported)) px"
@@ -351,6 +194,7 @@ struct WallDefectScanView: View {
                         } else {
                             self.photos[index].note = "裂缝 \(output.result.components.count) 条 · 总长 \(String(format: "%.3f m", output.result.totalLengthM))"
                         }
+                        self.applyDedup()
                         self.latestRecognition = WallDefectPhotoRecognitionResult(
                             result: output.result,
                             annotatedImage: output.annotatedImage,
@@ -385,20 +229,89 @@ struct WallDefectScanView: View {
         }
     }
 
-    private func saveDocument() {
-        guard let capturedRoom else { return }
-        do {
-            let roomJSON = try RoomDataProcessor.encodeFullRoom(capturedRoom)
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "zh_CN")
-            formatter.dateFormat = "M月d日 HH:mm"
-            let document = WallDefectScanDocument(
-                id: scanID,
-                name: "墙地面缺陷扫描 \(formatter.string(from: Date()))",
-                roomJSON: roomJSON,
-                surfaces: hitSurfaces,
-                photos: photos
+    private func applyDedup() {
+        let threshold = CrackRecognitionSettings.load().dedupDistanceMM / 1000
+        var representatives: [WallDefectSurface] = []
+        var groups: [[Int]] = []
+
+        for (index, photo) in photos.enumerated() {
+            guard let plane = photo.planeSurface else { continue }
+            var groupID = -1
+            for (g, rep) in representatives.enumerated()
+            where WallDefectPlaneEstimator.samePlane(rep, plane) {
+                groupID = g
+                break
+            }
+            if groupID < 0 {
+                representatives.append(plane)
+                groups.append([index])
+            } else {
+                groups[groupID].append(index)
+            }
+        }
+
+        for indices in groups {
+            var existing: [SIMD3<Double>] = []
+            for index in indices {
+                guard let points = photos[index].arSkeleton3D,
+                      !points.isEmpty else {
+                    continue
+                }
+                let worldPoints = points.map {
+                    SIMD3<Double>($0[2], $0[3], $0[4])
+                }
+                let matched = worldPoints.filter { point in
+                    existing.contains {
+                        simd_distance(point, $0) < threshold
+                    }
+                }.count
+                if Double(matched) / Double(worldPoints.count) > 0.5 {
+                    photos[index].isDuplicate = true
+                    photos[index].note = "重复拍摄，已去重"
+                } else {
+                    existing.append(contentsOf: worldPoints)
+                }
+            }
+        }
+    }
+
+    private func uniquePlaneSurfaces() -> [WallDefectSurface] {
+        var result: [WallDefectSurface] = []
+        for photo in photos {
+            guard let plane = photo.planeSurface else { continue }
+            if !result.contains(where: {
+                WallDefectPlaneEstimator.samePlane($0, plane)
+            }) {
+                result.append(plane)
+            }
+        }
+        return result.enumerated().map { index, surface in
+            WallDefectSurface(
+                id: surface.id,
+                kind: surface.kind,
+                label: "墙面 \(index + 1)",
+                width: surface.width,
+                height: surface.height,
+                area: surface.area,
+                origin: surface.origin,
+                uAxis: surface.uAxis,
+                vAxis: surface.vAxis,
+                normal: surface.normal
             )
+        }
+    }
+
+    private func saveDocument() {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "M月d日 HH:mm"
+        let document = WallDefectScanDocument(
+            id: scanID,
+            name: "墙地面缺陷扫描 \(formatter.string(from: Date()))",
+            surfaces: uniquePlaneSurfaces(),
+            photos: photos
+        )
+        do {
             let url = try WallDefectStore.save(document: document)
             savedPath = url.path
         } catch {

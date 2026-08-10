@@ -1,6 +1,5 @@
 import ARKit
 import CoreVideo
-import RoomPlan
 import SceneKit
 import simd
 import SwiftUI
@@ -17,93 +16,21 @@ struct WallDefectPhotoRecognitionResult {
     let pixelLengthReported: Double
 }
 
-struct WallDefectModelDebugSettings: Equatable {
-    var modelPitchDeg: Double = 0
-    var modelYawDeg: Double = 0
-    var modelRollDeg: Double = 0
-    var modelFlipX = false
-    var modelFlipY = false
-    var modelFlipZ = false
-    var cameraForwardReversed = true
-    var cameraUpReversed = false
-    var cameraRollDeg: Double = 90
-    var swapPitchYaw = false
-    var miniYawReversed = true
-    var compassEnabled = true
-    var compassRealignIntervalSec: Double = 5
-}
-
 struct WallDefectModelView: View {
-    let room: CapturedRoom
-    let surfaces: [WallDefectSurface]
     let arSession: ARSession
-    @ObservedObject var headingService: WallDefectHeadingService
-    var roomResetTransform: simd_float4x4 = matrix_identity_float4x4
     let latestRecognition: WallDefectPhotoRecognitionResult?
     let isRecognizing: Bool
     let progressMessage: String
-    let onPhoto: ([WallDefectSurfaceAssociation], DefectCameraCapture, [WallDefectSurface]) -> Void
+    let onPhoto: (DefectCameraCapture, WallDefectSurface?) -> Void
     let onSave: () -> Void
     let onDiscard: () -> Void
-    var surfaceSourceText: String = ""
 
     @StateObject private var cameraModel = DefectCameraModel()
-    @State private var cameraSurfaceID: UUID?
-    @State private var showSaveConfirm = false
     @State private var cameraViewSize = CGSize.zero
+    @State private var showSaveConfirm = false
     @State private var showDebugPanel = false
-    @State private var didSeedAlignment = false
     @State private var debugCaptureResolution =
         CrackRecognitionSettings.load().captureResolution
-
-    @AppStorage("wallDefectDebug3.modelPitchDeg")
-    private var debugModelPitchDeg = 0.0
-    @AppStorage("wallDefectDebug3.modelYawDeg")
-    private var debugModelYawDeg = 0.0
-    @AppStorage("wallDefectDebug3.modelRollDeg")
-    private var debugModelRollDeg = 0.0
-    @AppStorage("wallDefectDebug3.modelFlipX")
-    private var debugModelFlipX = false
-    @AppStorage("wallDefectDebug3.modelFlipY")
-    private var debugModelFlipY = false
-    @AppStorage("wallDefectDebug3.modelFlipZ")
-    private var debugModelFlipZ = false
-    @AppStorage("wallDefectDebug3.cameraForwardReversed")
-    private var debugCameraForwardReversed = true
-    @AppStorage("wallDefectDebug3.cameraUpReversed")
-    private var debugCameraUpReversed = false
-    @AppStorage("wallDefectDebug3.cameraRollCompensation")
-    private var debugCameraRollDeg = 90.0
-    @AppStorage("wallDefectDebug3.swapPitchYaw")
-    private var debugSwapPitchYaw = false
-    @AppStorage("wallDefectDebug3.miniYawReversed")
-    private var debugMiniYawReversed = true
-    @AppStorage("wallDefectDebug3.compassEnabled")
-    private var debugCompassEnabled = true
-    @AppStorage("wallDefectDebug3.compassRealignIntervalSec")
-    private var debugCompassRealignIntervalSec = 5.0
-
-    private var debugSettings: WallDefectModelDebugSettings {
-        WallDefectModelDebugSettings(
-            modelPitchDeg: debugModelPitchDeg,
-            modelYawDeg: debugModelYawDeg,
-            modelRollDeg: debugModelRollDeg,
-            modelFlipX: debugModelFlipX,
-            modelFlipY: debugModelFlipY,
-            modelFlipZ: debugModelFlipZ,
-            cameraForwardReversed: debugCameraForwardReversed,
-            cameraUpReversed: debugCameraUpReversed,
-            cameraRollDeg: debugCameraRollDeg,
-            swapPitchYaw: debugSwapPitchYaw,
-            miniYawReversed: debugMiniYawReversed,
-            compassEnabled: debugCompassEnabled,
-            compassRealignIntervalSec: debugCompassRealignIntervalSec
-        )
-    }
-
-    private var cameraSurface: WallDefectSurface? {
-        surfaces.first { $0.id == cameraSurfaceID }
-    }
 
     private var captureCenterRatio: CGFloat {
         guard cameraViewSize.width > 0, cameraViewSize.height > 0 else {
@@ -124,11 +51,9 @@ struct WallDefectModelView: View {
     var body: some View {
         ZStack {
             WallDefectARView(
-                surfaces: surfaces,
                 arSession: arSession,
                 cameraModel: cameraModel,
-                latestARSkeleton: latestRecognition?.arSkeleton ?? [],
-                cameraSurfaceID: $cameraSurfaceID
+                latestARSkeleton: latestRecognition?.arSkeleton ?? []
             )
             .ignoresSafeArea()
 
@@ -159,36 +84,10 @@ struct WallDefectModelView: View {
 
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
-                if showDebugPanel {
-                    debugPanel
-                        .padding(.bottom, 6)
-                }
-                HStack(alignment: .top, spacing: 8) {
-                    RoomMiniMapView(
-                        room: room,
-                        surfaces: surfaces,
-                        cameraTransform: cameraModel.cameraTransform,
-                        cameraSurfaceID: cameraSurfaceID,
-                        headingDeg: headingService.headingDeg,
-                        roomResetTransform: roomResetTransform,
-                        settings: debugSettings
-                    )
-                    .frame(height: 150)
-                    .frame(maxWidth: .infinity)
-                    .transition(
-                        .move(edge: .bottom)
-                            .combined(with: .opacity)
-                    )
-
-                    recognitionSummaryPanel
-                        .frame(maxWidth: .infinity)
-                }
-                .padding(.horizontal, 8)
+                planeStatusPanel
+                recognitionSummaryPanel
                 bottomBar
             }
-        }
-        .onAppear {
-            seedAlignmentIfNeeded()
         }
         .alert("保存扫描包？", isPresented: $showSaveConfirm) {
             Button("保存") {
@@ -199,93 +98,61 @@ struct WallDefectModelView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("照片会与墙体 UV 坐标一起归档，后续用于缺陷工程量计算。")
+            Text("照片会与墙面平面、裂缝长度一起归档，用于缺陷工程量计算。")
         }
     }
 
-    private func seedAlignmentIfNeeded() {
-        guard !didSeedAlignment else { return }
-        didSeedAlignment = true
-        let isIdentity =
-            roomResetTransform.columns.0 == SIMD4<Float>(1, 0, 0, 0)
-            && roomResetTransform.columns.1 == SIMD4<Float>(0, 1, 0, 0)
-            && roomResetTransform.columns.2 == SIMD4<Float>(0, 0, 1, 0)
-            && roomResetTransform.columns.3 == SIMD4<Float>(0, 0, 0, 1)
-        guard !isIdentity else { return }
-        let aligned = WallDefectAligner.applyRoomToWorld(
-            roomResetTransform,
-            to: surfaces
-        )
-        cameraModel.updateAlignedSurfaces(
-            aligned,
-            transform: roomResetTransform,
-            residualM: 0
-        )
+    private var planeStatusPanel: some View {
+        HStack(spacing: 10) {
+            if let source = cameraModel.planeSource,
+               let distance = cameraModel.planeDistanceM {
+                Image(systemName: "square.dashed")
+                    .font(.title3)
+                    .foregroundStyle(.cyan)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(
+                        String(
+                            format: "墙面平面 %@ · 距离 %.2f m",
+                            source == "raycast" ? "射线检测" : "深度拟合",
+                            distance
+                        )
+                    )
+                    .font(.caption.bold())
+                    .foregroundStyle(.white)
+                    Text(
+                        "法向 \(cameraModel.planeNormalText ?? "-") · 采样 \(cameraModel.planeSampleCount)"
+                    )
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.65))
+                }
+                Spacer()
+            } else {
+                Image(systemName: "viewfinder")
+                    .font(.title3)
+                    .foregroundStyle(.orange)
+                Text("未检测到墙面平面，请将取景框对准墙面或地面")
+                    .font(.caption.bold())
+                    .foregroundStyle(.orange)
+                Spacer()
+            }
+        }
+        .padding(10)
+        .background(.black.opacity(0.55))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 12)
     }
 
     private var bottomBar: some View {
-        VStack(spacing: 10) {
-            if let cameraSurface {
-                let distance = cameraModel.hitSurfaceDistanceM ?? 0
-                let coverage = Int(
-                    (cameraModel.hitSurfaceCoverage ?? 0) * 100
-                )
-                Text(
-                    String(
-                        format: "当前目标：%@ · 距离 %.2f m · 覆盖 %d%%",
-                        cameraSurface.label,
-                        distance,
-                        coverage
-                    )
-                )
+        VStack(spacing: 8) {
+            if isRecognizing {
+                Text(progressMessage.isEmpty ? "正在识别照片" : progressMessage)
                     .font(.caption.bold())
-                    .foregroundStyle(.white)
-            } else if isRecognizing {
-                Text("正在识别照片，暂时不能拍照")
-                    .font(.caption.bold())
-                    .foregroundStyle(.white.opacity(0.75))
-            } else {
-                Text("未识别到墙面/地面/天面，请对准已建模表面")
-                    .font(.caption.bold())
-                    .foregroundStyle(.white.opacity(0.75))
+                    .foregroundStyle(.white.opacity(0.8))
             }
             if let error = cameraModel.lastError {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.orange)
-            }
-            if let transform = cameraModel.cameraTransform {
-                Text(
-                    String(
-                        format: "相机 %.2f, %.2f, %.2f",
-                        transform.columns.3.x,
-                        transform.columns.3.y,
-                        transform.columns.3.z
-                    )
-                )
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.white.opacity(0.55))
-            }
-            if !surfaceSourceText.isEmpty {
-                Text(surfaceSourceText)
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.5))
-            }
-            if let yaw = cameraModel.alignmentYawDeg {
-                Text(
-                    String(
-                        format: "自动对齐 %.0f° · 残差 %.3fm · 采样 %d",
-                        yaw,
-                        cameraModel.alignmentResidualM ?? -1,
-                        cameraModel.alignmentSampleCount
-                    )
-                )
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.white.opacity(0.6))
-            } else if cameraModel.alignmentSampleCount > 0 {
-                Text("自动对齐中 · 采样 \(cameraModel.alignmentSampleCount)")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.6))
             }
 
             ZStack {
@@ -327,16 +194,7 @@ struct WallDefectModelView: View {
                         outputSide: CGFloat(config.captureResolution),
                         centerRatio: captureCenterRatio
                     ) else { return }
-                    let activeSurfaces = cameraModel.alignedSurfaces.isEmpty
-                        ? surfaces
-                        : cameraModel.alignedSurfaces
-                    let associations = WallDefectProjection.associations(
-                        pose: capture.pose,
-                        intrinsics: capture.intrinsics,
-                        imageSize: capture.image.size,
-                        surfaces: activeSurfaces
-                    )
-                    onPhoto(associations, capture, activeSurfaces)
+                    onPhoto(capture, cameraModel.currentPlaneSurface)
                 } label: {
                     ZStack {
                         Circle()
@@ -351,34 +209,16 @@ struct WallDefectModelView: View {
                 .opacity(isRecognizing ? 0.45 : 1)
             }
         }
-        .padding(14)
+        .padding(12)
         .background(.black.opacity(0.55))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, 12)
-        .padding(.bottom, 10)
+        .padding(.bottom, 8)
     }
 
+    @ViewBuilder
     private var debugPanel: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("模型调试")
-                    .font(.caption.bold())
-                    .foregroundStyle(.white)
-                Spacer()
-                Button("复位") {
-                    resetDebugSettings()
-                }
-                .font(.caption.bold())
-                .foregroundStyle(.orange)
-                Button("重新对齐") {
-                    cameraModel.requestRealignment()
-                }
-                .font(.caption.bold())
-                .foregroundStyle(.cyan)
-            }
-
-            ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 6) {
             Stepper(
                 "补拍分辨率 \(debugCaptureResolution)",
                 value: $debugCaptureResolution,
@@ -392,232 +232,25 @@ struct WallDefectModelView: View {
                 config.captureResolution = newValue
                 CrackRecognitionSettings.save(config)
             }
-
-            Stepper(
-                "指南针重对齐 \(Int(debugCompassRealignIntervalSec))秒",
-                value: $debugCompassRealignIntervalSec,
-                in: 1...20,
-                step: 1
-            )
-            .font(.caption2)
-            .foregroundStyle(.white)
-
-            debugToggleButton(
-                title: "指南针",
-                isOn: debugCompassEnabled,
-                onText: "开",
-                offText: "关"
-            ) {
-                debugCompassEnabled.toggle()
-            }
-            .frame(maxWidth: .infinity)
-
-            Text("模型初始参数")
-                .font(.caption2.bold())
-                .foregroundStyle(.white.opacity(0.7))
-
-            VStack(alignment: .leading, spacing: 4) {
-                debugStepButton(
-                    title: "X旋转",
-                    value: debugModelPitchDeg,
-                    minus: { debugModelPitchDeg -= 15 },
-                    plus: { debugModelPitchDeg += 15 }
-                )
-                .frame(maxWidth: .infinity)
-                debugStepButton(
-                    title: "Y旋转",
-                    value: debugModelYawDeg,
-                    minus: { debugModelYawDeg -= 15 },
-                    plus: { debugModelYawDeg += 15 }
-                )
-                .frame(maxWidth: .infinity)
-                debugStepButton(
-                    title: "Z旋转",
-                    value: debugModelRollDeg,
-                    minus: { debugModelRollDeg -= 15 },
-                    plus: { debugModelRollDeg += 15 }
-                )
-                .frame(maxWidth: .infinity)
-            }
-
-            HStack(spacing: 8) {
-                debugToggleButton(
-                    title: "X翻转",
-                    isOn: debugModelFlipX,
-                    onText: "反转",
-                    offText: "正常"
-                ) {
-                    debugModelFlipX.toggle()
-                }
-                debugToggleButton(
-                    title: "Y翻转",
-                    isOn: debugModelFlipY,
-                    onText: "反转",
-                    offText: "正常"
-                ) {
-                    debugModelFlipY.toggle()
-                }
-                debugToggleButton(
-                    title: "Z翻转",
-                    isOn: debugModelFlipZ,
-                    onText: "反转",
-                    offText: "正常"
-                ) {
-                    debugModelFlipZ.toggle()
-                }
-            }
-
-            Text("转动方向参数")
-                .font(.caption2.bold())
-                .foregroundStyle(.white.opacity(0.7))
-
-            HStack(spacing: 8) {
-                debugToggleButton(
-                    title: "mini跟随方向",
-                    isOn: debugCameraForwardReversed,
-                    onText: "反向",
-                    offText: "正向"
-                ) {
-                    debugCameraForwardReversed.toggle()
-                }
-                debugToggleButton(
-                    title: "上向反向",
-                    isOn: debugCameraUpReversed,
-                    onText: "反向",
-                    offText: "正向"
-                ) {
-                    debugCameraUpReversed.toggle()
-                }
-                debugToggleButton(
-                    title: "左右互换",
-                    isOn: debugSwapPitchYaw,
-                    onText: "开",
-                    offText: "关"
-                ) {
-                    debugSwapPitchYaw.toggle()
-                }
-            }
-            HStack(spacing: 8) {
-                debugToggleButton(
-                    title: "mini转向",
-                    isOn: debugMiniYawReversed,
-                    onText: "反向",
-                    offText: "同向"
-                ) {
-                    debugMiniYawReversed.toggle()
-                }
-                .frame(maxWidth: .infinity)
-            }
-
-            debugStepButton(
-                title: "相机横滚",
-                value: debugCameraRollDeg,
-                minus: { debugCameraRollDeg -= 15 },
-                plus: { debugCameraRollDeg += 15 }
-            )
-            .frame(maxWidth: .infinity)
-
-            }
-            }
-            .frame(maxHeight: 230)
-
-            Text(debugParameterSummary)
-                .font(.caption2.monospaced())
-                .foregroundStyle(.white.opacity(0.8))
-                .lineLimit(2)
         }
         .padding(10)
         .background(.black.opacity(0.78))
         .clipShape(RoundedRectangle(cornerRadius: 10))
-        .padding(.horizontal, 10)
-    }
-
-    private var debugParameterSummary: String {
-        let flips = (debugModelFlipX ? "X" : "")
-            + (debugModelFlipY ? "Y" : "")
-            + (debugModelFlipZ ? "Z" : "")
-        return "模型旋转 \(Int(debugModelPitchDeg))/\(Int(debugModelYawDeg))/\(Int(debugModelRollDeg))° "
-            + "翻转 \(flips.isEmpty ? "无" : flips) | "
-            + "跟随 \(debugCameraForwardReversed ? "反" : "正") "
-            + "上向 \(debugCameraUpReversed ? "反" : "正") "
-            + "横滚 \(Int(debugCameraRollDeg))° "
-            + "互换 \(debugSwapPitchYaw ? "开" : "关") "
-            + "转向 \(debugMiniYawReversed ? "反" : "同")"
-    }
-
-    private func resetDebugSettings() {
-        debugModelPitchDeg = 0
-        debugModelYawDeg = 0
-        debugModelRollDeg = 0
-        debugModelFlipX = false
-        debugModelFlipY = false
-        debugModelFlipZ = false
-        debugCameraForwardReversed = true
-        debugCameraUpReversed = false
-        debugCameraRollDeg = 90
-        debugSwapPitchYaw = false
-        debugMiniYawReversed = true
-        debugCompassEnabled = true
-        debugCompassRealignIntervalSec = 5
-    }
-
-    private func debugStepButton(
-        title: String,
-        value: Double,
-        minus: @escaping () -> Void,
-        plus: @escaping () -> Void
-    ) -> some View {
-        HStack(spacing: 6) {
-            Button(action: minus) {
-                Text("-")
-                    .frame(width: 30, height: 28)
-                    .background(Color.gray.opacity(0.35))
-                    .clipShape(Circle())
-            }
-            Text("\(title) \(Int(value))°")
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.white)
-                .frame(minWidth: 84)
-            Button(action: plus) {
-                Text("+")
-                    .frame(width: 30, height: 28)
-                    .background(Color.gray.opacity(0.35))
-                    .clipShape(Circle())
-            }
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.white)
-    }
-
-    private func debugToggleButton(
-        title: String,
-        isOn: Bool,
-        onText: String,
-        offText: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Text("\(title) \(isOn ? onText : offText)")
-                .font(.caption2.bold())
-                .foregroundStyle(.white)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .background(
-                    isOn
-                        ? Color.orange.opacity(0.85)
-                        : Color.gray.opacity(0.35)
-                )
-                .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
     }
 
     @ViewBuilder
     private var recognitionSummaryPanel: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("识别简报")
-                .font(.caption.bold())
-                .foregroundStyle(.white)
+            HStack {
+                Text("识别简报")
+                    .font(.caption.bold())
+                    .foregroundStyle(.white)
+                Spacer()
+                if showDebugPanel {
+                    debugPanel
+                }
+            }
 
             if isRecognizing {
                 HStack(spacing: 8) {
@@ -639,8 +272,8 @@ struct WallDefectModelView: View {
                             ? "未形成有效裂缝"
                             : "未识别到裂缝"
                     )
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.7))
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.7))
                     if latestRecognition.pixelLengthReported > 0 {
                         Text(
                             String(
@@ -664,12 +297,6 @@ struct WallDefectModelView: View {
                         "最长",
                         value: String(format: "%.3f m", longest)
                     )
-                    if result.totalAreaM2 > 0 {
-                        LabeledContent(
-                            "面积",
-                            value: String(format: "%.4f m²", result.totalAreaM2)
-                        )
-                    }
                     if let total = latestRecognition.timings["总计"] {
                         LabeledContent(
                             "耗时",
@@ -682,20 +309,8 @@ struct WallDefectModelView: View {
                 )
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.white.opacity(0.75))
-                if latestRecognition.rawDetectionCount > 0,
-                   latestRecognition.skeletonComponentCount == 0 {
-                    Text("YOLO 检出但骨架被过滤，仅显示原始掩码像素")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                }
-                if latestRecognition.rawDetectionCount > 0,
-                   latestRecognition.projectedComponentCount == 0 {
-                    Text("未命中墙面，仅像素长度，无 AR")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                }
             } else {
-                Text("尚未识别")
+                Text("尚未识别，对准裂缝后点击拍照")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.7))
             }
@@ -705,15 +320,14 @@ struct WallDefectModelView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.black.opacity(0.55))
         .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 12)
     }
 }
 
 private struct WallDefectARView: UIViewRepresentable {
-    let surfaces: [WallDefectSurface]
     let arSession: ARSession
     let cameraModel: DefectCameraModel
     let latestARSkeleton: [CrackSkeleton3DPoint]
-    @Binding var cameraSurfaceID: UUID?
 
     func makeUIView(context: Context) -> ARSCNView {
         let view = ARSCNView()
@@ -736,294 +350,32 @@ private struct WallDefectARView: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(
-            surfaces: surfaces,
-            cameraModel: cameraModel,
-            cameraSurfaceID: $cameraSurfaceID
-        )
+        Coordinator(cameraModel: cameraModel)
     }
 
     final class Coordinator: NSObject, ARSessionDelegate {
-        let surfaces: [WallDefectSurface]
         let cameraModel: DefectCameraModel
-        var cameraSurfaceID: Binding<UUID?>
         weak var sceneView: ARSCNView?
         private let skeletonNodeName = "CrackARSkeleton"
         private var lastSkeletonHash = Int.min
-        private var alignmentSamples: [WallDefectAligner.Sample] = []
-        private var lastAlignmentSampleTime: TimeInterval = 0
-        private var lastAlignmentRunTime: TimeInterval = 0
-        private var lastRealignmentCount = 0
+        private var lastPlaneEstimateTime: TimeInterval = -1
 
-        init(
-            surfaces: [WallDefectSurface],
-            cameraModel: DefectCameraModel,
-            cameraSurfaceID: Binding<UUID?>
-        ) {
-            self.surfaces = surfaces
+        init(cameraModel: DefectCameraModel) {
             self.cameraModel = cameraModel
-            self.cameraSurfaceID = cameraSurfaceID
         }
 
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
-            let pose = flatten(matrix: frame.camera.transform)
-            let buffer = frame.capturedImage
-            let intrinsics = WallDefectProjection.portraitIntrinsics(
-                intrinsics: flatten(matrix: frame.camera.intrinsics),
-                rawWidth: CVPixelBufferGetWidth(buffer),
-                rawHeight: CVPixelBufferGetHeight(buffer)
-            )
-            let imageSize = CGSize(
-                width: CGFloat(CVPixelBufferGetHeight(buffer)),
-                height: CGFloat(CVPixelBufferGetWidth(buffer))
-            )
             DispatchQueue.main.async {
                 self.cameraModel.update(frame: frame)
-                self.updateCameraSurface(
-                    pose: pose,
-                    intrinsics: intrinsics,
-                    imageSize: imageSize
-                )
-                self.collectAlignmentSample(
-                    frame: frame,
-                    view: self.sceneView,
-                    timestamp: frame.timestamp
-                )
-            }
-        }
-
-        @MainActor
-        private func updateCameraSurface(
-            pose: [Float],
-            intrinsics: [Float],
-            imageSize: CGSize
-        ) {
-            let activeSurfaces = cameraModel.alignedSurfaces.isEmpty
-                ? surfaces
-                : cameraModel.alignedSurfaces
-            let associations = WallDefectProjection.associations(
-                pose: pose,
-                intrinsics: intrinsics,
-                imageSize: imageSize,
-                surfaces: activeSurfaces
-            )
-            let nextID = associations.first?.surfaceID
-            if cameraSurfaceID.wrappedValue != nextID {
-                cameraSurfaceID.wrappedValue = nextID
-            }
-            if let primary = associations.first,
-               let surface = activeSurfaces.first(
-                   where: { $0.id == primary.surfaceID }
-               ) {
-                cameraModel.updateSurfaceDiagnostics(
-                    label: primary.label ?? surface.label,
-                    distanceM: distanceToSurface(
-                        surface,
-                        cameraPose: pose
-                    ),
-                    coverage: primary.coverageRatio
-                )
-            } else {
-                cameraModel.updateSurfaceDiagnostics(
-                    label: nil,
-                    distanceM: nil,
-                    coverage: nil
-                )
-            }
-        }
-
-        private func distanceToSurface(
-            _ surface: WallDefectSurface,
-            cameraPose: [Float]
-        ) -> Float? {
-            guard cameraPose.count == 16 else { return nil }
-            let origin = WallDefectGeometry.planeOrigin(for: surface)
-            let normal = WallDefectGeometry.planeNormal(for: surface)
-            let length = simd_length(normal)
-            guard length > 0.0001 else { return nil }
-            let unitNormal = normal / Double(length)
-            let cameraPosition = SIMD3<Double>(
-                Double(cameraPose[12]),
-                Double(cameraPose[13]),
-                Double(cameraPose[14])
-            )
-            return Float(
-                abs(simd_dot(cameraPosition - origin, unitNormal))
-            )
-        }
-
-        @MainActor
-        private func collectAlignmentSample(
-            frame: ARFrame,
-            view: ARSCNView?,
-            timestamp: TimeInterval
-        ) {
-            guard let view, timestamp - lastAlignmentSampleTime > 0.35 else { return }
-            guard let sample = depthAlignmentSample(frame: frame, view: view)
-                ?? raycastAlignmentSample(frame: frame, view: view) else {
-                return
-            }
-            alignmentSamples.append(sample)
-            lastAlignmentSampleTime = timestamp
-            if alignmentSamples.count > 400 {
-                alignmentSamples.removeFirst(alignmentSamples.count - 400)
-            }
-            cameraModel.updateAlignmentSampleCount(alignmentSamples.count)
-
-            let shouldRun = timestamp - lastAlignmentRunTime > 1.5
-                || cameraModel.realignmentRequestedCount != lastRealignmentCount
-            guard shouldRun, alignmentSamples.count >= 5 else { return }
-            lastRealignmentCount = cameraModel.realignmentRequestedCount
-            lastAlignmentRunTime = timestamp
-            guard let fit = WallDefectAligner.estimateRoomToWorld(
-                samples: alignmentSamples,
-                surfaces: surfaces
-            ) else { return }
-            let aligned = WallDefectAligner.applyRoomToWorld(fit.transform, to: surfaces)
-            cameraModel.updateAlignedSurfaces(
-                aligned,
-                transform: fit.transform,
-                residualM: fit.residual
-            )
-        }
-
-        private func depthAlignmentSample(
-            frame: ARFrame,
-            view: ARSCNView
-        ) -> WallDefectAligner.Sample? {
-            guard let depthMap = frame.smoothedSceneDepth?.depthMap
-                ?? frame.sceneDepth?.depthMap else {
-                return nil
-            }
-            let viewport = view.bounds.size
-            guard viewport.width > 0, viewport.height > 0 else { return nil }
-            let transform = frame.displayTransform(
-                for: UIInterfaceOrientation.portrait,
-                viewportSize: viewport
-            )
-            let screenPoint = CGPoint(
-                x: viewport.width * 0.5,
-                y: viewport.height * 0.5
-            )
-            let imagePoint = screenPoint.applying(transform.inverted())
-            let width = CVPixelBufferGetWidth(depthMap)
-            let height = CVPixelBufferGetHeight(depthMap)
-            let x = Int(imagePoint.x * CGFloat(width))
-            let y = Int(imagePoint.y * CGFloat(height))
-            guard x >= 4, y >= 4, x < width - 4, y < height - 4 else { return nil }
-            guard let center = depthWorldPoint(
-                frame: frame,
-                depthMap: depthMap,
-                x: x,
-                y: y
-            ), let px = depthWorldPoint(
-                frame: frame,
-                depthMap: depthMap,
-                x: x + 4,
-                y: y
-            ), let py = depthWorldPoint(
-                frame: frame,
-                depthMap: depthMap,
-                x: x,
-                y: y + 4
-            ) else {
-                return nil
-            }
-            let tangentX = px - center
-            let tangentY = py - center
-            guard simd_length(tangentX) > 0.002,
-                  simd_length(tangentY) > 0.002 else {
-                return nil
-            }
-            var normal = simd_normalize(simd_cross(tangentY, tangentX))
-            let cameraPosition = SIMD3<Float>(
-                frame.camera.transform.columns.3.x,
-                frame.camera.transform.columns.3.y,
-                frame.camera.transform.columns.3.z
-            )
-            if simd_dot(normal, cameraPosition - center) < 0 {
-                normal = -normal
-            }
-            return WallDefectAligner.Sample(position: center, normal: normal)
-        }
-
-        private func depthWorldPoint(
-            frame: ARFrame,
-            depthMap: CVPixelBuffer,
-            x: Int,
-            y: Int
-        ) -> SIMD3<Float>? {
-            CVPixelBufferLockBaseAddress(depthMap, .readOnly)
-            defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
-            guard let base = CVPixelBufferGetBaseAddress(depthMap) else { return nil }
-            let bytesPerRow = CVPixelBufferGetBytesPerRow(depthMap)
-            let pointer = base
-                .advanced(by: y * bytesPerRow + x * MemoryLayout<Float32>.size)
-                .assumingMemoryBound(to: Float32.self)
-            let depthValue = pointer.pointee
-            guard depthValue.isFinite, depthValue > 0.05, depthValue < 8 else { return nil }
-
-            let intrinsics = frame.camera.intrinsics
-            let fx = intrinsics.columns.0.x
-            let fy = intrinsics.columns.1.y
-            let cx = intrinsics.columns.2.x
-            let cy = intrinsics.columns.2.y
-            let imageWidth = Float(frame.camera.imageResolution.width)
-            let imageHeight = Float(frame.camera.imageResolution.height)
-            let depthWidth = Float(CVPixelBufferGetWidth(depthMap))
-            let depthHeight = Float(CVPixelBufferGetHeight(depthMap))
-            let u = Float(x) * imageWidth / depthWidth
-            let v = Float(y) * imageHeight / depthHeight
-            let local = SIMD3<Float>(
-                (u - cx) / fx * depthValue,
-                -(v - cy) / fy * depthValue,
-                -depthValue
-            )
-            let world = frame.camera.transform * SIMD4<Float>(
-                local.x,
-                local.y,
-                local.z,
-                1
-            )
-            return SIMD3<Float>(world.x, world.y, world.z)
-        }
-
-        private func raycastAlignmentSample(
-            frame: ARFrame,
-            view: ARSCNView
-        ) -> WallDefectAligner.Sample? {
-            let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-            let targets: [ARRaycastQuery.Target] = [
-                .existingPlaneGeometry,
-                .estimatedPlane
-            ]
-            for target in targets {
-                guard let query = view.raycastQuery(
-                    from: center,
-                    allowing: target,
-                    alignment: .any
-                ), let result = view.session.raycast(query).first else {
-                    continue
-                }
-                let position = SIMD3<Float>(
-                    result.worldTransform.columns.3.x,
-                    result.worldTransform.columns.3.y,
-                    result.worldTransform.columns.3.z
-                )
-                let direction = simd_normalize(query.direction)
-                let normal: SIMD3<Float>
-                if result.targetAlignment == .horizontal {
-                    normal = direction.y > 0
-                        ? SIMD3<Float>(0, -1, 0)
-                        : SIMD3<Float>(0, 1, 0)
-                } else {
-                    normal = simd_normalize(
-                        SIMD3<Float>(-direction.x, 0, -direction.z)
+                if frame.timestamp - self.lastPlaneEstimateTime >= 0.2 {
+                    self.lastPlaneEstimateTime = frame.timestamp
+                    let plane = WallDefectPlaneEstimator.estimate(
+                        frame: frame,
+                        view: self.sceneView
                     )
+                    self.cameraModel.update(plane: plane)
                 }
-                return WallDefectAligner.Sample(position: position, normal: normal)
             }
-            return nil
         }
 
         func updateARSkeleton(
@@ -1072,9 +424,7 @@ private struct WallDefectARView: UIViewRepresentable {
                             y: point.y + dy
                         )
                         if let neighborIndex = indexByPoint[neighbor],
-                           index < neighborIndex,
-                           points[index].surfaceID
-                               == points[neighborIndex].surfaceID {
+                           index < neighborIndex {
                             indices.append(Int32(index))
                             indices.append(Int32(neighborIndex))
                         }
@@ -1101,542 +451,5 @@ private struct WallDefectARView: UIViewRepresentable {
             node.renderingOrder = 100
             view.scene.rootNode.addChildNode(node)
         }
-
-        private func flatten(matrix: simd_float4x4) -> [Float] {
-            [
-                matrix.columns.0.x, matrix.columns.0.y, matrix.columns.0.z, matrix.columns.0.w,
-                matrix.columns.1.x, matrix.columns.1.y, matrix.columns.1.z, matrix.columns.1.w,
-                matrix.columns.2.x, matrix.columns.2.y, matrix.columns.2.z, matrix.columns.2.w,
-                matrix.columns.3.x, matrix.columns.3.y, matrix.columns.3.z, matrix.columns.3.w
-            ]
-        }
-
-        private func flatten(matrix: simd_float3x3) -> [Float] {
-            [
-                matrix.columns.0.x, matrix.columns.0.y, matrix.columns.0.z,
-                matrix.columns.1.x, matrix.columns.1.y, matrix.columns.1.z,
-                matrix.columns.2.x, matrix.columns.2.y, matrix.columns.2.z
-            ]
-        }
     }
-}
-
-private struct RoomMiniMapView: UIViewRepresentable {
-    let room: CapturedRoom
-    let surfaces: [WallDefectSurface]
-    let cameraTransform: simd_float4x4?
-    let cameraSurfaceID: UUID?
-    let headingDeg: Double?
-    var roomResetTransform: simd_float4x4 = matrix_identity_float4x4
-    let settings: WallDefectModelDebugSettings
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    func makeUIView(context: Context) -> SCNView {
-        let view = SCNView()
-        view.backgroundColor = .clear
-        view.isOpaque = false
-        view.autoenablesDefaultLighting = true
-        view.allowsCameraControl = false
-        view.antialiasingMode = .multisampling4X
-
-        let scene = loadScene()
-        view.scene = scene
-
-        let camera = SCNNode()
-        camera.camera = SCNCamera()
-        camera.camera?.fieldOfView = 60
-        scene.rootNode.addChildNode(camera)
-        view.pointOfView = camera
-        update(camera: camera)
-        return view
-    }
-
-    func updateUIView(_ uiView: SCNView, context: Context) {
-        guard let camera = uiView.pointOfView else { return }
-        let yaw = resolvedYaw(coordinator: context.coordinator)
-        updateModelTransform(in: uiView, yaw: yaw)
-        update(camera: camera)
-        if context.coordinator.lastHighlightedID != cameraSurfaceID {
-            updateHighlights(in: uiView)
-            context.coordinator.lastHighlightedID = cameraSurfaceID
-        }
-    }
-
-    final class Coordinator {
-        var lastHighlightedID: UUID?
-        var lastCompassSync: Date?
-        var compassHeadingOffset: Double?
-    }
-
-    private func loadScene() -> SCNScene {
-        let scene = SCNScene()
-        let modelRoot = SCNNode()
-        modelRoot.name = "DebugModelRoot"
-
-        if let roomPlanScene = loadRoomPlanScene() {
-            for child in roomPlanScene.rootNode.childNodes {
-                child.removeFromParentNode()
-                modelRoot.addChildNode(child)
-            }
-            addHighlightOverlays(to: modelRoot)
-        } else {
-            for surface in surfaces {
-            guard surface.kind != .ceiling else { continue }
-            let material = makeMaterial(
-                for: surface,
-                isIncomplete: incompleteWallIDs.contains(surface.id),
-                isHighlighted: surface.id == cameraSurfaceID
-            )
-            let geometry: SCNGeometry
-            if surface.kind == .wall {
-                let wallRect = CGRect(
-                    x: 0,
-                    y: 0,
-                    width: CGFloat(surface.width),
-                    height: CGFloat(surface.height)
-                )
-                let path = UIBezierPath(rect: wallRect)
-                path.usesEvenOddFillRule = true
-                for rect in openingRects(for: surface.id) {
-                    let inner = UIBezierPath(rect: rect)
-                    inner.usesEvenOddFillRule = true
-                    path.append(inner)
-                }
-                let shape = SCNShape(
-                    path: path,
-                    extrusionDepth: 0.03
-                )
-                shape.materials = [material]
-                geometry = shape
-            } else {
-                let box = SCNBox(
-                    width: CGFloat(surface.width),
-                    height: CGFloat(surface.height),
-                    length: 0.03,
-                    chamferRadius: 0
-                )
-                box.materials = [material]
-                geometry = box
-            }
-            let geometryNode = SCNNode(geometry: geometry)
-            geometryNode.name = surface.id.uuidString
-            if surface.kind == .wall {
-                geometryNode.simdPosition = SIMD3<Float>(0, 0, -0.015)
-            }
-            let wrapper = SCNNode()
-            wrapper.name = "SurfaceNode-\(surface.id.uuidString)"
-            wrapper.simdTransform = surfaceTransform(surface)
-            wrapper.addChildNode(geometryNode)
-            modelRoot.addChildNode(wrapper)
-            }
-        }
-
-        modelRoot.simdTransform = simd_mul(
-            roomResetTransform,
-            debugModelTransform(yaw: 0)
-        )
-        scene.rootNode.addChildNode(modelRoot)
-        return scene
-    }
-
-    private func loadRoomPlanScene() -> SCNScene? {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(UUID().uuidString).usdz")
-        defer {
-            try? FileManager.default.removeItem(at: url)
-        }
-        do {
-            try room.export(to: url, exportOptions: .model)
-            return try SCNScene(url: url, options: [.checkConsistency: true])
-        } catch {
-            return nil
-        }
-    }
-
-    private func addHighlightOverlays(to root: SCNNode) {
-        for surface in surfaces where surface.kind != .ceiling {
-            let box = SCNBox(
-                width: CGFloat(surface.width),
-                height: CGFloat(surface.height),
-                length: 0.012,
-                chamferRadius: 0
-            )
-            let material = SCNMaterial()
-            material.diffuse.contents = UIColor.systemCyan.withAlphaComponent(0.45)
-            material.emission.contents = UIColor.systemCyan.withAlphaComponent(0.55)
-            material.transparency = 0.55
-            material.isDoubleSided = true
-            box.materials = [material]
-            let node = SCNNode(geometry: box)
-            node.name = "Highlight-\(surface.id.uuidString)"
-            node.simdTransform = surfaceTransform(surface)
-            node.isHidden = surface.id != cameraSurfaceID
-            root.addChildNode(node)
-        }
-    }
-
-    private func update(camera: SCNNode) {
-        let center = roomCenter
-        let radius = max(roomRadius, 0.5)
-        let distance = radius * 2.8
-        let elevation = Float.pi / 4.0
-        let horizontal = distance * cos(elevation)
-        camera.position = SCNVector3(
-            center.x + horizontal * 0.8,
-            center.y + distance * sin(elevation),
-            center.z + horizontal * 0.8
-        )
-        camera.look(at: SCNVector3(center.x, center.y, center.z))
-    }
-
-    private func updateModelTransform(in view: SCNView, yaw: Double) {
-        guard let scene = view.scene else { return }
-        scene.rootNode.childNode(
-            withName: "DebugModelRoot",
-            recursively: false
-        )?.simdTransform = simd_mul(
-            roomResetTransform,
-            debugModelTransform(yaw: yaw)
-        )
-    }
-
-    private func debugModelTransform(yaw: Double) -> simd_float4x4 {
-        let center = roomCenter
-        let toCenter = translationMatrix(center)
-        let fromCenter = translationMatrix(SCNVector3(
-            -center.x,
-            -center.y,
-            -center.z
-        ))
-        let yawQuat = simd_quatf(
-            angle: Float(yaw * .pi / 180),
-            axis: SIMD3<Float>(0, 1, 0)
-        )
-        let yawMatrix = simd_float4x4(yawQuat)
-        return simd_mul(
-            simd_mul(
-                toCenter,
-                simd_mul(yawMatrix, modelCorrectionMatrix())
-            ),
-            fromCenter
-        )
-    }
-
-    private func resolvedYaw(coordinator: Coordinator) -> Double {
-        if settings.compassEnabled, let heading = headingDeg {
-            let now = Date()
-            let interval = settings.compassRealignIntervalSec
-            if coordinator.compassHeadingOffset == nil
-                || coordinator.lastCompassSync == nil
-                || now.timeIntervalSince(coordinator.lastCompassSync!) >= interval {
-                coordinator.compassHeadingOffset = cameraYawFromTransform - heading
-                coordinator.lastCompassSync = now
-            }
-            return coordinator.compassHeadingOffset! + heading
-        }
-        return cameraYawFromTransform
-    }
-
-    private var cameraYawFromTransform: Double {
-        guard let transform = cameraTransform else { return 0 }
-        let forward = SCNVector3(
-            settings.cameraForwardReversed
-                ? -transform.columns.2.x
-                : transform.columns.2.x,
-            settings.cameraForwardReversed
-                ? -transform.columns.2.y
-                : transform.columns.2.y,
-            settings.cameraForwardReversed
-                ? -transform.columns.2.z
-                : transform.columns.2.z
-        )
-        let horizontal = SIMD2<Float>(forward.x, forward.z)
-        let length = simd_length(horizontal)
-        guard length > 0.0001 else { return 0 }
-        let yaw = Double(atan2(horizontal.x, horizontal.y)) * 180 / .pi
-        let compensation = (settings.swapPitchYaw ? 90 : 0)
-            + (settings.cameraUpReversed ? 180 : 0)
-            + settings.cameraRollDeg
-        let direction = settings.miniYawReversed ? -1.0 : 1.0
-        return direction * yaw + compensation
-    }
-
-    private func makeMaterial(
-        for surface: WallDefectSurface,
-        isIncomplete: Bool,
-        isHighlighted: Bool
-    ) -> SCNMaterial {
-        let material = SCNMaterial()
-        material.isDoubleSided = true
-        material.lightingModel = .phong
-        if isHighlighted {
-            material.diffuse.contents = UIColor.systemCyan
-            material.emission.contents = UIColor(
-                red: 0.05,
-                green: 0.65,
-                blue: 0.9,
-                alpha: 1
-            )
-            material.transparency = 1
-        } else {
-            material.emission.contents = UIColor.clear
-            switch surface.kind {
-            case .floor:
-                material.diffuse.contents = UIColor(
-                    white: 0.82,
-                    alpha: 0.92
-                )
-            case .ceiling:
-                material.diffuse.contents = UIColor(
-                    white: 0.92,
-                    alpha: 0.92
-                )
-            case .wall:
-                material.diffuse.contents = UIColor.white
-                material.transparency = isIncomplete ? 0.28 : 0.92
-            }
-        }
-        return material
-    }
-
-    private var incompleteWallIDs: Set<UUID> {
-        var result = Set<UUID>()
-        for wall in room.walls where wall.completedEdges.count < 4 {
-            result.insert(wall.identifier)
-        }
-        return result
-    }
-
-    private func openingRects(for wallID: UUID) -> [CGRect] {
-        guard let wall = room.walls.first(
-            where: { $0.identifier == wallID }
-        ) else {
-            return []
-        }
-        let wallCenter = SIMD3<Float>(
-            wall.transform.columns.3.x,
-            wall.transform.columns.3.y,
-            wall.transform.columns.3.z
-        )
-        let uUnit = simd_normalize(SIMD3<Float>(
-            wall.transform.columns.0.x,
-            wall.transform.columns.0.y,
-            wall.transform.columns.0.z
-        ))
-        let vUnit = simd_normalize(SIMD3<Float>(
-            wall.transform.columns.1.x,
-            wall.transform.columns.1.y,
-            wall.transform.columns.1.z
-        ))
-        let wallWidth = wall.dimensions.x
-        let wallHeight = wall.dimensions.y
-        let origin = wallCenter
-            - uUnit * (wallWidth * 0.5)
-            - vUnit * (wallHeight * 0.5)
-
-        var rects: [CGRect] = []
-        let openings = room.doors + room.windows + room.openings
-        for opening in openings where opening.parentIdentifier == wallID {
-            let center = SIMD3<Float>(
-                opening.transform.columns.3.x,
-                opening.transform.columns.3.y,
-                opening.transform.columns.3.z
-            )
-            let halfX = SIMD3<Float>(
-                opening.transform.columns.0.x,
-                opening.transform.columns.0.y,
-                opening.transform.columns.0.z
-            ) * (opening.dimensions.x * 0.5)
-            let halfY = SIMD3<Float>(
-                opening.transform.columns.1.x,
-                opening.transform.columns.1.y,
-                opening.transform.columns.1.z
-            ) * (opening.dimensions.y * 0.5)
-            let halfZ = SIMD3<Float>(
-                opening.transform.columns.2.x,
-                opening.transform.columns.2.y,
-                opening.transform.columns.2.z
-            ) * (opening.dimensions.z * 0.5)
-
-            var minU = Float.greatestFiniteMagnitude
-            var maxU = -Float.greatestFiniteMagnitude
-            var minV = Float.greatestFiniteMagnitude
-            var maxV = -Float.greatestFiniteMagnitude
-            for sx: Float in [-1, 1] {
-                for sy: Float in [-1, 1] {
-                    for sz: Float in [-1, 1] {
-                        let corner = center
-                            + halfX * sx
-                            + halfY * sy
-                            + halfZ * sz
-                        let toCorner = corner - origin
-                        let u = simd_dot(toCorner, uUnit)
-                        let v = simd_dot(toCorner, vUnit)
-                        minU = min(minU, u)
-                        maxU = max(maxU, u)
-                        minV = min(minV, v)
-                        maxV = max(maxV, v)
-                    }
-                }
-            }
-            let clipped = CGRect(
-                x: CGFloat(max(0, minU)),
-                y: CGFloat(max(0, minV)),
-                width: CGFloat(min(wallWidth, maxU) - max(0, minU)),
-                height: CGFloat(min(wallHeight, maxV) - max(0, minV))
-            )
-            if clipped.width > 0.01, clipped.height > 0.01 {
-                rects.append(clipped)
-            }
-        }
-        return rects
-    }
-
-    private func updateHighlights(in view: SCNView) {
-        guard let scene = view.scene,
-              let modelRoot = scene.rootNode.childNode(
-                  withName: "DebugModelRoot",
-                  recursively: false
-              ) else {
-            return
-        }
-        for surface in surfaces {
-            let highlightName = "Highlight-\(surface.id.uuidString)"
-            if let node = modelRoot.childNode(
-                withName: highlightName,
-                recursively: true
-            ) {
-                node.isHidden = surface.id != cameraSurfaceID
-                continue
-            }
-            guard let geometryNode = modelRoot.childNode(
-                withName: surface.id.uuidString,
-                recursively: true
-            ), let geometry = geometryNode.geometry else {
-                continue
-            }
-            let material = makeMaterial(
-                for: surface,
-                isIncomplete: incompleteWallIDs.contains(surface.id),
-                isHighlighted: surface.id == cameraSurfaceID
-            )
-            geometry.materials = [material]
-        }
-    }
-
-    private func modelCorrectionMatrix() -> simd_float4x4 {
-        var flip = matrix_identity_float4x4
-        flip.columns.0.x = settings.modelFlipX ? -1 : 1
-        flip.columns.1.y = settings.modelFlipY ? -1 : 1
-        flip.columns.2.z = settings.modelFlipZ ? -1 : 1
-
-        let pitch = simd_quatf(
-            angle: Float(settings.modelPitchDeg * .pi / 180),
-            axis: SIMD3<Float>(1, 0, 0)
-        )
-        let yaw = simd_quatf(
-            angle: Float(settings.modelYawDeg * .pi / 180),
-            axis: SIMD3<Float>(0, 1, 0)
-        )
-        let roll = simd_quatf(
-            angle: Float(settings.modelRollDeg * .pi / 180),
-            axis: SIMD3<Float>(0, 0, 1)
-        )
-        let rotation = simd_float4x4(roll * yaw * pitch)
-        return simd_mul(rotation, flip)
-    }
-
-    private func translationMatrix(_ position: SCNVector3) -> simd_float4x4 {
-        var matrix = matrix_identity_float4x4
-        matrix.columns.3 = SIMD4<Float>(
-            position.x,
-            position.y,
-            position.z,
-            1
-        )
-        return matrix
-    }
-
-    private func crossVector(
-        _ lhs: SCNVector3,
-        _ rhs: SCNVector3
-    ) -> SCNVector3 {
-        SCNVector3(
-            lhs.y * rhs.z - lhs.z * rhs.y,
-            lhs.z * rhs.x - lhs.x * rhs.z,
-            lhs.x * rhs.y - lhs.y * rhs.x
-        )
-    }
-
-    private var roomCenter: SCNVector3 {
-        var sum = SIMD3<Double>.zero
-        var count = 0
-        for surface in surfaces {
-            let center = WallDefectGeometry.planeOrigin(for: surface)
-                + WallDefectGeometry.planeUAxis(for: surface) / 2
-                + WallDefectGeometry.planeVAxis(for: surface) / 2
-            sum += center
-            count += 1
-        }
-        guard count > 0 else { return SCNVector3Zero }
-        return SCNVector3(
-            Float(sum.x / Double(count)),
-            Float(sum.y / Double(count)),
-            Float(sum.z / Double(count))
-        )
-    }
-
-    private var roomRadius: Float {
-        let center = roomCenter
-        var maxDistance: Float = 0
-        for surface in surfaces {
-            let point = WallDefectGeometry.planeOrigin(for: surface)
-                + WallDefectGeometry.planeUAxis(for: surface) / 2
-                + WallDefectGeometry.planeVAxis(for: surface) / 2
-            let distance = simd_distance(
-                SIMD3<Float>(Float(point.x), Float(point.y), Float(point.z)),
-                SIMD3<Float>(center.x, center.y, center.z)
-            )
-            maxDistance = max(maxDistance, distance)
-        }
-        return maxDistance
-    }
-}
-
-private func surfaceTransform(_ surface: WallDefectSurface) -> simd_float4x4 {
-    let origin = WallDefectGeometry.planeOrigin(for: surface)
-    let u = WallDefectGeometry.planeUAxis(for: surface)
-    let v = WallDefectGeometry.planeVAxis(for: surface)
-    let normal = WallDefectGeometry.planeNormal(for: surface)
-    let center = origin + u / 2 + v / 2
-
-    var matrix = simd_float4x4()
-    matrix.columns.0 = SIMD4<Float>(
-        Float(simd_normalize(u).x),
-        Float(simd_normalize(u).y),
-        Float(simd_normalize(u).z),
-        0
-    )
-    matrix.columns.1 = SIMD4<Float>(
-        Float(simd_normalize(v).x),
-        Float(simd_normalize(v).y),
-        Float(simd_normalize(v).z),
-        0
-    )
-    matrix.columns.2 = SIMD4<Float>(
-        Float(simd_normalize(normal).x),
-        Float(simd_normalize(normal).y),
-        Float(simd_normalize(normal).z),
-        0
-    )
-    matrix.columns.3 = SIMD4<Float>(
-        Float(center.x),
-        Float(center.y),
-        Float(center.z),
-        1
-    )
-    return matrix
 }

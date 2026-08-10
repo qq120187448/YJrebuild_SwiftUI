@@ -75,6 +75,9 @@ struct WallDefectPhoto: Identifiable, Codable, Equatable {
     var surfaceAssociations: [WallDefectSurfaceAssociation]
     var annotatedFileName: String?
     var crackResult: CrackRecognitionResult?
+    var planeSurface: WallDefectSurface?
+    var arSkeleton3D: [[Double]]?
+    var isDuplicate: Bool = false
 
     init(
         id: UUID = UUID(),
@@ -90,7 +93,10 @@ struct WallDefectPhoto: Identifiable, Codable, Equatable {
         note: String = "",
         surfaceAssociations: [WallDefectSurfaceAssociation] = [],
         annotatedFileName: String? = nil,
-        crackResult: CrackRecognitionResult? = nil
+        crackResult: CrackRecognitionResult? = nil,
+        planeSurface: WallDefectSurface? = nil,
+        arSkeleton3D: [[Double]]? = nil,
+        isDuplicate: Bool = false
     ) {
         self.id = id
         self.wallID = wallID
@@ -106,6 +112,9 @@ struct WallDefectPhoto: Identifiable, Codable, Equatable {
         self.surfaceAssociations = surfaceAssociations
         self.annotatedFileName = annotatedFileName
         self.crackResult = crackResult
+        self.planeSurface = planeSurface
+        self.arSkeleton3D = arSkeleton3D
+        self.isDuplicate = isDuplicate
     }
 }
 
@@ -142,7 +151,7 @@ struct WallDefectScanDocument: Identifiable, Codable {
     let id: UUID
     let capturedAt: Date
     let name: String
-    let roomJSON: Data
+    let roomJSON: Data?
     let surfaces: [WallDefectSurface]
     var photos: [WallDefectPhoto]
 
@@ -150,7 +159,7 @@ struct WallDefectScanDocument: Identifiable, Codable {
         id: UUID = UUID(),
         capturedAt: Date = Date(),
         name: String,
-        roomJSON: Data,
+        roomJSON: Data? = nil,
         surfaces: [WallDefectSurface],
         photos: [WallDefectPhoto] = []
     ) {

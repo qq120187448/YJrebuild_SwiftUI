@@ -25,7 +25,7 @@ settings:
     DEVELOPMENT_TEAM: R3Z5CY34Q5
     CODE_SIGN_STYLE: Automatic
     PRODUCT_NAME: RoboScan
-    MARKETING_VERSION: 0.62
+    MARKETING_VERSION: 0.63
     CURRENT_PROJECT_VERSION: 1
     SWIFT_VERSION: 5.9
     IPHONEOS_DEPLOYMENT_TARGET: 17.0
@@ -66,6 +66,7 @@ targets:
       - path: Robo/Services/ObjectScanSettings.swift
       - path: Robo/Services/ObjectScanExporter.swift
       - path: Robo/Services/WallDefectGeometry.swift
+      - path: Robo/Services/WallDefectPlaneEstimator.swift
       - path: Robo/Services/WallDefectStore.swift
       - path: Robo/Services/WallDefectARSessionStore.swift
       - path: Robo/Services/WallDefectProjection.swift

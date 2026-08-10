@@ -73,7 +73,7 @@ struct CaptureHomeView: View {
 
                             compactCard(
                                 title: "墙地面缺陷扫描",
-                                subtitle: "RoomPlan + 缺陷识别",
+                                subtitle: "ARKit + 缺陷识别",
                                 icon: "paintbrush.pointed",
                                 color: .orange,
                                 startTitle: "开始",

@@ -19,6 +19,7 @@ struct CrackRecognitionConfig: Codable, Equatable {
     var minSkeletonLength: Int = 80
     var lengthUnit: String = "pixel"       // pixel / known
     var mmPerPixel: Double = 0
+    var dedupDistanceMM: Double = 20
 
     static let defaultConfig = CrackRecognitionConfig()
 
@@ -45,6 +46,7 @@ struct CrackRecognitionConfig: Codable, Equatable {
         minSkeletonLength = min(max(minSkeletonLength, 20), 500)
         lengthUnit = lengthUnit == "known" ? "known" : "pixel"
         mmPerPixel = max(mmPerPixel, 0)
+        dedupDistanceMM = min(max(dedupDistanceMM, 1), 100)
     }
 }
 
@@ -142,6 +144,10 @@ enum CrackRecognitionSettings {
         if let value = components.queryItems?.first(where: { $0.name == "mmpp" })?.value,
            let number = Double(value) {
             config.mmPerPixel = number
+        }
+        if let value = components.queryItems?.first(where: { $0.name == "dedup" })?.value,
+           let number = Double(value) {
+            config.dedupDistanceMM = number
         }
         save(config)
     }

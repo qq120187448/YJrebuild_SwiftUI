@@ -295,11 +295,12 @@ enum WallDefectProjection {
 
         let point = rayOrigin + rayDirection * t
         let delta = point - planeOrigin
-        let u = simd_dot(delta, uAxis) / max(simd_dot(uAxis, uAxis), 0.0001)
-        let v = simd_dot(delta, vAxis) / max(simd_dot(vAxis, vAxis), 0.0001)
-        guard u >= -0.03, v >= -0.03,
-              u <= width + 0.03,
-              v <= height + 0.03 else {
+        let uLength = max(simd_length(uAxis), 0.0001)
+        let vLength = max(simd_length(vAxis), 0.0001)
+        let u = simd_dot(delta, uAxis) / uLength
+        let v = simd_dot(delta, vAxis) / vLength
+        guard abs(u) <= width + 0.03,
+              abs(v) <= height + 0.03 else {
             return nil
         }
         return (SIMD2<Double>(u, v), Float(t))

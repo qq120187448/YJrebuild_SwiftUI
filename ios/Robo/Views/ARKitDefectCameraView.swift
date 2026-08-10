@@ -13,6 +13,7 @@ struct DefectCameraCapture {
     let depth: Data?
     let depthWidth: Int?
     let depthHeight: Int?
+    let planeSurface: WallDefectSurface?
 }
 
 @MainActor
@@ -31,6 +32,11 @@ final class DefectCameraModel: ObservableObject {
     @Published var alignmentResidualM: Double?
     @Published var alignmentSampleCount = 0
     @Published var realignmentRequestedCount = 0
+    @Published var planeDistanceM: Float?
+    @Published var planeNormalText: String?
+    @Published var planeSampleCount = 0
+    @Published var planeSource: String?
+    @Published var currentPlaneSurface: WallDefectSurface?
 
     private let ciContext = CIContext()
 
@@ -61,6 +67,42 @@ final class DefectCameraModel: ObservableObject {
         alignedSurfaces = surfaces
         alignmentYawDeg = WallDefectAligner.yawDegrees(from: transform)
         alignmentResidualM = residualM
+    }
+
+    func update(plane: WallDefectPlane?) {
+        if let plane {
+            let surface = plane.makeSurface()
+            let cameraPosition = SIMD3<Float>(
+                cameraTransform?.columns.3.x ?? 0,
+                cameraTransform?.columns.3.y ?? 0,
+                cameraTransform?.columns.3.z ?? 0
+            )
+            let origin = WallDefectGeometry.planeOrigin(for: surface)
+            let normal = WallDefectGeometry.planeNormal(for: surface)
+            let length = simd_length(normal)
+            let unitNormal = length > 0.0001 ? normal / length : SIMD3<Double>(0, 1, 0)
+            let camera = SIMD3<Double>(
+                Double(cameraPosition.x),
+                Double(cameraPosition.y),
+                Double(cameraPosition.z)
+            )
+            planeDistanceM = Float(abs(simd_dot(camera - origin, unitNormal)))
+            planeNormalText = String(
+                format: "(%.2f, %.2f, %.2f)",
+                unitNormal.x,
+                unitNormal.y,
+                unitNormal.z
+            )
+            planeSampleCount = plane.sampleCount
+            planeSource = plane.source
+            currentPlaneSurface = surface
+        } else {
+            planeDistanceM = nil
+            planeNormalText = nil
+            planeSampleCount = 0
+            planeSource = nil
+            currentPlaneSurface = nil
+        }
     }
 
     func requestRealignment() {
@@ -149,7 +191,8 @@ final class DefectCameraModel: ObservableObject {
             intrinsics: intrinsics,
             depth: depth,
             depthWidth: depthWidth,
-            depthHeight: depthHeight
+            depthHeight: depthHeight,
+            planeSurface: currentPlaneSurface
         )
     }
 
