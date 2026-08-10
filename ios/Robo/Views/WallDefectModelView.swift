@@ -31,9 +31,8 @@ struct WallDefectModelView: View {
     @StateObject private var cameraModel = DefectCameraModel()
     @State private var cameraViewSize = CGSize.zero
     @State private var showSaveConfirm = false
-    @State private var showDebugPanel = false
-    @State private var debugCaptureResolution =
-        CrackRecognitionSettings.load().captureResolution
+    @State private var showRecognitionPanel = false
+    @State private var recognitionConfig = CrackRecognitionSettings.load()
 
     private var captureCenterRatio: CGFloat {
         guard cameraViewSize.width > 0, cameraViewSize.height > 0 else {
@@ -49,6 +48,15 @@ struct WallDefectModelView: View {
                 * DefectCameraModel.squareCropCenterYRatio
         )
         return min(max(centerY / cameraViewSize.height, 0), 1)
+    }
+
+    private var planeResidualText: String {
+        guard let residual = cameraModel.planeResidualM,
+              residual.isFinite,
+              residual < 1 else {
+            return "残差 -"
+        }
+        return String(format: "残差 %.1f cm", residual * 100)
     }
 
     var body: some View {
@@ -88,9 +96,15 @@ struct WallDefectModelView: View {
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
                 planeStatusPanel
+                if showRecognitionPanel {
+                    recognitionPanel
+                }
                 recognitionSummaryPanel
                 bottomBar
             }
+        }
+        .onChange(of: recognitionConfig) { _, newValue in
+            CrackRecognitionSettings.save(newValue)
         }
         .alert("保存扫描包？", isPresented: $showSaveConfirm) {
             Button("保存") {
@@ -123,7 +137,7 @@ struct WallDefectModelView: View {
                     .font(.caption.bold())
                     .foregroundStyle(.white)
                     Text(
-                        "法向 \(cameraModel.planeNormalText ?? "-") · 采样 \(cameraModel.planeSampleCount)"
+                        "法向 \(cameraModel.planeNormalText ?? "-") · 采样 \(cameraModel.planeSampleCount) · \(planeResidualText)"
                     )
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.white.opacity(0.65))
@@ -173,10 +187,10 @@ struct WallDefectModelView: View {
                     }
                     Spacer()
                     Button {
-                        showDebugPanel.toggle()
+                        showRecognitionPanel.toggle()
                     } label: {
                         Label(
-                            showDebugPanel ? "收起" : "调试",
+                            showRecognitionPanel ? "收起" : "识别参数",
                             systemImage: "slider.horizontal.3"
                         )
                         .font(.subheadline.bold())
@@ -189,12 +203,11 @@ struct WallDefectModelView: View {
                 }
 
                 Button {
-                    let config = CrackRecognitionSettings.load()
                     guard let capture = cameraModel.capture(
                         viewSize: cameraViewSize == .zero
                             ? nil
                             : cameraViewSize,
-                        outputSide: CGFloat(config.captureResolution),
+                        outputSide: CGFloat(recognitionConfig.captureResolution),
                         centerRatio: captureCenterRatio
                     ) else { return }
                     onPhoto(capture, cameraModel.currentPlaneSurface)
@@ -220,26 +233,203 @@ struct WallDefectModelView: View {
     }
 
     @ViewBuilder
-    private var debugPanel: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Stepper(
-                "补拍分辨率 \(debugCaptureResolution)",
-                value: $debugCaptureResolution,
-                in: 512...2048,
-                step: 128
-            )
-            .font(.caption2)
-            .foregroundStyle(.white)
-            .onChange(of: debugCaptureResolution) { _, newValue in
-                var config = CrackRecognitionSettings.load()
-                config.captureResolution = newValue
-                CrackRecognitionSettings.save(config)
+    private var recognitionPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("识别参数")
+                    .font(.caption.bold())
+                    .foregroundStyle(.white)
+                Spacer()
+                Button("恢复默认") {
+                    recognitionConfig = .defaultConfig
+                    CrackRecognitionSettings.save(recognitionConfig)
+                }
+                .font(.caption.bold())
+                .foregroundStyle(.orange)
             }
+
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        parameterPicker(
+                            title: "模式",
+                            selection: Binding(
+                                get: { recognitionConfig.mode },
+                                set: { recognitionConfig.mode = $0 }
+                            ),
+                            options: [
+                                ("常规", "normal"),
+                                ("发丝级", "hairline")
+                            ]
+                        )
+                        parameterPicker(
+                            title: "模型",
+                            selection: Binding(
+                                get: { recognitionConfig.modelSize },
+                                set: { recognitionConfig.modelSize = $0 }
+                            ),
+                            options: [
+                                ("n", "n"),
+                                ("s", "s")
+                            ]
+                        )
+                    }
+                    parameterSlider(
+                        title: "置信度",
+                        value: Binding(
+                            get: { recognitionConfig.confidence },
+                            set: { recognitionConfig.confidence = $0 }
+                        ),
+                        range: 0.1...0.9,
+                        step: 0.05,
+                        format: "%.2f"
+                    )
+                    parameterSlider(
+                        title: "IoU",
+                        value: Binding(
+                            get: { recognitionConfig.iou },
+                            set: { recognitionConfig.iou = $0 }
+                        ),
+                        range: 0.1...0.9,
+                        step: 0.05,
+                        format: "%.2f"
+                    )
+                    parameterStepper(
+                        title: "候选框上限",
+                        value: Binding(
+                            get: { recognitionConfig.maxDetections },
+                            set: { recognitionConfig.maxDetections = $0 }
+                        ),
+                        range: 1...25
+                    )
+                    parameterStepper(
+                        title: "裁剪分辨率",
+                        value: Binding(
+                            get: { recognitionConfig.captureResolution },
+                            set: { recognitionConfig.captureResolution = $0 }
+                        ),
+                        range: 512...2048,
+                        step: 128
+                    )
+                    HStack(spacing: 8) {
+                        parameterPicker(
+                            title: "骨架",
+                            selection: Binding(
+                                get: { recognitionConfig.skeletonMode },
+                                set: { recognitionConfig.skeletonMode = $0 }
+                            ),
+                            options: [
+                                ("全部", "all"),
+                                ("主裂缝", "main")
+                            ]
+                        )
+                        parameterPicker(
+                            title: "长度单位",
+                            selection: Binding(
+                                get: { recognitionConfig.lengthUnit },
+                                set: { recognitionConfig.lengthUnit = $0 }
+                            ),
+                            options: [
+                                ("像素", "pixel"),
+                                ("已知mm", "known")
+                            ]
+                        )
+                    }
+                    parameterStepper(
+                        title: "最短骨架长度",
+                        value: Binding(
+                            get: { recognitionConfig.minSkeletonLength },
+                            set: { recognitionConfig.minSkeletonLength = $0 }
+                        ),
+                        range: 20...500,
+                        step: 20
+                    )
+                    parameterStepper(
+                        title: "最小物理长度(mm)",
+                        value: Binding(
+                            get: { Int(recognitionConfig.minPhysicalLengthMM) },
+                            set: {
+                                recognitionConfig.minPhysicalLengthMM = Double($0)
+                            }
+                        ),
+                        range: 1...100
+                    )
+                    parameterStepper(
+                        title: "去重距离(mm)",
+                        value: Binding(
+                            get: { Int(recognitionConfig.dedupDistanceMM) },
+                            set: {
+                                recognitionConfig.dedupDistanceMM = Double($0)
+                            }
+                        ),
+                        range: 1...100
+                    )
+                }
+            }
+            .frame(maxHeight: 210)
         }
         .padding(10)
         .background(.black.opacity(0.78))
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .padding(.horizontal, 12)
+    }
+
+    private func parameterPicker(
+        title: String,
+        selection: Binding<String>,
+        options: [(String, String)]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption2.bold())
+                .foregroundStyle(.white.opacity(0.7))
+            Picker(title, selection: selection) {
+                ForEach(0..<options.count, id: \.self) { index in
+                    Text(options[index].0).tag(options[index].1)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func parameterSlider(
+        title: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double>,
+        step: Double,
+        format: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(title)
+                    .font(.caption2.bold())
+                    .foregroundStyle(.white.opacity(0.7))
+                Spacer()
+                Text(String(format: format, value.wrappedValue))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.white)
+            }
+            Slider(value: value, in: range, step: step)
+                .tint(.cyan)
+        }
+    }
+
+    private func parameterStepper(
+        title: String,
+        value: Binding<Int>,
+        range: ClosedRange<Int>,
+        step: Int = 1
+    ) -> some View {
+        Stepper(
+            "\(title)：\(value.wrappedValue)",
+            value: value,
+            in: range,
+            step: step
+        )
+        .font(.caption2)
+        .foregroundStyle(.white)
     }
 
     @ViewBuilder
@@ -250,9 +440,6 @@ struct WallDefectModelView: View {
                     .font(.caption.bold())
                     .foregroundStyle(.white)
                 Spacer()
-                if showDebugPanel {
-                    debugPanel
-                }
             }
 
             if isRecognizing {
@@ -382,13 +569,30 @@ private struct WallDefectARView: UIViewRepresentable {
                 self.cameraModel.update(frame: frame)
                 if frame.timestamp - self.lastPlaneEstimateTime >= 0.2 {
                     self.lastPlaneEstimateTime = frame.timestamp
+                    let cropCenter = self.cropCenter(in: self.sceneView)
                     let plane = WallDefectPlaneEstimator.estimate(
                         frame: frame,
-                        view: self.sceneView
+                        view: self.sceneView,
+                        center: cropCenter
                     )
                     self.cameraModel.update(plane: plane)
                 }
             }
+        }
+
+        private func cropCenter(in view: ARSCNView?) -> CGPoint? {
+            guard let view, view.bounds.width > 0, view.bounds.height > 0 else {
+                return nil
+            }
+            let side = min(
+                view.bounds.width,
+                view.bounds.height
+            ) * DefectCameraModel.squareCropInset
+            let centerY = max(
+                side / 2 + 48,
+                view.bounds.height * DefectCameraModel.squareCropCenterYRatio
+            )
+            return CGPoint(x: view.bounds.midX, y: centerY)
         }
 
         func updateARSkeleton(

@@ -36,6 +36,7 @@ final class DefectCameraModel: ObservableObject {
     @Published var planeNormalText: String?
     @Published var planeSampleCount = 0
     @Published var planeSource: String?
+    @Published var planeResidualM: Float?
     @Published var currentPlaneSurface: WallDefectSurface?
 
     private let ciContext = CIContext()
@@ -95,12 +96,14 @@ final class DefectCameraModel: ObservableObject {
             )
             planeSampleCount = plane.sampleCount
             planeSource = plane.source
+            planeResidualM = Float(plane.residualM)
             currentPlaneSurface = surface
         } else {
             planeDistanceM = nil
             planeNormalText = nil
             planeSampleCount = 0
             planeSource = nil
+            planeResidualM = nil
             currentPlaneSurface = nil
         }
     }
