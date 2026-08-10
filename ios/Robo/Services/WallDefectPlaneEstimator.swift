@@ -66,7 +66,12 @@ enum WallDefectPlaneEstimator {
     ) -> WallDefectPlane? {
         let points = depthPoints(frame: frame, view: view, center: center)
         var candidates: [(plane: WallDefectPlane, residual: Double)] = []
-        if let raycast = raycastPlane(frame: frame, view: view, center: center) {
+        if let view,
+           let raycast = raycastPlane(
+            frame: frame,
+            view: view,
+            center: center
+           ) {
             candidates.append(
                 (raycast, residual(of: raycast, points: points))
             )
