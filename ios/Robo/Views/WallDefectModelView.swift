@@ -29,12 +29,16 @@ struct WallDefectModelDebugSettings: Equatable {
     var cameraRollDeg: Double = 90
     var swapPitchYaw = false
     var miniYawReversed = true
+    var compassEnabled = true
+    var compassRealignIntervalSec: Double = 5
 }
 
 struct WallDefectModelView: View {
     let room: CapturedRoom
     let surfaces: [WallDefectSurface]
     let arSession: ARSession
+    @ObservedObject var headingService: WallDefectHeadingService
+    var roomResetTransform: simd_float4x4 = matrix_identity_float4x4
     let latestRecognition: WallDefectPhotoRecognitionResult?
     let isRecognizing: Bool
     let progressMessage: String
@@ -48,6 +52,7 @@ struct WallDefectModelView: View {
     @State private var showSaveConfirm = false
     @State private var cameraViewSize = CGSize.zero
     @State private var showDebugPanel = false
+    @State private var didSeedAlignment = false
     @State private var debugCaptureResolution =
         CrackRecognitionSettings.load().captureResolution
 
@@ -73,6 +78,10 @@ struct WallDefectModelView: View {
     private var debugSwapPitchYaw = false
     @AppStorage("wallDefectDebug3.miniYawReversed")
     private var debugMiniYawReversed = true
+    @AppStorage("wallDefectDebug3.compassEnabled")
+    private var debugCompassEnabled = true
+    @AppStorage("wallDefectDebug3.compassRealignIntervalSec")
+    private var debugCompassRealignIntervalSec = 5.0
 
     private var debugSettings: WallDefectModelDebugSettings {
         WallDefectModelDebugSettings(
@@ -86,7 +95,9 @@ struct WallDefectModelView: View {
             cameraUpReversed: debugCameraUpReversed,
             cameraRollDeg: debugCameraRollDeg,
             swapPitchYaw: debugSwapPitchYaw,
-            miniYawReversed: debugMiniYawReversed
+            miniYawReversed: debugMiniYawReversed,
+            compassEnabled: debugCompassEnabled,
+            compassRealignIntervalSec: debugCompassRealignIntervalSec
         )
     }
 
@@ -158,6 +169,8 @@ struct WallDefectModelView: View {
                         surfaces: surfaces,
                         cameraTransform: cameraModel.cameraTransform,
                         cameraSurfaceID: cameraSurfaceID,
+                        headingDeg: headingService.headingDeg,
+                        roomResetTransform: roomResetTransform,
                         settings: debugSettings
                     )
                     .frame(height: 150)
@@ -174,6 +187,9 @@ struct WallDefectModelView: View {
                 bottomBar
             }
         }
+        .onAppear {
+            seedAlignmentIfNeeded()
+        }
         .alert("保存扫描包？", isPresented: $showSaveConfirm) {
             Button("保存") {
                 onSave()
@@ -185,6 +201,26 @@ struct WallDefectModelView: View {
         } message: {
             Text("照片会与墙体 UV 坐标一起归档，后续用于缺陷工程量计算。")
         }
+    }
+
+    private func seedAlignmentIfNeeded() {
+        guard !didSeedAlignment else { return }
+        didSeedAlignment = true
+        let isIdentity =
+            roomResetTransform.columns.0 == SIMD4<Float>(1, 0, 0, 0)
+            && roomResetTransform.columns.1 == SIMD4<Float>(0, 1, 0, 0)
+            && roomResetTransform.columns.2 == SIMD4<Float>(0, 0, 1, 0)
+            && roomResetTransform.columns.3 == SIMD4<Float>(0, 0, 0, 1)
+        guard !isIdentity else { return }
+        let aligned = WallDefectAligner.applyRoomToWorld(
+            roomResetTransform,
+            to: surfaces
+        )
+        cameraModel.updateAlignedSurfaces(
+            aligned,
+            transform: roomResetTransform,
+            residualM: 0
+        )
     }
 
     private var bottomBar: some View {
@@ -238,8 +274,9 @@ struct WallDefectModelView: View {
             if let yaw = cameraModel.alignmentYawDeg {
                 Text(
                     String(
-                        format: "自动对齐 %.0f° · 采样 %d",
+                        format: "自动对齐 %.0f° · 残差 %.3fm · 采样 %d",
                         yaw,
+                        cameraModel.alignmentResidualM ?? -1,
                         cameraModel.alignmentSampleCount
                     )
                 )
@@ -355,6 +392,25 @@ struct WallDefectModelView: View {
                 config.captureResolution = newValue
                 CrackRecognitionSettings.save(config)
             }
+
+            Stepper(
+                "指南针重对齐 \(Int(debugCompassRealignIntervalSec))秒",
+                value: $debugCompassRealignIntervalSec,
+                in: 1...20,
+                step: 1
+            )
+            .font(.caption2)
+            .foregroundStyle(.white)
+
+            debugToggleButton(
+                title: "指南针",
+                isOn: debugCompassEnabled,
+                onText: "开",
+                offText: "关"
+            ) {
+                debugCompassEnabled.toggle()
+            }
+            .frame(maxWidth: .infinity)
 
             Text("模型初始参数")
                 .font(.caption2.bold())
@@ -501,6 +557,8 @@ struct WallDefectModelView: View {
         debugCameraRollDeg = 90
         debugSwapPitchYaw = false
         debugMiniYawReversed = true
+        debugCompassEnabled = true
+        debugCompassRealignIntervalSec = 5
     }
 
     private func debugStepButton(
@@ -817,12 +875,16 @@ private struct WallDefectARView: UIViewRepresentable {
             guard shouldRun, alignmentSamples.count >= 5 else { return }
             lastRealignmentCount = cameraModel.realignmentRequestedCount
             lastAlignmentRunTime = timestamp
-            guard let transform = WallDefectAligner.estimateRoomToWorld(
+            guard let fit = WallDefectAligner.estimateRoomToWorld(
                 samples: alignmentSamples,
                 surfaces: surfaces
             ) else { return }
-            let aligned = WallDefectAligner.applyRoomToWorld(transform, to: surfaces)
-            cameraModel.updateAlignedSurfaces(aligned, transform: transform)
+            let aligned = WallDefectAligner.applyRoomToWorld(fit.transform, to: surfaces)
+            cameraModel.updateAlignedSurfaces(
+                aligned,
+                transform: fit.transform,
+                residualM: fit.residual
+            )
         }
 
         private func depthAlignmentSample(
@@ -1064,6 +1126,8 @@ private struct RoomMiniMapView: UIViewRepresentable {
     let surfaces: [WallDefectSurface]
     let cameraTransform: simd_float4x4?
     let cameraSurfaceID: UUID?
+    let headingDeg: Double?
+    var roomResetTransform: simd_float4x4 = matrix_identity_float4x4
     let settings: WallDefectModelDebugSettings
 
     func makeCoordinator() -> Coordinator {
@@ -1092,7 +1156,8 @@ private struct RoomMiniMapView: UIViewRepresentable {
 
     func updateUIView(_ uiView: SCNView, context: Context) {
         guard let camera = uiView.pointOfView else { return }
-        updateModelTransform(in: uiView)
+        let yaw = resolvedYaw(coordinator: context.coordinator)
+        updateModelTransform(in: uiView, yaw: yaw)
         update(camera: camera)
         if context.coordinator.lastHighlightedID != cameraSurfaceID {
             updateHighlights(in: uiView)
@@ -1102,6 +1167,8 @@ private struct RoomMiniMapView: UIViewRepresentable {
 
     final class Coordinator {
         var lastHighlightedID: UUID?
+        var lastCompassSync: Date?
+        var compassHeadingOffset: Double?
     }
 
     private func loadScene() -> SCNScene {
@@ -1167,7 +1234,10 @@ private struct RoomMiniMapView: UIViewRepresentable {
             }
         }
 
-        modelRoot.simdTransform = debugModelTransform()
+        modelRoot.simdTransform = simd_mul(
+            roomResetTransform,
+            debugModelTransform(yaw: 0)
+        )
         scene.rootNode.addChildNode(modelRoot)
         return scene
     }
@@ -1222,15 +1292,18 @@ private struct RoomMiniMapView: UIViewRepresentable {
         camera.look(at: SCNVector3(center.x, center.y, center.z))
     }
 
-    private func updateModelTransform(in view: SCNView) {
+    private func updateModelTransform(in view: SCNView, yaw: Double) {
         guard let scene = view.scene else { return }
         scene.rootNode.childNode(
             withName: "DebugModelRoot",
             recursively: false
-        )?.simdTransform = debugModelTransform()
+        )?.simdTransform = simd_mul(
+            roomResetTransform,
+            debugModelTransform(yaw: yaw)
+        )
     }
 
-    private func debugModelTransform() -> simd_float4x4 {
+    private func debugModelTransform(yaw: Double) -> simd_float4x4 {
         let center = roomCenter
         let toCenter = translationMatrix(center)
         let fromCenter = translationMatrix(SCNVector3(
@@ -1238,11 +1311,11 @@ private struct RoomMiniMapView: UIViewRepresentable {
             -center.y,
             -center.z
         ))
-        let yaw = simd_quatf(
-            angle: Float(cameraYawDegrees * .pi / 180),
+        let yawQuat = simd_quatf(
+            angle: Float(yaw * .pi / 180),
             axis: SIMD3<Float>(0, 1, 0)
         )
-        let yawMatrix = simd_float4x4(yaw)
+        let yawMatrix = simd_float4x4(yawQuat)
         return simd_mul(
             simd_mul(
                 toCenter,
@@ -1252,7 +1325,22 @@ private struct RoomMiniMapView: UIViewRepresentable {
         )
     }
 
-    private var cameraYawDegrees: Double {
+    private func resolvedYaw(coordinator: Coordinator) -> Double {
+        if settings.compassEnabled, let heading = headingDeg {
+            let now = Date()
+            let interval = settings.compassRealignIntervalSec
+            if coordinator.compassHeadingOffset == nil
+                || coordinator.lastCompassSync == nil
+                || now.timeIntervalSince(coordinator.lastCompassSync!) >= interval {
+                coordinator.compassHeadingOffset = cameraYawFromTransform - heading
+                coordinator.lastCompassSync = now
+            }
+            return coordinator.compassHeadingOffset! + heading
+        }
+        return cameraYawFromTransform
+    }
+
+    private var cameraYawFromTransform: Double {
         guard let transform = cameraTransform else { return 0 }
         let forward = SCNVector3(
             settings.cameraForwardReversed

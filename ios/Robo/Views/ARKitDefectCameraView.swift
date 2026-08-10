@@ -28,6 +28,7 @@ final class DefectCameraModel: ObservableObject {
     @Published var hitSurfaceCoverage: Double?
     @Published var alignedSurfaces: [WallDefectSurface] = []
     @Published var alignmentYawDeg: Double?
+    @Published var alignmentResidualM: Double?
     @Published var alignmentSampleCount = 0
     @Published var realignmentRequestedCount = 0
 
@@ -54,10 +55,12 @@ final class DefectCameraModel: ObservableObject {
 
     func updateAlignedSurfaces(
         _ surfaces: [WallDefectSurface],
-        transform: simd_float4x4
+        transform: simd_float4x4,
+        residualM: Double
     ) {
         alignedSurfaces = surfaces
         alignmentYawDeg = WallDefectAligner.yawDegrees(from: transform)
+        alignmentResidualM = residualM
     }
 
     func requestRealignment() {

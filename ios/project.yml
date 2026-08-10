@@ -70,6 +70,7 @@ targets:
       - path: Robo/Services/WallDefectARSessionStore.swift
       - path: Robo/Services/WallDefectProjection.swift
       - path: Robo/Services/WallDefectAligner.swift
+      - path: Robo/Services/WallDefectHeadingService.swift
       - path: Robo/Services/CrackRecognitionSettings.swift
       - path: Robo/Services/CrackSkeleton.swift
       - path: Robo/Services/CrackYOLODecoder.swift
@@ -134,6 +135,7 @@ targets:
               - roboscan
         LSRequiresIPhoneOS: true
         NSCameraUsageDescription: 需要相机和 LiDAR 权限来进行房间扫描。
+        NSLocationWhenInUseUsageDescription: 需要使用定位与指南针来校准房间方向。
         NSPhotoLibraryUsageDescription: 需要相册权限来选择缺陷照片进行识别。
         UILaunchScreen: {}
         UIRequiresFullScreen: true

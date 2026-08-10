@@ -15,7 +15,7 @@ enum WallDefectAligner {
     static func estimateRoomToWorld(
         samples: [Sample],
         surfaces: [WallDefectSurface]
-    ) -> simd_float4x4? {
+    ) -> (transform: simd_float4x4, residual: Double)? {
         guard samples.count >= 4, !surfaces.isEmpty else { return nil }
 
         let wallNormals = surfaces
@@ -61,7 +61,7 @@ enum WallDefectAligner {
         let fitted = [baseYaw, baseYaw + .pi].compactMap { yaw in
             fit(samples: samples, surfaces: surfaces, yaw: yaw)
         }
-        return fitted.min { $0.residual < $1.residual }?.transform
+        return fitted.min { $0.residual < $1.residual }
     }
 
     /// Maps RoomPlan-frame surfaces into AR world coordinates.

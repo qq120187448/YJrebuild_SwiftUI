@@ -25,6 +25,8 @@ struct WallDefectScanView: View {
     @State private var latestRecognition: WallDefectPhotoRecognitionResult?
     @State private var isPhotoAnalyzing = false
     @State private var recognitionProgress = ""
+    @State private var roomResetTransform = matrix_identity_float4x4
+    @StateObject private var headingService = WallDefectHeadingService()
 
     var body: some View {
         NavigationStack {
@@ -47,6 +49,8 @@ struct WallDefectScanView: View {
                                 room: liveRoom ?? capturedRoom,
                                 surfaces: hitSurfaces,
                                 arSession: defectARSession,
+                                headingService: headingService,
+                                roomResetTransform: roomResetTransform,
                                 latestRecognition: latestRecognition,
                                 isRecognizing: isPhotoAnalyzing,
                                 progressMessage: recognitionProgress,
@@ -116,6 +120,16 @@ struct WallDefectScanView: View {
                 }
             }
             .preferredColorScheme(.dark)
+            .onChange(of: phase) { _, newValue in
+                if newValue == .model {
+                    headingService.start()
+                } else {
+                    headingService.stop()
+                }
+            }
+            .onDisappear {
+                headingService.stop()
+            }
         }
     }
 
@@ -211,6 +225,13 @@ struct WallDefectScanView: View {
                         capturedRoom = room
                         let alignedRoom = liveRoom ?? room
                         hitSurfaces = WallDefectGeometry.surfaces(from: alignedRoom)
+                        var resetTransform = matrix_identity_float4x4
+                        if let session = defectARSession,
+                           let frame = session.currentFrame {
+                            resetTransform = simd_inverse(frame.camera.transform)
+                            session.setWorldOrigin(relativeTransform: resetTransform)
+                            roomResetTransform = resetTransform
+                        }
                         phase = .model
                     }
                 },

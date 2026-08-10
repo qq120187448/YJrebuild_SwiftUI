@@ -23,6 +23,9 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
         let captureView = RoomCaptureView(frame: .zero, arSession: arSession)
         captureView.captureSession.delegate = context.coordinator
         captureView.delegate = context.coordinator
+        let arConfiguration = ARWorldTrackingConfiguration()
+        arConfiguration.worldAlignment = .gravityAndHeading
+        captureView.captureSession.arSession.run(arConfiguration)
         captureView.captureSession.run(configuration: .init())
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak arSession] in
