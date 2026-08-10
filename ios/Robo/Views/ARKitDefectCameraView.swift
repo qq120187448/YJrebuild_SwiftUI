@@ -24,7 +24,7 @@ struct DefectCameraCapture {
 @MainActor
 final class DefectCameraModel: ObservableObject {
     static let squareCropInset: CGFloat = 0.98
-    static let squareCropCenterYRatio: CGFloat = 0.34
+    static let squareCropCenterYRatio: CGFloat = 0.5
 
     private(set) var latestFrame: ARFrame?
     @Published var lastError: String?
@@ -164,12 +164,24 @@ final class DefectCameraModel: ObservableObject {
             viewSize: targetViewSize,
             centerRatio: centerRatio
         )
-        let cropRect = sensorCropRect(
+        var cropRect = sensorCropRect(
             screenRect: screenRect,
             frame: frame,
             viewSize: targetViewSize,
             sensorSize: sensorSize
         )
+        if cropRect.width <= 4 || cropRect.height <= 4 {
+            let side = min(
+                sensorSize.width,
+                sensorSize.height
+            ) * Self.squareCropInset
+            cropRect = CGRect(
+                x: (sensorSize.width - side) / 2,
+                y: (sensorSize.height - side) / 2,
+                width: side,
+                height: side
+            )
+        }
         guard cropRect.width > 4, cropRect.height > 4,
               let croppedCG = sensorCG.cropping(to: cropRect) else {
             lastError = "无法裁剪方形识别区域"
