@@ -48,6 +48,14 @@ struct CrackRecognitionSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("参数") {
+                Button("恢复默认参数") {
+                    config = .defaultConfig
+                    CrackRecognitionSettings.save(config)
+                }
+                .foregroundStyle(.orange)
+            }
+
             Section("检测参数") {
                 sliderRow(
                     title: "检测置信度",
@@ -168,6 +176,18 @@ struct CrackRecognitionSettingsView: View {
                     step: 1
                 )
                 Text("同一面墙上，裂缝 3D 位置相距小于该距离时视为重复拍摄，不重复计入工程量。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("物理长度") {
+                Stepper(
+                    "最小有效裂缝长度：\(Int(config.minPhysicalLengthMM)) mm",
+                    value: $config.minPhysicalLengthMM,
+                    in: 1...100,
+                    step: 1
+                )
+                Text("补拍时骨架投影到墙面后，短于该长度的裂缝不计入工程量。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

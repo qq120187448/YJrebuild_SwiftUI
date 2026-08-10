@@ -32,6 +32,8 @@ struct CrackSparseAnalysis {
     var components: [CrackComponent] = []
     var totalPixelLength: Double = 0
     var longestPixelLength: Double = 0
+    var fullSkeletonPoints: Set<CrackPoint> = []
+    var fullComponentCount: Int = 0
 }
 
 enum CrackSkeleton {
@@ -66,6 +68,7 @@ enum CrackSkeleton {
             skeleton,
             spacing: max(1, spacing)
         )
+        let fullComponentCount = groups.count
         let mmPerPixel = config.lengthUnit == "known"
             ? config.mmPerPixel
             : nil
@@ -110,7 +113,9 @@ enum CrackSkeleton {
                 skeletonPoints: display,
                 components: components,
                 totalPixelLength: totalPixel,
-                longestPixelLength: longest
+                longestPixelLength: longest,
+                fullSkeletonPoints: skeleton,
+                fullComponentCount: fullComponentCount
             )
         }
 
@@ -127,7 +132,9 @@ enum CrackSkeleton {
             skeletonPoints: skeleton,
             components: components,
             totalPixelLength: totalPixel,
-            longestPixelLength: longest
+            longestPixelLength: longest,
+            fullSkeletonPoints: skeleton,
+            fullComponentCount: fullComponentCount
         )
     }
 

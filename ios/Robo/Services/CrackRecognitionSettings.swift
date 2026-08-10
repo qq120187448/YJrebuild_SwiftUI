@@ -20,6 +20,7 @@ struct CrackRecognitionConfig: Codable, Equatable {
     var lengthUnit: String = "pixel"       // pixel / known
     var mmPerPixel: Double = 0
     var dedupDistanceMM: Double = 20
+    var minPhysicalLengthMM: Double = 5
 
     static let defaultConfig = CrackRecognitionConfig()
 
@@ -47,18 +48,25 @@ struct CrackRecognitionConfig: Codable, Equatable {
         lengthUnit = lengthUnit == "known" ? "known" : "pixel"
         mmPerPixel = max(mmPerPixel, 0)
         dedupDistanceMM = min(max(dedupDistanceMM, 1), 100)
+        minPhysicalLengthMM = min(max(minPhysicalLengthMM, 1), 100)
     }
 }
 
 enum CrackRecognitionSettings {
     private static let key = "crackRecognitionConfig"
+    private static let versionKey = "crackRecognitionConfigVersion"
+    private static let currentVersion = 63
 
     static func load() -> CrackRecognitionConfig {
-        guard let data = UserDefaults.standard.data(forKey: key),
+        let storedVersion = UserDefaults.standard.integer(forKey: versionKey)
+        guard storedVersion == currentVersion,
+              let data = UserDefaults.standard.data(forKey: key),
               var config = try? JSONDecoder().decode(
                 CrackRecognitionConfig.self,
                 from: data
               ) else {
+            UserDefaults.standard.removeObject(forKey: key)
+            UserDefaults.standard.set(currentVersion, forKey: versionKey)
             return .defaultConfig
         }
         config.clamp()
@@ -70,6 +78,7 @@ enum CrackRecognitionSettings {
         config.clamp()
         guard let data = try? JSONEncoder().encode(config) else { return }
         UserDefaults.standard.set(data, forKey: key)
+        UserDefaults.standard.set(currentVersion, forKey: versionKey)
     }
 
     static func apply(url: URL) {
@@ -148,6 +157,10 @@ enum CrackRecognitionSettings {
         if let value = components.queryItems?.first(where: { $0.name == "dedup" })?.value,
            let number = Double(value) {
             config.dedupDistanceMM = number
+        }
+        if let value = components.queryItems?.first(where: { $0.name == "physlen" })?.value,
+           let number = Double(value) {
+            config.minPhysicalLengthMM = number
         }
         save(config)
     }

@@ -21,6 +21,9 @@ struct CrackRecognitionOutput {
     let skeletonComponentCount: Int
     let projectedComponentCount: Int
     let pixelLengthReported: Double
+    let maskPointCount: Int
+    let preFilterComponentCount: Int
+    let filteredReason: String?
 }
 
 struct CrackResolutionValidationResult: Identifiable {
@@ -169,8 +172,11 @@ enum CrackRecognitionEngine {
 
         let measureStart = CFAbsoluteTimeGetCurrent()
         progress?("正在墙面投射并计算长度", timings["骨架化"])
+        let measurePoints = skeleton.fullSkeletonPoints.isEmpty
+            ? skeleton.skeletonPoints
+            : skeleton.fullSkeletonPoints
         let measurements = measureSparseSkeleton(
-            points: skeleton.skeletonPoints,
+            points: measurePoints,
             spacing: sparse.spacing,
             width: width,
             height: height,
@@ -194,7 +200,7 @@ enum CrackRecognitionEngine {
         let finalComponents: [CrackComponentMeasurement]
         if !measurements.components.isEmpty {
             finalComponents = measurements.components
-        } else if !fallbackComponents.isEmpty {
+        } else if surfaces.isEmpty, !fallbackComponents.isEmpty {
             finalComponents = fallbackComponents
         } else {
             finalComponents = []
@@ -222,6 +228,23 @@ enum CrackRecognitionEngine {
             pixelLengthReported = 0
         }
 
+        let filteredReason: String?
+        if finalComponents.isEmpty {
+            if sparse.points.isEmpty {
+                filteredReason = "掩码为空"
+            } else if skeleton.fullComponentCount == 0 {
+                filteredReason = "骨架提取为空"
+            } else if !surfaces.isEmpty {
+                filteredReason = measurements.arPoints.isEmpty
+                    ? "墙面投影失败，请对准墙面重新拍摄"
+                    : "投影后物理长度不足 \(Int(config.minPhysicalLengthMM)) mm"
+            } else {
+                filteredReason = "像素长度不足 \(config.minSkeletonLength) px"
+            }
+        } else {
+            filteredReason = nil
+        }
+
         let result = CrackRecognitionResult(
             detectedClass: detections.isEmpty ? "无裂缝" : "裂缝",
             confidence: Double(confidence),
@@ -245,7 +268,10 @@ enum CrackRecognitionEngine {
             rawDetectionCount: detections.count,
             skeletonComponentCount: skeleton.components.count,
             projectedComponentCount: measurements.components.count,
-            pixelLengthReported: pixelLengthReported
+            pixelLengthReported: pixelLengthReported,
+            maskPointCount: sparse.points.count,
+            preFilterComponentCount: skeleton.fullComponentCount,
+            filteredReason: filteredReason
         )
     }
 
@@ -952,6 +978,8 @@ enum CrackRecognitionEngine {
 
             var splitLength = 0.0
             var longest = 0.0
+            var keptCount = 0
+            let minPhysicalM = config.minPhysicalLengthMM / 1000
             for group in groups {
                 var uvByGroup: [CrackPoint: SIMD2<Double>] = [:]
                 for point in group {
@@ -965,6 +993,14 @@ enum CrackRecognitionEngine {
                 )
                 let pixelLength = CrackSkeleton.pixelLength(of: group)
                 let lengthM = physical ?? 0
+                let keep: Bool
+                if let physical {
+                    keep = physical >= minPhysicalM
+                } else {
+                    keep = pixelLength >= Double(config.minSkeletonLength)
+                }
+                guard keep else { continue }
+                keptCount += 1
                 let mm: Double?
                 if let physical {
                     mm = physical * 1000
@@ -986,18 +1022,20 @@ enum CrackRecognitionEngine {
                 longest = max(longest, lengthM)
             }
 
-            summaries.append(
-                CrackSurfaceSummary(
-                    surfaceID: surface.id,
-                    label: surface.label,
-                    pixelArea: skeletonSet.count,
-                    areaM2: 0,
-                    totalLengthM: splitLength,
-                    longestLengthM: longest,
-                    componentCount: groups.count,
-                    uvPolygon: uvPolygonSparse(projected)
+            if keptCount > 0 {
+                summaries.append(
+                    CrackSurfaceSummary(
+                        surfaceID: surface.id,
+                        label: surface.label,
+                        pixelArea: skeletonSet.count,
+                        areaM2: 0,
+                        totalLengthM: splitLength,
+                        longestLengthM: longest,
+                        componentCount: keptCount,
+                        uvPolygon: uvPolygonSparse(projected)
+                    )
                 )
-            )
+            }
             arPoints.append(
                 contentsOf: projected.map {
                     CrackSkeleton3DPoint(

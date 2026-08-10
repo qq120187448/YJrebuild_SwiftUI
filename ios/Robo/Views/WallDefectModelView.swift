@@ -14,6 +14,9 @@ struct WallDefectPhotoRecognitionResult {
     let skeletonComponentCount: Int
     let projectedComponentCount: Int
     let pixelLengthReported: Double
+    let maskPointCount: Int
+    let preFilterComponentCount: Int
+    let filteredReason: String?
 }
 
 struct WallDefectModelView: View {
@@ -283,6 +286,16 @@ struct WallDefectModelView: View {
                         )
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.orange)
+                    }
+                    Text(
+                        "检测 \(latestRecognition.rawDetectionCount) 处 · 掩码 \(latestRecognition.maskPointCount) 点 · 骨架 \(latestRecognition.preFilterComponentCount) 组"
+                    )
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.75))
+                    if let reason = latestRecognition.filteredReason {
+                        Text(reason)
+                            .font(.caption2.bold())
+                            .foregroundStyle(.orange)
                     }
                 } else {
                     let longest = result.components

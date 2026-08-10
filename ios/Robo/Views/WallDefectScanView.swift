@@ -188,9 +188,9 @@ struct WallDefectScanView: View {
                             ]
                         }
                         if output.result.isEmpty {
-                            self.photos[index].note = output.pixelLengthReported > 0
-                                ? "未命中墙面，像素长度 \(Int(output.pixelLengthReported)) px"
-                                : "未识别到裂缝"
+                            let reason = output.filteredReason
+                                ?? "未识别到有效裂缝"
+                            self.photos[index].note = "检测 \(output.rawDetectionCount) 处 · 掩码 \(output.maskPointCount) 点 · 骨架 \(output.preFilterComponentCount) 组 · \(reason)"
                         } else {
                             self.photos[index].note = "裂缝 \(output.result.components.count) 条 · 总长 \(String(format: "%.3f m", output.result.totalLengthM))"
                         }
@@ -203,7 +203,10 @@ struct WallDefectScanView: View {
                             rawDetectionCount: output.rawDetectionCount,
                             skeletonComponentCount: output.skeletonComponentCount,
                             projectedComponentCount: output.projectedComponentCount,
-                            pixelLengthReported: output.pixelLengthReported
+                            pixelLengthReported: output.pixelLengthReported,
+                            maskPointCount: output.maskPointCount,
+                            preFilterComponentCount: output.preFilterComponentCount,
+                            filteredReason: output.filteredReason
                         )
                         self.isPhotoAnalyzing = false
                         self.recognitionProgress = ""
