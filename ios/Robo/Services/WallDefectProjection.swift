@@ -8,7 +8,6 @@ struct CrackDepthContext {
     let depthHeight: Int
     let depthBytesPerRow: Int
     let sensorIntrinsics: [Float]
-    let depthNormalizedTransform: [Float]
     let fullImageSize: CGSize
     let cropRect: CGRect
     let sensorImageSize: CGSize
@@ -30,31 +29,27 @@ enum WallDefectProjection {
               context.depthWidth > 0, context.depthHeight > 0,
               context.depthBytesPerRow > 0,
               context.sensorIntrinsics.count == 9,
-              context.depthNormalizedTransform.count == 6,
               pose.count == 16 else {
             return nil
         }
-        let portraitX = context.cropRect.minX
+        let sensorX = context.cropRect.minX
             + (pixel.x / analysisSize.width) * context.cropRect.width
-        let portraitY = context.cropRect.minY
+        let sensorY = context.cropRect.minY
             + (pixel.y / analysisSize.height) * context.cropRect.height
-
-        let a = context.depthNormalizedTransform[0]
-        let b = context.depthNormalizedTransform[1]
-        let tx = context.depthNormalizedTransform[2]
-        let c = context.depthNormalizedTransform[3]
-        let d = context.depthNormalizedTransform[4]
-        let ty = context.depthNormalizedTransform[5]
-        let normalizedX = a * Float(portraitX) + b * Float(portraitY) + tx
-        let normalizedY = c * Float(portraitX) + d * Float(portraitY) + ty
-        guard normalizedX.isFinite, normalizedY.isFinite,
-              normalizedX >= 0, normalizedY >= 0,
-              normalizedX <= 1, normalizedY <= 1 else {
+        guard context.sensorImageSize.width > 0,
+              context.sensorImageSize.height > 0 else {
             return nil
         }
-
-        let depthX = Int(normalizedX * Float(context.depthWidth))
-        let depthY = Int(normalizedY * Float(context.depthHeight))
+        let depthX = Int(
+            Float(sensorX)
+                / Float(context.sensorImageSize.width)
+                * Float(context.depthWidth)
+        )
+        let depthY = Int(
+            Float(sensorY)
+                / Float(context.sensorImageSize.height)
+                * Float(context.depthHeight)
+        )
         guard depthX >= 0, depthY >= 0,
               depthX < context.depthWidth,
               depthY < context.depthHeight else {
@@ -80,15 +75,11 @@ enum WallDefectProjection {
         let fy = context.sensorIntrinsics[4]
         let cx = context.sensorIntrinsics[2]
         let cy = context.sensorIntrinsics[5]
-        guard context.sensorImageSize.width > 0,
-              context.sensorImageSize.height > 0 else {
-            return nil
-        }
-        let u = normalizedX * Float(context.sensorImageSize.width)
-        let v = normalizedY * Float(context.sensorImageSize.height)
+        let sensorXFloat = Float(sensorX)
+        let sensorYFloat = Float(sensorY)
         let local = SIMD3<Float>(
-            (u - cx) / fx * depthValue,
-            -(v - cy) / fy * depthValue,
+            (sensorXFloat - cx) / fx * depthValue,
+            -(sensorYFloat - cy) / fy * depthValue,
             -depthValue
         )
         let matrix = simd_float4x4(columns: (
@@ -435,16 +426,16 @@ enum WallDefectProjection {
         }
 
         func ray(pixel: CGPoint) -> (origin: SIMD3<Double>, direction: SIMD3<Double>) {
-            // portraitIntrinsics() returns K' = [[fy, 0, H-cy], [0, fx, cx], [0,0,1]].
-            // For a portrait pixel (x, y), the camera-space ray is
-            // ((y - cy')/fy', (x - cx')/fx', -1); ARKit camera looks along -Z.
+            // Intrinsics are in the raw sensor coordinate space (no portrait
+            // rotation), so the camera-space ray is the standard
+            // ((x - cx)/fx, -(y - cy)/fy, -1); ARKit camera looks along -Z.
             let fx = Double(intrinsics.columns.0.x)
             let fy = Double(intrinsics.columns.1.y)
             let cx = Double(intrinsics.columns.2.x)
             let cy = Double(intrinsics.columns.2.y)
             let local = SIMD3<Float>(
-                Float((Double(pixel.y) - cy) / fy),
                 Float((Double(pixel.x) - cx) / fx),
+                Float(-(Double(pixel.y) - cy) / fy),
                 -1
             )
             let rotation = simd_float3x3(columns: (
