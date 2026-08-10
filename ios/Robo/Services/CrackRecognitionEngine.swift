@@ -1055,7 +1055,7 @@ enum CrackRecognitionEngine {
                             context: context
                         )
                     }
-                    CrackSkeleton3DPoint(
+                    return CrackSkeleton3DPoint(
                         surfaceID: surfaceID,
                         pixel: projectedItem.point,
                         world: depthWorld ?? projectedItem.world
