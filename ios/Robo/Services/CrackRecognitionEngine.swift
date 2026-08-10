@@ -954,122 +954,11 @@ enum CrackRecognitionEngine {
             surfaces: surfaces
         )
 
-        var summaries: [CrackSurfaceSummary] = []
-        var components: [CrackComponentMeasurement] = []
-        var totalLength = 0.0
-        var totalArea = 0.0
-        var arPoints: [CrackSkeleton3DPoint] = []
-        var arPointSet = Set<CrackPoint>()
-
-        let sorted = projections.sorted {
-            $0.value.count > $1.value.count
-        }
-        for (surfaceID, projected) in sorted {
-            guard let surface = surfaces.first(
-                where: { $0.id == surfaceID }
-            ) else {
-                continue
-            }
-            let skeletonSet = Set(projected.map(\.point))
-            let groups = CrackSkeleton.componentPointsSparse(
-                skeletonSet,
-                spacing: spacing
-            )
-            let uvByPoint = Dictionary(
-                projected.map { ($0.point, $0.uv) },
-                uniquingKeysWith: { first, _ in first }
-            )
-
-            var splitLength = 0.0
-            var longest = 0.0
-            var keptCount = 0
-            let minPhysicalM = config.minPhysicalLengthMM / 1000
-            for group in groups {
-                var uvByGroup: [CrackPoint: SIMD2<Double>] = [:]
-                for point in group {
-                    if let uv = uvByPoint[point] {
-                        uvByGroup[point] = uv
-                    }
-                }
-                let physical = CrackSkeleton.physicalGraphLength(
-                    group,
-                    uvByPoint: uvByGroup
-                )
-                let pixelLength = CrackSkeleton.pixelLength(of: group)
-                let lengthM = physical ?? 0
-                let keep: Bool
-                if let physical {
-                    keep = physical >= minPhysicalM
-                } else {
-                    keep = pixelLength >= Double(config.minSkeletonLength)
-                }
-                guard keep else { continue }
-                keptCount += 1
-                let mm: Double?
-                if let physical {
-                    mm = physical * 1000
-                } else if config.lengthUnit == "known",
-                          config.mmPerPixel > 0 {
-                    mm = pixelLength * config.mmPerPixel
-                } else {
-                    mm = nil
-                }
-                components.append(
-                    CrackComponentMeasurement(
-                        id: components.count + 1,
-                        pixelLength: pixelLength,
-                        mmLength: mm,
-                        lengthM: lengthM > 0 ? lengthM : nil
-                    )
-                )
-                splitLength += lengthM
-                longest = max(longest, lengthM)
-            }
-
-            if keptCount > 0 {
-                summaries.append(
-                    CrackSurfaceSummary(
-                        surfaceID: surface.id,
-                        label: surface.label,
-                        pixelArea: skeletonSet.count,
-                        areaM2: 0,
-                        totalLengthM: splitLength,
-                        longestLengthM: longest,
-                        componentCount: keptCount,
-                        uvPolygon: uvPolygonSparse(projected)
-                    )
-                )
-            }
-            let projectedAR = projected.map { projectedItem in
-                    let depthWorld = depthContext.flatMap { context in
-                        WallDefectProjection.depthWorldPoint(
-                            pixel: CGPoint(
-                                x: CGFloat(projectedItem.point.x),
-                                y: CGFloat(projectedItem.point.y)
-                            ),
-                            analysisSize: CGSize(
-                                width: width,
-                                height: height
-                            ),
-                            pose: pose,
-                            context: context
-                        )
-                    }
-                    return CrackSkeleton3DPoint(
-                        surfaceID: surfaceID,
-                        pixel: projectedItem.point,
-                        world: depthWorld ?? projectedItem.world
-                    )
-            }
-            arPoints.append(contentsOf: projectedAR)
-            arPointSet.formUnion(projectedAR.map(\.pixel))
-            totalLength += splitLength
-            totalArea += 0
-        }
+        var depthWorldByPoint: [CrackPoint: SIMD3<Float>] = [:]
         if let depthContext {
             let analysisSize = CGSize(width: width, height: height)
-            for point in points where !arPointSet.contains(point) {
-                guard let world = WallDefectProjection.depthWorldPoint(
+            for point in points {
+                if let world = WallDefectProjection.depthWorldPoint(
                     pixel: CGPoint(
                         x: CGFloat(point.x),
                         y: CGFloat(point.y)
@@ -1077,14 +966,161 @@ enum CrackRecognitionEngine {
                     analysisSize: analysisSize,
                     pose: pose,
                     context: depthContext
+                ) {
+                    depthWorldByPoint[point] = world
+                }
+            }
+        }
+
+        var uvByPoint: [CrackPoint: SIMD2<Double>] = [:]
+        var surfaceIDByPoint: [CrackPoint: UUID] = [:]
+        for (surfaceID, projected) in projections {
+            for item in projected {
+                uvByPoint[item.point] = item.uv
+                surfaceIDByPoint[item.point] = surfaceID
+            }
+        }
+
+        var summaries: [CrackSurfaceSummary] = []
+        var components: [CrackComponentMeasurement] = []
+        var totalLength = 0.0
+        var totalArea = 0.0
+        let minPhysicalM = config.minPhysicalLengthMM / 1000
+        let groups = CrackSkeleton.componentPointsSparse(
+            points,
+            spacing: spacing
+        )
+
+        for group in groups {
+            var worldByGroup: [CrackPoint: SIMD3<Float>] = [:]
+            var uvByGroup: [CrackPoint: SIMD2<Double>] = [:]
+            for point in group {
+                if let world = depthWorldByPoint[point] {
+                    worldByGroup[point] = world
+                }
+                if let uv = uvByPoint[point] {
+                    uvByGroup[point] = uv
+                }
+            }
+            let depthPhysical = CrackSkeleton.worldGraphLength(
+                group,
+                worldByPoint: worldByGroup
+            )
+            let uvPhysical = CrackSkeleton.physicalGraphLength(
+                group,
+                uvByPoint: uvByGroup
+            )
+            let physical = depthPhysical ?? uvPhysical
+            let pixelLength = CrackSkeleton.pixelLength(of: group)
+            let lengthM = physical ?? 0
+            let keep: Bool
+            if let physical {
+                keep = physical >= minPhysicalM
+            } else {
+                keep = pixelLength >= Double(config.minSkeletonLength)
+            }
+            guard keep else { continue }
+
+            let mm: Double?
+            if let physical {
+                mm = physical * 1000
+            } else if config.lengthUnit == "known",
+                      config.mmPerPixel > 0 {
+                mm = pixelLength * config.mmPerPixel
+            } else {
+                mm = nil
+            }
+            components.append(
+                CrackComponentMeasurement(
+                    id: components.count + 1,
+                    pixelLength: pixelLength,
+                    mmLength: mm,
+                    lengthM: lengthM > 0 ? lengthM : nil
+                )
+            )
+            totalLength += lengthM
+            totalArea += 0
+
+            var pointsBySurface: [UUID: [CrackPoint]] = [:]
+            for point in group {
+                if let surfaceID = surfaceIDByPoint[point] {
+                    pointsBySurface[surfaceID, default: []].append(point)
+                }
+            }
+            for (surfaceID, surfacePoints) in pointsBySurface {
+                guard let surface = surfaces.first(
+                    where: { $0.id == surfaceID }
                 ) else {
                     continue
                 }
+                var surfaceUV: [CrackPoint: SIMD2<Double>] = [:]
+                for point in surfacePoints {
+                    if let uv = uvByPoint[point] {
+                        surfaceUV[point] = uv
+                    }
+                }
+                let surfaceLength = CrackSkeleton.physicalGraphLength(
+                    surfacePoints,
+                    uvByPoint: surfaceUV
+                ) ?? 0
+                if let index = summaries.firstIndex(
+                    where: { $0.surfaceID == surfaceID }
+                ) {
+                    let old = summaries[index]
+                    summaries[index] = CrackSurfaceSummary(
+                        surfaceID: surfaceID,
+                        label: surface.label,
+                        pixelArea: old.pixelArea + surfacePoints.count,
+                        areaM2: old.areaM2,
+                        totalLengthM: old.totalLengthM + surfaceLength,
+                        longestLengthM: max(
+                            old.longestLengthM,
+                            surfaceLength
+                        ),
+                        componentCount: old.componentCount + 1,
+                        uvPolygon: old.uvPolygon
+                    )
+                } else {
+                    summaries.append(
+                        CrackSurfaceSummary(
+                            surfaceID: surfaceID,
+                            label: surface.label,
+                            pixelArea: surfacePoints.count,
+                            areaM2: 0,
+                            totalLengthM: surfaceLength,
+                            longestLengthM: surfaceLength,
+                            componentCount: 1,
+                            uvPolygon: uvPolygonSparse(
+                                projections[surfaceID] ?? []
+                            )
+                        )
+                    )
+                }
+            }
+        }
+
+        var arPoints: [CrackSkeleton3DPoint] = []
+        var arPointSet = Set<CrackPoint>()
+        for point in points where !arPointSet.contains(point) {
+            if let world = depthWorldByPoint[point] {
+                let surfaceID = surfaceIDByPoint[point] ?? UUID()
                 arPoints.append(
                     CrackSkeleton3DPoint(
-                        surfaceID: UUID(),
+                        surfaceID: surfaceID,
                         pixel: point,
                         world: world
+                    )
+                )
+                arPointSet.insert(point)
+            } else if let surfaceID = surfaceIDByPoint[point],
+                      let projected = projections[surfaceID]?.first(
+                        where: { $0.point == point }
+                      ) {
+                arPoints.append(
+                    CrackSkeleton3DPoint(
+                        surfaceID: surfaceID,
+                        pixel: point,
+                        world: projected.world
                     )
                 )
                 arPointSet.insert(point)

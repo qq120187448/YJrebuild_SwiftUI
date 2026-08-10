@@ -597,6 +597,33 @@ enum CrackSkeleton {
         return length / 2.0
     }
 
+    static func worldGraphLength(
+        _ points: [CrackPoint],
+        worldByPoint: [CrackPoint: SIMD3<Float>]
+    ) -> Double? {
+        guard !points.isEmpty else { return nil }
+        let pointSet = Set(points)
+        var length = 0.0
+        var edgeCount = 0
+        for point in points {
+            guard let current = worldByPoint[point] else { continue }
+            for dy in -1...1 {
+                for dx in -1...1 {
+                    if dy == 0 && dx == 0 { continue }
+                    let neighbor = CrackPoint(x: point.x + dx, y: point.y + dy)
+                    guard pointSet.contains(neighbor),
+                          let neighborWorld = worldByPoint[neighbor] else {
+                        continue
+                    }
+                    length += Double(simd_distance(current, neighborWorld))
+                    edgeCount += 1
+                }
+            }
+        }
+        guard edgeCount > 0 else { return nil }
+        return length / 2.0
+    }
+
     private static func graphLength(_ points: [CrackPoint], width: Int) -> Double {
         var length = 0.0
         let pointSet = Set(points)
