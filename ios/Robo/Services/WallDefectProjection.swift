@@ -2,7 +2,109 @@ import CoreGraphics
 import Foundation
 import simd
 
+struct CrackDepthContext {
+    let depth: Data
+    let depthWidth: Int
+    let depthHeight: Int
+    let depthBytesPerRow: Int
+    let sensorIntrinsics: [Float]
+    let depthNormalizedTransform: [Float]
+    let fullImageSize: CGSize
+    let cropRect: CGRect
+    let sensorImageSize: CGSize
+}
+
 enum WallDefectProjection {
+
+    /// Unprojects an analysis-image pixel to AR world coordinates using the
+    /// LiDAR depth from the exact same frame as the photo. This keeps the AR
+    /// skeleton in the same coordinate system as the camera preview and does
+    /// not depend on a fitted plane.
+    static func depthWorldPoint(
+        pixel: CGPoint,
+        analysisSize: CGSize,
+        pose: [Float],
+        context: CrackDepthContext
+    ) -> SIMD3<Float>? {
+        guard analysisSize.width > 0, analysisSize.height > 0,
+              context.depthWidth > 0, context.depthHeight > 0,
+              context.depthBytesPerRow > 0,
+              context.sensorIntrinsics.count == 9,
+              context.depthNormalizedTransform.count == 6,
+              pose.count == 16 else {
+            return nil
+        }
+        let portraitX = context.cropRect.minX
+            + (pixel.x / analysisSize.width) * context.cropRect.width
+        let portraitY = context.cropRect.minY
+            + (pixel.y / analysisSize.height) * context.cropRect.height
+
+        let a = context.depthNormalizedTransform[0]
+        let b = context.depthNormalizedTransform[1]
+        let tx = context.depthNormalizedTransform[2]
+        let c = context.depthNormalizedTransform[3]
+        let d = context.depthNormalizedTransform[4]
+        let ty = context.depthNormalizedTransform[5]
+        let normalizedX = a * Float(portraitX) + b * Float(portraitY) + tx
+        let normalizedY = c * Float(portraitX) + d * Float(portraitY) + ty
+        guard normalizedX.isFinite, normalizedY.isFinite,
+              normalizedX >= 0, normalizedY >= 0,
+              normalizedX <= 1, normalizedY <= 1 else {
+            return nil
+        }
+
+        let depthX = Int(normalizedX * Float(context.depthWidth))
+        let depthY = Int(normalizedY * Float(context.depthHeight))
+        guard depthX >= 0, depthY >= 0,
+              depthX < context.depthWidth,
+              depthY < context.depthHeight else {
+            return nil
+        }
+        let offset = depthY * context.depthBytesPerRow
+            + depthX * MemoryLayout<Float32>.size
+        guard offset >= 0, offset + MemoryLayout<Float32>.size
+                <= context.depth.count else {
+            return nil
+        }
+        let depthValue = context.depth.withUnsafeBytes { bytes -> Float in
+            bytes.loadUnaligned(
+                fromByteOffset: offset,
+                as: Float.self
+            )
+        }
+        guard depthValue.isFinite, depthValue > 0.05, depthValue < 8 else {
+            return nil
+        }
+
+        let fx = context.sensorIntrinsics[0]
+        let fy = context.sensorIntrinsics[4]
+        let cx = context.sensorIntrinsics[2]
+        let cy = context.sensorIntrinsics[5]
+        guard context.sensorImageSize.width > 0,
+              context.sensorImageSize.height > 0 else {
+            return nil
+        }
+        let u = normalizedX * Float(context.sensorImageSize.width)
+        let v = normalizedY * Float(context.sensorImageSize.height)
+        let local = SIMD3<Float>(
+            (u - cx) / fx * depthValue,
+            -(v - cy) / fy * depthValue,
+            -depthValue
+        )
+        let matrix = simd_float4x4(columns: (
+            SIMD4<Float>(pose[0], pose[1], pose[2], pose[3]),
+            SIMD4<Float>(pose[4], pose[5], pose[6], pose[7]),
+            SIMD4<Float>(pose[8], pose[9], pose[10], pose[11]),
+            SIMD4<Float>(pose[12], pose[13], pose[14], pose[15])
+        ))
+        let world = matrix * SIMD4<Float>(
+            local.x,
+            local.y,
+            local.z,
+            1
+        )
+        return SIMD3<Float>(world.x, world.y, world.z)
+    }
 
     static func portraitIntrinsics(
         intrinsics: [Float],

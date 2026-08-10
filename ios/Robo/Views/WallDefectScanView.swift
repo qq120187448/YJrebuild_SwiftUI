@@ -156,6 +156,25 @@ struct WallDefectScanView: View {
             let image = capture.image
             let pose = capture.pose
             let intrinsics = capture.intrinsics
+            let depthContext: CrackDepthContext?
+            if let depth = capture.depth,
+               let depthWidth = capture.depthWidth,
+               let depthHeight = capture.depthHeight,
+               let depthBytesPerRow = capture.depthBytesPerRow {
+                depthContext = CrackDepthContext(
+                    depth: depth,
+                    depthWidth: depthWidth,
+                    depthHeight: depthHeight,
+                    depthBytesPerRow: depthBytesPerRow,
+                    sensorIntrinsics: capture.sensorIntrinsics,
+                    depthNormalizedTransform: capture.depthNormalizedTransform,
+                    fullImageSize: capture.fullImageSize,
+                    cropRect: capture.cropRect,
+                    sensorImageSize: capture.sensorImageSize
+                )
+            } else {
+                depthContext = nil
+            }
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
                     let output = try CrackRecognitionEngine.analyze(
@@ -168,7 +187,8 @@ struct WallDefectScanView: View {
                             DispatchQueue.main.async {
                                 self.recognitionProgress = message
                             }
-                        }
+                        },
+                        depthContext: depthContext
                     )
                     DispatchQueue.main.async {
                         guard let index = self.photos.firstIndex(

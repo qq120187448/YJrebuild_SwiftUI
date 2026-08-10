@@ -109,7 +109,8 @@ enum CrackRecognitionEngine {
         intrinsics: [Float],
         surfaces: [WallDefectSurface],
         config: CrackRecognitionConfig,
-        progress: ((String, Double?) -> Void)? = nil
+        progress: ((String, Double?) -> Void)? = nil,
+        depthContext: CrackDepthContext? = nil
     ) throws -> CrackRecognitionOutput {
         var timings: [String: Double] = [:]
         let overallStart = CFAbsoluteTimeGetCurrent()
@@ -183,7 +184,8 @@ enum CrackRecognitionEngine {
             pose: pose,
             intrinsics: scaledIntrinsics,
             surfaces: surfaces,
-            config: config
+            config: config,
+            depthContext: depthContext
         )
         timings["墙面投射与长度"] = CFAbsoluteTimeGetCurrent() - measureStart
 
@@ -933,7 +935,8 @@ enum CrackRecognitionEngine {
         pose: [Float],
         intrinsics: [Float],
         surfaces: [WallDefectSurface],
-        config: CrackRecognitionConfig
+        config: CrackRecognitionConfig,
+        depthContext: CrackDepthContext? = nil
     ) -> (
         summaries: [CrackSurfaceSummary],
         components: [CrackComponentMeasurement],
@@ -941,7 +944,7 @@ enum CrackRecognitionEngine {
         totalAreaM2: Double,
         arPoints: [CrackSkeleton3DPoint]
     ) {
-        guard !points.isEmpty, !surfaces.isEmpty else {
+        guard !points.isEmpty else {
             return ([], [], 0, 0, [])
         }
         let projections = WallDefectProjection.projectSparsePoints(
@@ -956,6 +959,7 @@ enum CrackRecognitionEngine {
         var totalLength = 0.0
         var totalArea = 0.0
         var arPoints: [CrackSkeleton3DPoint] = []
+        var arPointSet = Set<CrackPoint>()
 
         let sorted = projections.sorted {
             $0.value.count > $1.value.count
@@ -1036,17 +1040,55 @@ enum CrackRecognitionEngine {
                     )
                 )
             }
-            arPoints.append(
-                contentsOf: projected.map {
+            let projectedAR = projected.map { projectedItem in
+                    let depthWorld = depthContext.flatMap { context in
+                        WallDefectProjection.depthWorldPoint(
+                            pixel: CGPoint(
+                                x: CGFloat(projectedItem.point.x),
+                                y: CGFloat(projectedItem.point.y)
+                            ),
+                            analysisSize: CGSize(
+                                width: width,
+                                height: height
+                            ),
+                            pose: pose,
+                            context: context
+                        )
+                    }
                     CrackSkeleton3DPoint(
                         surfaceID: surfaceID,
-                        pixel: $0.point,
-                        world: $0.world
+                        pixel: projectedItem.point,
+                        world: depthWorld ?? projectedItem.world
                     )
-                }
-            )
+            }
+            arPoints.append(contentsOf: projectedAR)
+            arPointSet.formUnion(projectedAR.map(\.pixel))
             totalLength += splitLength
             totalArea += 0
+        }
+        if let depthContext {
+            let analysisSize = CGSize(width: width, height: height)
+            for point in points where !arPointSet.contains(point) {
+                guard let world = WallDefectProjection.depthWorldPoint(
+                    pixel: CGPoint(
+                        x: CGFloat(point.x),
+                        y: CGFloat(point.y)
+                    ),
+                    analysisSize: analysisSize,
+                    pose: pose,
+                    context: depthContext
+                ) else {
+                    continue
+                }
+                arPoints.append(
+                    CrackSkeleton3DPoint(
+                        surfaceID: UUID(),
+                        pixel: point,
+                        world: world
+                    )
+                )
+                arPointSet.insert(point)
+            }
         }
         return (summaries, components, totalLength, totalArea, arPoints)
     }

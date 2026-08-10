@@ -13,6 +13,12 @@ struct DefectCameraCapture {
     let depth: Data?
     let depthWidth: Int?
     let depthHeight: Int?
+    let depthBytesPerRow: Int?
+    let sensorIntrinsics: [Float]
+    let depthNormalizedTransform: [Float]
+    let fullImageSize: CGSize
+    let cropRect: CGRect
+    let sensorImageSize: CGSize
     let planeSurface: WallDefectSurface?
 }
 
@@ -181,12 +187,19 @@ final class DefectCameraModel: ObservableObject {
         var depth: Data?
         var depthWidth: Int?
         var depthHeight: Int?
+        var depthBytesPerRow: Int?
         if let depthMap = frame.smoothedSceneDepth?.depthMap ?? frame.sceneDepth?.depthMap {
             let copied = copyDepth(pixelBuffer: depthMap)
             depth = copied.data
             depthWidth = copied.width
             depthHeight = copied.height
+            depthBytesPerRow = copied.bytesPerRow
         }
+        let sensorIntrinsics = flatten(matrix: frame.camera.intrinsics)
+        let depthNormalizedTransform = depthDisplayTransform(
+            frame: frame,
+            imageSize: fullImage.size
+        )
 
         return DefectCameraCapture(
             image: image,
@@ -195,6 +208,15 @@ final class DefectCameraModel: ObservableObject {
             depth: depth,
             depthWidth: depthWidth,
             depthHeight: depthHeight,
+            depthBytesPerRow: depthBytesPerRow,
+            sensorIntrinsics: sensorIntrinsics,
+            depthNormalizedTransform: depthNormalizedTransform,
+            fullImageSize: fullImage.size,
+            cropRect: cropRect,
+            sensorImageSize: CGSize(
+                width: CGFloat(frame.camera.imageResolution.width),
+                height: CGFloat(frame.camera.imageResolution.height)
+            ),
             planeSurface: currentPlaneSurface
         )
     }
@@ -303,19 +325,38 @@ final class DefectCameraModel: ObservableObject {
 
     private func copyDepth(
         pixelBuffer: CVPixelBuffer
-    ) -> (data: Data?, width: Int?, height: Int?) {
+    ) -> (data: Data?, width: Int?, height: Int?, bytesPerRow: Int?) {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer {
             CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
         }
         guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else {
-            return (nil, nil, nil)
+            return (nil, nil, nil, nil)
         }
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
         let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
         let data = Data(bytes: base, count: bytesPerRow * height)
-        return (data, width, height)
+        return (data, width, height, bytesPerRow)
+    }
+
+    private func depthDisplayTransform(
+        frame: ARFrame,
+        imageSize: CGSize
+    ) -> [Float] {
+        guard imageSize.width > 0, imageSize.height > 0 else { return [] }
+        let transform = frame.displayTransform(
+            for: .portrait,
+            viewportSize: imageSize
+        ).inverted()
+        return [
+            Float(transform.a),
+            Float(transform.b),
+            Float(transform.tx),
+            Float(transform.c),
+            Float(transform.d),
+            Float(transform.ty)
+        ]
     }
 }
 
