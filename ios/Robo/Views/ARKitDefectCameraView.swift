@@ -201,7 +201,7 @@ final class DefectCameraModel: ObservableObject {
             pointCloud = WallDefectProjection.makePointCloud(
                 frame: frame,
                 depthMap: depthMap,
-                sampleStep: 2
+                sampleStep: 1
             )
             let copied = copyDepth(pixelBuffer: depthMap)
             depth = copied.data

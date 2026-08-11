@@ -1003,14 +1003,19 @@ enum CrackRecognitionEngine {
             }
             let depthPhysical = CrackSkeleton.worldGraphLength(
                 group,
-                worldByPoint: worldByGroup
+                worldByPoint: worldByGroup,
+                spacing: spacing
             )
             let uvPhysical = CrackSkeleton.physicalGraphLength(
                 group,
-                uvByPoint: uvByGroup
+                uvByPoint: uvByGroup,
+                spacing: spacing
             )
             let physical = depthPhysical ?? uvPhysical
-            let pixelLength = CrackSkeleton.pixelLength(of: group)
+            let pixelLength = CrackSkeleton.pixelLength(
+                of: group,
+                spacing: spacing
+            )
             let lengthM = physical ?? 0
             let keep: Bool
             if let physical {
@@ -1060,7 +1065,8 @@ enum CrackRecognitionEngine {
                 }
                 let surfaceLength = CrackSkeleton.physicalGraphLength(
                     surfacePoints,
-                    uvByPoint: surfaceUV
+                    uvByPoint: surfaceUV,
+                    spacing: spacing
                 ) ?? 0
                 if let index = summaries.firstIndex(
                     where: { $0.surfaceID == surfaceID }

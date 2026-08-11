@@ -88,7 +88,11 @@ enum CrackSkeleton {
             var components = prunedGroups.enumerated().map { index, points in
                 CrackComponent(
                     id: index + 1,
-                    pixelLength: graphLength(points, width: width),
+                    pixelLength: graphLength(
+                        points,
+                        width: width,
+                        spacing: max(1, spacing)
+                    ),
                     mmPerPixel: mmPerPixel
                 )
             }
@@ -121,8 +125,12 @@ enum CrackSkeleton {
 
         let components = groups.enumerated().map { index, points in
             CrackComponent(
-                id: index + 1,
-                pixelLength: graphLength(points, width: width),
+                    id: index + 1,
+                    pixelLength: graphLength(
+                        points,
+                        width: width,
+                        spacing: max(1, spacing)
+                    ),
                 mmPerPixel: mmPerPixel
             )
         }
@@ -359,7 +367,11 @@ enum CrackSkeleton {
             var components = prunedGroups.enumerated().map { index, points in
                 CrackComponent(
                     id: index + 1,
-                    pixelLength: graphLength(points, width: width),
+                    pixelLength: graphLength(
+                        points,
+                        width: width,
+                        spacing: max(1, spacing)
+                    ),
                     mmPerPixel: config.lengthUnit == "known" ? config.mmPerPixel : nil
                 )
             }
@@ -523,8 +535,11 @@ enum CrackSkeleton {
         return components
     }
 
-    static func pixelLength(of points: [CrackPoint]) -> Double {
-        graphLength(points, width: 0)
+    static func pixelLength(
+        of points: [CrackPoint],
+        spacing: Int = 1
+    ) -> Double {
+        graphLength(points, width: 0, spacing: spacing)
     }
 
     static func componentPoints(
@@ -572,16 +587,18 @@ enum CrackSkeleton {
 
     static func physicalGraphLength(
         _ points: [CrackPoint],
-        uvByPoint: [CrackPoint: SIMD2<Double>]
+        uvByPoint: [CrackPoint: SIMD2<Double>],
+        spacing: Int = 1
     ) -> Double? {
         guard !points.isEmpty else { return nil }
         let pointSet = Set(points)
+        let step = max(1, spacing)
         var length = 0.0
         var edgeCount = 0
         for point in points {
             guard let currentUV = uvByPoint[point] else { continue }
-            for dy in -1...1 {
-                for dx in -1...1 {
+            for dy in -step...step where dy % step == 0 {
+                for dx in -step...step where dx % step == 0 {
                     if dy == 0 && dx == 0 { continue }
                     let neighbor = CrackPoint(x: point.x + dx, y: point.y + dy)
                     guard pointSet.contains(neighbor),
@@ -599,16 +616,18 @@ enum CrackSkeleton {
 
     static func worldGraphLength(
         _ points: [CrackPoint],
-        worldByPoint: [CrackPoint: SIMD3<Float>]
+        worldByPoint: [CrackPoint: SIMD3<Float>],
+        spacing: Int = 1
     ) -> Double? {
         guard !points.isEmpty else { return nil }
         let pointSet = Set(points)
+        let step = max(1, spacing)
         var length = 0.0
         var edgeCount = 0
         for point in points {
             guard let current = worldByPoint[point] else { continue }
-            for dy in -1...1 {
-                for dx in -1...1 {
+            for dy in -step...step where dy % step == 0 {
+                for dx in -step...step where dx % step == 0 {
                     if dy == 0 && dx == 0 { continue }
                     let neighbor = CrackPoint(x: point.x + dx, y: point.y + dy)
                     guard pointSet.contains(neighbor),
@@ -624,16 +643,25 @@ enum CrackSkeleton {
         return length / 2.0
     }
 
-    private static func graphLength(_ points: [CrackPoint], width: Int) -> Double {
+    private static func graphLength(
+        _ points: [CrackPoint],
+        width: Int,
+        spacing: Int = 1
+    ) -> Double {
+        let step = max(1, spacing)
         var length = 0.0
         let pointSet = Set(points)
         for point in points {
-            for dy in -1...1 {
-                for dx in -1...1 {
+            for dy in -step...step where dy % step == 0 {
+                for dx in -step...step where dx % step == 0 {
                     if dy == 0 && dx == 0 { continue }
                     let neighbor = CrackPoint(x: point.x + dx, y: point.y + dy)
                     guard pointSet.contains(neighbor) else { continue }
-                    length += (dy == 0 || dx == 0) ? 1.0 : 2.0.squareRoot()
+                    if dy == 0 || dx == 0 {
+                        length += Double(step)
+                    } else {
+                        length += Double(step) * 2.0.squareRoot()
+                    }
                 }
             }
         }

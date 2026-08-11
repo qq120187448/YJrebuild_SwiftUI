@@ -136,7 +136,7 @@ enum WallDefectProjection {
     static func worldPoint(
         near imagePixel: CGPoint,
         in points: [DefectPointCloudPoint],
-        radius: CGFloat = 8
+        radius: CGFloat = 4
     ) -> SIMD3<Float>? {
         guard !points.isEmpty else { return nil }
         var bestDistance = CGFloat.infinity
