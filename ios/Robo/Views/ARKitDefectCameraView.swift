@@ -15,6 +15,7 @@ struct DefectCameraCapture {
     let depthHeight: Int?
     let depthBytesPerRow: Int?
     let sensorIntrinsics: [Float]
+    let depthNormalizedTransform: [Float]
     let fullImageSize: CGSize
     let cropRect: CGRect
     let sensorImageSize: CGSize
@@ -150,7 +151,7 @@ final class DefectCameraModel: ObservableObject {
             lastError = "尚未获取 ARKit 画面"
             return nil
         }
-        guard let sensorCG = sensorImage(from: frame) else {
+        guard let fullImage = portraitImage(from: frame) else {
             lastError = "无法读取相机画面"
             return nil
         }
@@ -159,39 +160,51 @@ final class DefectCameraModel: ObservableObject {
             width: CGFloat(CVPixelBufferGetWidth(buffer)),
             height: CGFloat(CVPixelBufferGetHeight(buffer))
         )
+        let fullImageSize = CGSize(
+            width: CGFloat(fullImage.width),
+            height: CGFloat(fullImage.height)
+        )
         let targetViewSize = viewSize ?? CGSize(width: 390, height: 844)
         let screenRect = squareScreenRect(
             viewSize: targetViewSize,
             centerRatio: centerRatio
         )
-        var cropRect = sensorCropRect(
+        var cropRect = portraitCropRect(
             screenRect: screenRect,
-            frame: frame,
-            viewSize: targetViewSize,
-            sensorSize: sensorSize
+            imageSize: fullImageSize,
+            viewSize: targetViewSize
         )
         if cropRect.width <= 4 || cropRect.height <= 4 {
             let side = min(
-                sensorSize.width,
-                sensorSize.height
+                fullImageSize.width,
+                fullImageSize.height
             ) * Self.squareCropInset
             cropRect = CGRect(
-                x: (sensorSize.width - side) / 2,
-                y: (sensorSize.height - side) / 2,
+                x: (fullImageSize.width - side) / 2,
+                y: (fullImageSize.height - side) / 2,
                 width: side,
                 height: side
             )
         }
         guard cropRect.width > 4, cropRect.height > 4,
-              let croppedCG = sensorCG.cropping(to: cropRect) else {
+              let croppedCG = portraitCroppedCG(
+                from: frame,
+                cropRect: cropRect,
+                fullImageSize: fullImageSize
+              ) else {
             lastError = "无法裁剪方形识别区域"
             return nil
         }
         let image = resizedSquare(cgImage: croppedCG, side: outputSide)
 
         let pose = flatten(matrix: frame.camera.transform)
-        let intrinsics = sensorAdjustedIntrinsics(
-            sensorIntrinsics: flatten(matrix: frame.camera.intrinsics),
+        var intrinsics = WallDefectProjection.portraitIntrinsics(
+            intrinsics: flatten(matrix: frame.camera.intrinsics),
+            rawWidth: CVPixelBufferGetWidth(buffer),
+            rawHeight: CVPixelBufferGetHeight(buffer)
+        )
+        intrinsics = sensorAdjustedIntrinsics(
+            sensorIntrinsics: intrinsics,
             cropRect: cropRect,
             outputSide: image.size.width
         )
@@ -208,6 +221,11 @@ final class DefectCameraModel: ObservableObject {
             depthBytesPerRow = copied.bytesPerRow
         }
         let sensorIntrinsics = flatten(matrix: frame.camera.intrinsics)
+        let depthNormalizedTransform = depthDisplayTransform(
+            frame: frame,
+            imageSize: fullImageSize,
+            viewportSize: targetViewSize
+        )
 
         return DefectCameraCapture(
             image: image,
@@ -218,15 +236,17 @@ final class DefectCameraModel: ObservableObject {
             depthHeight: depthHeight,
             depthBytesPerRow: depthBytesPerRow,
             sensorIntrinsics: sensorIntrinsics,
-            fullImageSize: sensorSize,
+            depthNormalizedTransform: depthNormalizedTransform,
+            fullImageSize: fullImageSize,
             cropRect: cropRect,
             sensorImageSize: sensorSize,
             planeSurface: currentPlaneSurface
         )
     }
 
-    private func sensorImage(from frame: ARFrame) -> CGImage? {
+    private func portraitImage(from frame: ARFrame) -> CGImage? {
         let ciImage = CIImage(cvPixelBuffer: frame.capturedImage)
+            .oriented(.right)
         return ciContext.createCGImage(ciImage, from: ciImage.extent)
     }
 
@@ -248,33 +268,46 @@ final class DefectCameraModel: ObservableObject {
         )
     }
 
-    private func sensorCropRect(
+    private func portraitCropRect(
         screenRect: CGRect,
-        frame: ARFrame,
-        viewSize: CGSize,
-        sensorSize: CGSize
+        imageSize: CGSize,
+        viewSize: CGSize
     ) -> CGRect {
-        guard sensorSize.width > 0, sensorSize.height > 0 else { return .zero }
-        let display = frame.displayTransform(
-            for: .portrait,
-            viewportSize: viewSize
-        ).inverted()
-        let normalized = screenRect.applying(display)
-        var rect = CGRect(
-            x: normalized.minX * sensorSize.width,
-            y: normalized.minY * sensorSize.height,
-            width: normalized.width * sensorSize.width,
-            height: normalized.height * sensorSize.height
+        guard imageSize.width > 0, imageSize.height > 0,
+              viewSize.width > 0, viewSize.height > 0 else {
+            return .zero
+        }
+        let scale = max(
+            viewSize.width / imageSize.width,
+            viewSize.height / imageSize.height
         )
-        rect = rect.intersection(
-            CGRect(
-                x: 0,
-                y: 0,
-                width: sensorSize.width,
-                height: sensorSize.height
-            )
-        ).integral
-        return rect
+        let drawnWidth = imageSize.width * scale
+        let drawnHeight = imageSize.height * scale
+        let offsetX = (viewSize.width - drawnWidth) / 2
+        let offsetY = (viewSize.height - drawnHeight) / 2
+        return CGRect(
+            x: (screenRect.minX - offsetX) / scale,
+            y: (screenRect.minY - offsetY) / scale,
+            width: screenRect.width / scale,
+            height: screenRect.height / scale
+        )
+    }
+
+    private func portraitCroppedCG(
+        from frame: ARFrame,
+        cropRect: CGRect,
+        fullImageSize: CGSize
+    ) -> CGImage? {
+        let ciImage = CIImage(cvPixelBuffer: frame.capturedImage)
+            .oriented(.right)
+        let ciRect = CGRect(
+            x: cropRect.minX,
+            y: fullImageSize.height - cropRect.maxY,
+            width: cropRect.width,
+            height: cropRect.height
+        )
+        let cropped = ciImage.cropped(to: ciRect)
+        return ciContext.createCGImage(cropped, from: cropped.extent)
     }
 
     private func resizedSquare(
@@ -315,6 +348,54 @@ final class DefectCameraModel: ObservableObject {
             0, sensorIntrinsics[4] * scaleY,
             (sensorIntrinsics[5] - Float(cropRect.minY)) * scaleY,
             0, 0, 1
+        ]
+    }
+
+    private func depthDisplayTransform(
+        frame: ARFrame,
+        imageSize: CGSize,
+        viewportSize: CGSize
+    ) -> [Float] {
+        guard imageSize.width > 0, imageSize.height > 0,
+              viewportSize.width > 0, viewportSize.height > 0 else {
+            return []
+        }
+        let scale = max(
+            viewportSize.width / imageSize.width,
+            viewportSize.height / imageSize.height
+        )
+        let offsetX = (viewportSize.width - imageSize.width * scale) / 2
+        let offsetY = (viewportSize.height - imageSize.height * scale) / 2
+        let toScreen = CGAffineTransform(
+            a: scale,
+            b: 0,
+            c: 0,
+            d: scale,
+            tx: offsetX,
+            ty: offsetY
+        )
+        let toViewNormalized = toScreen.concatenating(
+            CGAffineTransform(
+                a: 1 / viewportSize.width,
+                b: 0,
+                c: 0,
+                d: 1 / viewportSize.height,
+                tx: 0,
+                ty: 0
+            )
+        )
+        let transform = frame.displayTransform(
+            for: .portrait,
+            viewportSize: viewportSize
+        ).inverted()
+        let combined = toViewNormalized.concatenating(transform)
+        return [
+            Float(combined.a),
+            Float(combined.b),
+            Float(combined.tx),
+            Float(combined.c),
+            Float(combined.d),
+            Float(combined.ty)
         ]
     }
 
