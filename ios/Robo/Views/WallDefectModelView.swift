@@ -706,8 +706,18 @@ private struct WallDefectARView: UIViewRepresentable {
                                 : neighborIndex * 100000 + index
                             guard !seenEdges.contains(edgeKey) else { continue }
                             seenEdges.insert(edgeKey)
-                            let start = SCNVector3ToFloat3(vertices[index])
-                            let end = SCNVector3ToFloat3(vertices[neighborIndex])
+                            let startVector = vertices[index]
+                            let endVector = vertices[neighborIndex]
+                            let start = SIMD3<Float>(
+                                startVector.x,
+                                startVector.y,
+                                startVector.z
+                            )
+                            let end = SIMD3<Float>(
+                                endVector.x,
+                                endVector.y,
+                                endVector.z
+                            )
                             let delta = end - start
                             let length = simd_length(delta)
                             guard length > 0.0001 else { continue }
