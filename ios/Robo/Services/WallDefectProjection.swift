@@ -10,6 +10,11 @@ struct DefectPointCloudPoint {
     let image: CGPoint
 }
 
+struct DefectWallPlane {
+    let normal: SIMD3<Float>
+    let d: Float
+}
+
 struct CrackDepthContext {
     let pointCloud: [DefectPointCloudPoint]
     let cropRect: CGRect
@@ -166,6 +171,92 @@ enum WallDefectProjection {
             }
         }
         return count > 0 ? sum / Float(count) : points[bestIndex].world
+    }
+
+    /// Fits the dominant wall plane from point-cloud samples inside the
+    /// retake crop region using RANSAC. The plane is n.P + d = 0.
+    static func fitPlane(
+        points: [DefectPointCloudPoint],
+        cropRect: CGRect,
+        iterations: Int = 120,
+        threshold: Float = 0.012
+    ) -> DefectWallPlane? {
+        guard cropRect.width > 0, cropRect.height > 0 else {
+            return nil
+        }
+        let margin = min(cropRect.width, cropRect.height) * 0.15
+        let region = cropRect.insetBy(dx: -margin, dy: -margin)
+        let candidates = points
+            .filter { region.contains($0.image) }
+            .map(\.world)
+        guard candidates.count >= 20 else { return nil }
+
+        var rng = SystemRandomNumberGenerator()
+        let subset: [SIMD3<Float>]
+        if candidates.count > 30000 {
+            subset = Array(
+                candidates.shuffled(using: &rng).prefix(30000)
+            )
+        } else {
+            subset = candidates
+        }
+        let count = subset.count
+        var bestNormal = SIMD3<Float>(0, 1, 0)
+        var bestD: Float = 0
+        var bestInliers = 0
+        for _ in 0..<max(iterations, 40) {
+            let i0 = Int.random(in: 0..<count, using: &rng)
+            var i1 = Int.random(in: 0..<count, using: &rng)
+            while i1 == i0 {
+                i1 = Int.random(in: 0..<count, using: &rng)
+            }
+            var i2 = Int.random(in: 0..<count, using: &rng)
+            while i2 == i0 || i2 == i1 {
+                i2 = Int.random(in: 0..<count, using: &rng)
+            }
+            let p0 = subset[i0]
+            let p1 = subset[i1]
+            let p2 = subset[i2]
+            let cross = simd_cross(p1 - p0, p2 - p0)
+            let length = simd_length(cross)
+            guard length > 0.0001 else { continue }
+            let normal = cross / length
+            let d = -simd_dot(normal, p0)
+            var inliers = 0
+            for point in subset {
+                if abs(simd_dot(normal, point) + d) <= threshold {
+                    inliers += 1
+                }
+            }
+            if inliers > bestInliers {
+                bestInliers = inliers
+                bestNormal = normal
+                bestD = d
+            }
+        }
+        guard bestInliers >= 10 else { return nil }
+
+        var sum = SIMD3<Float>(0, 0, 0)
+        var inlierCount = 0
+        for point in subset {
+            if abs(simd_dot(bestNormal, point) + bestD) <= threshold {
+                sum += point
+                inlierCount += 1
+            }
+        }
+        if inlierCount > 0 {
+            let mean = sum / Float(inlierCount)
+            bestD = -simd_dot(bestNormal, mean)
+        }
+        return DefectWallPlane(normal: bestNormal, d: bestD)
+    }
+
+    static func projectToPlane(
+        point: SIMD3<Float>,
+        plane: DefectWallPlane
+    ) -> SIMD3<Float> {
+        let distance = simd_dot(plane.normal, point) + plane.d
+        return point - plane.normal * distance
     }
 
     static func cameraToDisplayRotation(

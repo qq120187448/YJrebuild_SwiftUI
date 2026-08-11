@@ -969,6 +969,21 @@ enum CrackRecognitionEngine {
                     depthWorldByPoint[point] = world
                 }
             }
+            if !depthWorldByPoint.isEmpty,
+               let plane = WallDefectProjection.fitPlane(
+                points: depthContext.pointCloud,
+                cropRect: depthContext.cropRect
+               ) {
+                for key in depthWorldByPoint.keys {
+                    if let world = depthWorldByPoint[key] {
+                        depthWorldByPoint[key] =
+                            WallDefectProjection.projectToPlane(
+                                point: world,
+                                plane: plane
+                            )
+                    }
+                }
+            }
         }
 
         var uvByPoint: [CrackPoint: SIMD2<Double>] = [:]
