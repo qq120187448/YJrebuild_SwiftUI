@@ -1,4 +1,5 @@
 import ARKit
+import AVFoundation
 import CoreImage
 import CoreVideo
 import SceneKit
@@ -444,6 +445,13 @@ struct ARKitDefectCameraView: UIViewRepresentable {
         view.automaticallyUpdatesLighting = true
 
         let configuration = ARWorldTrackingConfiguration()
+        if let wideFormat = ARWorldTrackingConfiguration.supportedVideoFormats
+            .first(where: {
+                $0.captureDevicePosition == .back &&
+                $0.captureDeviceType == .builtInWideAngleCamera
+            }) {
+            configuration.videoFormat = wideFormat
+        }
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
             configuration.frameSemantics.insert(.sceneDepth)
         }

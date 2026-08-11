@@ -1,4 +1,5 @@
 import ARKit
+import AVFoundation
 import simd
 import SwiftUI
 import UIKit
@@ -106,6 +107,13 @@ struct WallDefectScanView: View {
         let configuration = ARWorldTrackingConfiguration()
         configuration.worldAlignment = .gravity
         configuration.planeDetection = [.horizontal, .vertical]
+        if let wideFormat = ARWorldTrackingConfiguration.supportedVideoFormats
+            .first(where: {
+                $0.captureDevicePosition == .back &&
+                $0.captureDeviceType == .builtInWideAngleCamera
+            }) {
+            configuration.videoFormat = wideFormat
+        }
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
             configuration.frameSemantics.insert(.sceneDepth)
         }
