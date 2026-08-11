@@ -1,3 +1,4 @@
+import ARKit
 import CoreGraphics
 import Foundation
 import simd
@@ -8,10 +9,10 @@ struct CrackDepthContext {
     let depthHeight: Int
     let depthBytesPerRow: Int
     let sensorIntrinsics: [Float]
-    let depthNormalizedTransform: [Float]
-    let fullImageSize: CGSize
     let cropRect: CGRect
     let sensorImageSize: CGSize
+    let worldTransform: [Float]
+    let analysisToCaptureRatio: Float
 }
 
 enum WallDefectProjection {
@@ -23,36 +24,29 @@ enum WallDefectProjection {
     static func depthWorldPoint(
         pixel: CGPoint,
         analysisSize: CGSize,
-        pose: [Float],
         context: CrackDepthContext
     ) -> SIMD3<Float>? {
         guard analysisSize.width > 0, analysisSize.height > 0,
               context.depthWidth > 0, context.depthHeight > 0,
               context.depthBytesPerRow > 0,
               context.sensorIntrinsics.count == 9,
-              context.depthNormalizedTransform.count == 6,
-              context.fullImageSize.width > 0,
-              context.fullImageSize.height > 0,
-              pose.count == 16 else {
+              context.worldTransform.count == 16,
+              context.analysisToCaptureRatio > 0 else {
             return nil
         }
-        let portraitX = context.cropRect.minX
-            + (pixel.x / analysisSize.width) * context.cropRect.width
-        let portraitY = context.cropRect.minY
-            + (pixel.y / analysisSize.height) * context.cropRect.height
+        let sensorX = context.cropRect.minX
+            + (pixel.x / analysisSize.width
+                / CGFloat(context.analysisToCaptureRatio))
+                * context.cropRect.width
+        let sensorY = context.cropRect.minY
+            + (pixel.y / analysisSize.height
+                / CGFloat(context.analysisToCaptureRatio))
+                * context.cropRect.height
 
-        let a = context.depthNormalizedTransform[0]
-        let b = context.depthNormalizedTransform[1]
-        let tx = context.depthNormalizedTransform[2]
-        let c = context.depthNormalizedTransform[3]
-        let d = context.depthNormalizedTransform[4]
-        let ty = context.depthNormalizedTransform[5]
-        let cameraX = a * Float(portraitX)
-            + b * Float(portraitY)
-            + tx
-        let cameraY = c * Float(portraitX)
-            + d * Float(portraitY)
-            + ty
+        let cameraX = Float(sensorX)
+            / Float(context.sensorImageSize.width)
+        let cameraY = Float(sensorY)
+            / Float(context.sensorImageSize.height)
         guard cameraX.isFinite, cameraY.isFinite,
               cameraX >= 0, cameraY >= 0,
               cameraX <= 1, cameraY <= 1 else {
@@ -106,14 +100,14 @@ enum WallDefectProjection {
             / Float(context.sensorImageSize.height)
         let local = SIMD3<Float>(
             (depthXF - cxDepth) / fxDepth * depthValue,
-            -(depthYF - cyDepth) / fyDepth * depthValue,
-            -depthValue
+            (depthYF - cyDepth) / fyDepth * depthValue,
+            depthValue
         )
         let matrix = simd_float4x4(columns: (
-            SIMD4<Float>(pose[0], pose[1], pose[2], pose[3]),
-            SIMD4<Float>(pose[4], pose[5], pose[6], pose[7]),
-            SIMD4<Float>(pose[8], pose[9], pose[10], pose[11]),
-            SIMD4<Float>(pose[12], pose[13], pose[14], pose[15])
+            SIMD4<Float>(context.worldTransform[0], context.worldTransform[1], context.worldTransform[2], context.worldTransform[3]),
+            SIMD4<Float>(context.worldTransform[4], context.worldTransform[5], context.worldTransform[6], context.worldTransform[7]),
+            SIMD4<Float>(context.worldTransform[8], context.worldTransform[9], context.worldTransform[10], context.worldTransform[11]),
+            SIMD4<Float>(context.worldTransform[12], context.worldTransform[13], context.worldTransform[14], context.worldTransform[15])
         ))
         let world = matrix * SIMD4<Float>(
             local.x,
@@ -124,23 +118,51 @@ enum WallDefectProjection {
         return SIMD3<Float>(world.x, world.y, world.z)
     }
 
-    static func portraitIntrinsics(
-        intrinsics: [Float],
-        rawWidth: Int,
-        rawHeight: Int
-    ) -> [Float] {
-        guard intrinsics.count == 9, rawWidth > 0, rawHeight > 0 else {
-            return intrinsics
+    /// World transform used by Apple's SceneDepth point cloud sample:
+    /// world = viewMatrix(for:).inverse * rotateToARCamera * depthCameraPoint.
+    static func depthCameraToWorldMatrix(
+        frame: ARFrame,
+        orientation: UIInterfaceOrientation
+    ) -> simd_float4x4 {
+        let viewMatrixInverse = frame.camera.viewMatrix(
+            for: orientation
+        ).inverse
+        return viewMatrixInverse * rotateToARCameraMatrix(
+            orientation: orientation
+        )
+    }
+
+    static func cameraToDisplayRotation(
+        orientation: UIInterfaceOrientation
+    ) -> Int {
+        switch orientation {
+        case .landscapeLeft:
+            return 180
+        case .portrait:
+            return 90
+        case .portraitUpsideDown:
+            return -90
+        default:
+            return 0
         }
-        let fx = intrinsics[0]
-        let fy = intrinsics[4]
-        let cx = intrinsics[2]
-        let cy = intrinsics[5]
-        return [
-            fy, 0, Float(rawHeight) - cy,
-            0, fx, cx,
-            0, 0, 1
-        ]
+    }
+
+    static func rotateToARCameraMatrix(
+        orientation: UIInterfaceOrientation
+    ) -> simd_float4x4 {
+        let flipYZ = simd_float4x4(columns: (
+            SIMD4<Float>(1, 0, 0, 0),
+            SIMD4<Float>(0, -1, 0, 0),
+            SIMD4<Float>(0, 0, -1, 0),
+            SIMD4<Float>(0, 0, 0, 1)
+        ))
+        let angle = Float(
+            cameraToDisplayRotation(orientation: orientation)
+        ) * Float.pi / 180
+        let rotation = simd_float4x4(
+            simd_quatf(angle: angle, axis: SIMD3<Float>(0, 0, 1))
+        )
+        return flipYZ * rotation
     }
 
     static func associations(
@@ -453,16 +475,15 @@ enum WallDefectProjection {
         }
 
         func ray(pixel: CGPoint) -> (origin: SIMD3<Double>, direction: SIMD3<Double>) {
-            // portraitIntrinsics() returns K' = [[fy, 0, H-cy], [0, fx, cx], [0,0,1]].
-            // For a portrait pixel (x, y), the camera-space ray is
-            // ((y - cy')/fy', (x - cx')/fx', -1); ARKit camera looks along -Z.
+            // Raw sensor intrinsics and pixels: camera-space ray is
+            // ((x - cx)/fx, (y - cy)/fy, -1); ARKit camera looks along -Z.
             let fx = Double(intrinsics.columns.0.x)
             let fy = Double(intrinsics.columns.1.y)
             let cx = Double(intrinsics.columns.2.x)
             let cy = Double(intrinsics.columns.2.y)
             let local = SIMD3<Float>(
-                Float((Double(pixel.y) - cy) / fy),
                 Float((Double(pixel.x) - cx) / fx),
+                Float((Double(pixel.y) - cy) / fy),
                 -1
             )
             let rotation = simd_float3x3(columns: (

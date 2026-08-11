@@ -178,10 +178,13 @@ struct WallDefectScanView: View {
                     depthHeight: depthHeight,
                     depthBytesPerRow: depthBytesPerRow,
                     sensorIntrinsics: capture.sensorIntrinsics,
-                    depthNormalizedTransform: capture.depthNormalizedTransform,
-                    fullImageSize: capture.fullImageSize,
                     cropRect: capture.cropRect,
-                    sensorImageSize: capture.sensorImageSize
+                    sensorImageSize: capture.sensorImageSize,
+                    worldTransform: capture.worldTransform,
+                    analysisToCaptureRatio: Float(
+                        capture.image.size.width
+                            / max(image.size.width, 1)
+                    )
                 )
             } else {
                 depthContext = nil

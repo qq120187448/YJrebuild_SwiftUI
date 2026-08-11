@@ -964,7 +964,6 @@ enum CrackRecognitionEngine {
                         y: CGFloat(point.y)
                     ),
                     analysisSize: analysisSize,
-                    pose: pose,
                     context: depthContext
                 ) {
                     depthWorldByPoint[point] = world

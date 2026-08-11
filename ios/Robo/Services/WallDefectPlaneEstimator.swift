@@ -303,8 +303,8 @@ enum WallDefectPlaneEstimator {
         view: ARSCNView?,
         center: CGPoint?
     ) -> [SIMD3<Float>] {
-        guard let depthMap = frame.smoothedSceneDepth?.depthMap
-            ?? frame.sceneDepth?.depthMap else {
+        guard let depthMap = frame.sceneDepth?.depthMap
+            ?? frame.smoothedSceneDepth?.depthMap else {
             return []
         }
         let depthWidth = CVPixelBufferGetWidth(depthMap)
@@ -470,10 +470,13 @@ enum WallDefectPlaneEstimator {
         let v = Float(y) * imageHeight / Float(height)
         let local = SIMD3<Float>(
             (u - cx) / fx * depthValue,
-            -(v - cy) / fy * depthValue,
-            -depthValue
+            (v - cy) / fy * depthValue,
+            depthValue
         )
-        let world = frame.camera.transform * SIMD4<Float>(
+        let world = WallDefectProjection.depthCameraToWorldMatrix(
+            frame: frame,
+            orientation: .portrait
+        ) * SIMD4<Float>(
             local.x,
             local.y,
             local.z,
