@@ -1,14 +1,14 @@
 import Foundation
 
 struct CrackRecognitionConfig: Codable, Equatable {
-    var mode: String = "hairline"          // normal / hairline
+    var mode: String = "normal"            // normal / hairline
     var modelSize: String = "n"            // n / s
     var engine: String = "yolo"            // yolo / mobilesam
     var computeMode: String = "neural"     // neural / cpu
     var inferenceBackend: String = "direct" // direct / vision
-    var maxDetections: Int = 8
+    var maxDetections: Int = 5
     var captureResolution: Int = 1024
-    var confidence: Double = 0.3
+    var confidence: Double = 0.5
     var iou: Double = 0.5
     var tileSize: Int = 1024
     var tileOverlap: Int = 192
@@ -21,6 +21,7 @@ struct CrackRecognitionConfig: Codable, Equatable {
     var mmPerPixel: Double = 0
     var dedupDistanceMM: Double = 20
     var minPhysicalLengthMM: Double = 5
+    var arLineWidth: Int = 2
 
     static let defaultConfig = CrackRecognitionConfig()
 
@@ -34,7 +35,7 @@ struct CrackRecognitionConfig: Codable, Equatable {
         engine = engine == "mobilesam" ? "mobilesam" : "yolo"
         computeMode = computeMode == "cpu" ? "cpu" : "neural"
         inferenceBackend = inferenceBackend == "vision" ? "vision" : "direct"
-        maxDetections = min(max(maxDetections, 1), 25)
+        maxDetections = min(max(maxDetections, 1), 10)
         captureResolution = min(max(captureResolution, 512), 2048)
         confidence = min(max(confidence, 0.1), 0.9)
         iou = min(max(iou, 0.1), 0.9)
@@ -49,13 +50,14 @@ struct CrackRecognitionConfig: Codable, Equatable {
         mmPerPixel = max(mmPerPixel, 0)
         dedupDistanceMM = min(max(dedupDistanceMM, 1), 100)
         minPhysicalLengthMM = min(max(minPhysicalLengthMM, 1), 100)
+        arLineWidth = min(max(arLineWidth, 1), 5)
     }
 }
 
 enum CrackRecognitionSettings {
     private static let key = "crackRecognitionConfig"
     private static let versionKey = "crackRecognitionConfigVersion"
-    private static let currentVersion = 63
+    private static let currentVersion = 64
 
     static func load() -> CrackRecognitionConfig {
         let storedVersion = UserDefaults.standard.integer(forKey: versionKey)
@@ -161,6 +163,10 @@ enum CrackRecognitionSettings {
         if let value = components.queryItems?.first(where: { $0.name == "physlen" })?.value,
            let number = Double(value) {
             config.minPhysicalLengthMM = number
+        }
+        if let value = components.queryItems?.first(where: { $0.name == "arwidth" })?.value,
+           let number = Int(value) {
+            config.arLineWidth = number
         }
         save(config)
     }

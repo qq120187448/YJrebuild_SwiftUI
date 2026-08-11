@@ -22,6 +22,7 @@ struct WallDefectPhotoRecognitionResult {
 struct WallDefectModelView: View {
     let arSession: ARSession
     let latestRecognition: WallDefectPhotoRecognitionResult?
+    let arSkeletonGroups: [[CrackSkeleton3DPoint]]
     let isRecognizing: Bool
     let progressMessage: String
     let onPhoto: (DefectCameraCapture, WallDefectSurface?) -> Void
@@ -64,7 +65,8 @@ struct WallDefectModelView: View {
             WallDefectARView(
                 arSession: arSession,
                 cameraModel: cameraModel,
-                latestARSkeleton: latestRecognition?.arSkeleton ?? []
+                skeletonGroups: arSkeletonGroups,
+                lineWidth: recognitionConfig.arLineWidth
             )
             .ignoresSafeArea()
 
@@ -95,23 +97,6 @@ struct WallDefectModelView: View {
 
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
-                if let tap = cameraModel.tapWorldPoint {
-                    Text(
-                        String(
-                            format: "点云命中 (%.3f, %.3f, %.3f)",
-                            tap.x,
-                            tap.y,
-                            tap.z
-                        )
-                    )
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(.black.opacity(0.5))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .padding(.bottom, 4)
-                }
                 planeStatusPanel
                 if showRecognitionPanel {
                     recognitionPanel
@@ -269,17 +254,6 @@ struct WallDefectModelView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
                         parameterPicker(
-                            title: "模式",
-                            selection: Binding(
-                                get: { recognitionConfig.mode },
-                                set: { recognitionConfig.mode = $0 }
-                            ),
-                            options: [
-                                ("常规", "normal"),
-                                ("发丝级", "hairline")
-                            ]
-                        )
-                        parameterPicker(
                             title: "模型",
                             selection: Binding(
                                 get: { recognitionConfig.modelSize },
@@ -317,7 +291,7 @@ struct WallDefectModelView: View {
                             get: { recognitionConfig.maxDetections },
                             set: { recognitionConfig.maxDetections = $0 }
                         ),
-                        range: 1...25
+                        range: 1...10
                     )
                     parameterStepper(
                         title: "裁剪分辨率",
@@ -340,16 +314,13 @@ struct WallDefectModelView: View {
                                 ("主裂缝", "main")
                             ]
                         )
-                        parameterPicker(
-                            title: "长度单位",
-                            selection: Binding(
-                                get: { recognitionConfig.lengthUnit },
-                                set: { recognitionConfig.lengthUnit = $0 }
+                        parameterStepper(
+                            title: "AR投影宽度",
+                            value: Binding(
+                                get: { recognitionConfig.arLineWidth },
+                                set: { recognitionConfig.arLineWidth = $0 }
                             ),
-                            options: [
-                                ("像素", "pixel"),
-                                ("已知mm", "known")
-                            ]
+                            range: 1...5
                         )
                     }
                     parameterStepper(
@@ -544,25 +515,22 @@ struct WallDefectModelView: View {
 private struct WallDefectARView: UIViewRepresentable {
     let arSession: ARSession
     let cameraModel: DefectCameraModel
-    let latestARSkeleton: [CrackSkeleton3DPoint]
+    let skeletonGroups: [[CrackSkeleton3DPoint]]
+    let lineWidth: Int
 
     func makeUIView(context: Context) -> ARSCNView {
         let view = ARSCNView()
         view.session = arSession
         view.session.delegate = context.coordinator
         view.automaticallyUpdatesLighting = true
-        let tap = UITapGestureRecognizer(
-            target: context.coordinator,
-            action: #selector(Coordinator.handleTap(_:))
-        )
-        view.addGestureRecognizer(tap)
         context.coordinator.sceneView = view
         return view
     }
 
     func updateUIView(_ uiView: ARSCNView, context: Context) {
         context.coordinator.updateARSkeleton(
-            latestARSkeleton,
+            skeletonGroups,
+            lineWidth: lineWidth,
             in: uiView
         )
     }
@@ -579,14 +547,9 @@ private struct WallDefectARView: UIViewRepresentable {
         let cameraModel: DefectCameraModel
         weak var sceneView: ARSCNView?
         private let skeletonNodeName = "CrackARSkeleton"
-        private let centerNodeName = "DepthCenterVerificationBox"
-        private let raycastNodeName = "RaycastVerificationBox"
         private let pointCloudNodeName = "DefectDepthPointCloud"
-        private let tapMarkerNodeName = "TapWorldPointMarker"
-        private var latestPointCloud: [DefectPointCloudPoint] = []
         private var lastSkeletonHash = Int.min
         private var lastPlaneEstimateTime: TimeInterval = -1
-        private var lastCenterUpdateTime: TimeInterval = -1
         private var lastPointCloudUpdateTime: TimeInterval = -1
 
         init(cameraModel: DefectCameraModel) {
@@ -606,13 +569,6 @@ private struct WallDefectARView: UIViewRepresentable {
                     )
                     self.cameraModel.update(plane: plane)
                 }
-                if frame.timestamp - self.lastCenterUpdateTime >= 0.1 {
-                    self.lastCenterUpdateTime = frame.timestamp
-                    self.updateCenterMarker(
-                        frame: frame,
-                        view: self.sceneView
-                    )
-                }
                 if frame.timestamp - self.lastPointCloudUpdateTime >= 0.15 {
                     self.lastPointCloudUpdateTime = frame.timestamp
                     self.updateDepthPointCloud(
@@ -620,31 +576,6 @@ private struct WallDefectARView: UIViewRepresentable {
                         view: self.sceneView
                     )
                 }
-            }
-        }
-
-        @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
-            let location = recognizer.location(in: sceneView)
-            DispatchQueue.main.async { [weak self] in
-                guard let self,
-                      let view = self.sceneView else {
-                    return
-                }
-                guard let world = self.screenWorldPoint(
-                    view: view,
-                    screenPoint: location
-                ) else {
-                    self.cameraModel.tapWorldPoint = nil
-                    return
-                }
-                self.cameraModel.tapWorldPoint = world
-                let marker = self.verificationNode(
-                    named: self.tapMarkerNodeName,
-                    color: .white,
-                    in: view
-                )
-                marker.isHidden = false
-                marker.position = SCNVector3(world.x, world.y, world.z)
             }
         }
 
@@ -663,89 +594,6 @@ private struct WallDefectARView: UIViewRepresentable {
             return CGPoint(x: view.bounds.midX, y: centerY)
         }
 
-        private func updateCenterMarker(
-            frame: ARFrame,
-            view: ARSCNView?
-        ) {
-            guard let view else { return }
-            let depthNode = verificationNode(
-                named: centerNodeName,
-                color: .cyan,
-                in: view
-            )
-            let raycastNode = verificationNode(
-                named: raycastNodeName,
-                color: .green,
-                in: view
-            )
-            guard let center = cropCenter(in: view) else {
-                depthNode.isHidden = true
-                raycastNode.isHidden = true
-                return
-            }
-            if let world = screenWorldPoint(
-                view: view,
-                screenPoint: center
-            ) {
-                depthNode.isHidden = false
-                depthNode.position = SCNVector3(world.x, world.y, world.z)
-            } else {
-                depthNode.isHidden = true
-            }
-            if let world = raycastWorldPoint(
-                frame: frame,
-                view: view,
-                screenPoint: center
-            ) {
-                raycastNode.isHidden = false
-                raycastNode.position = SCNVector3(world.x, world.y, world.z)
-            } else {
-                raycastNode.isHidden = true
-            }
-        }
-
-        private func screenWorldPoint(
-            view: ARSCNView,
-            screenPoint: CGPoint
-        ) -> SIMD3<Float>? {
-            nearestCloudWorldPoint(
-                toScreen: screenPoint,
-                in: view
-            )
-        }
-
-        private func nearestCloudWorldPoint(
-            toScreen screenPoint: CGPoint,
-            in view: ARSCNView
-        ) -> SIMD3<Float>? {
-            guard !latestPointCloud.isEmpty else {
-                return nil
-            }
-            var best: DefectPointCloudPoint?
-            var bestDistance = CGFloat.infinity
-            for point in latestPointCloud {
-                let projected = view.projectPoint(
-                    SCNVector3(
-                        point.world.x,
-                        point.world.y,
-                        point.world.z
-                    )
-                )
-                let projectedPoint = CGPoint(
-                    x: CGFloat(projected.x),
-                    y: CGFloat(projected.y)
-                )
-                let dx = projectedPoint.x - screenPoint.x
-                let dy = projectedPoint.y - screenPoint.y
-                let distance = dx * dx + dy * dy
-                if distance < bestDistance {
-                    bestDistance = distance
-                    best = point
-                }
-            }
-            return best?.world
-        }
-
         private func updateDepthPointCloud(
             frame: ARFrame,
             view: ARSCNView?
@@ -759,7 +607,6 @@ private struct WallDefectARView: UIViewRepresentable {
                 depthMap: depthMap,
                 sampleStep: 4
             )
-            latestPointCloud = points
             let node = SCNNode()
             node.name = pointCloudNodeName
             if !points.isEmpty {
@@ -794,69 +641,20 @@ private struct WallDefectARView: UIViewRepresentable {
             view.scene.rootNode.addChildNode(node)
         }
 
-        private func raycastWorldPoint(
-            frame: ARFrame,
-            view: ARSCNView,
-            screenPoint: CGPoint
-        ) -> SIMD3<Float>? {
-            let targets: [ARRaycastQuery.Target] = [
-                .existingPlaneGeometry,
-                .estimatedPlane
-            ]
-            for target in targets {
-                guard let query = view.raycastQuery(
-                    from: screenPoint,
-                    allowing: target,
-                    alignment: .any
-                ), let result = view.session.raycast(query).first else {
-                    continue
-                }
-                let transform = result.worldTransform
-                return SIMD3<Float>(
-                    transform.columns.3.x,
-                    transform.columns.3.y,
-                    transform.columns.3.z
-                )
-            }
-            return nil
-        }
-
-        private func verificationNode(
-            named name: String,
-            color: UIColor,
-            in view: ARSCNView
-        ) -> SCNNode {
-            if let existing = view.scene.rootNode.childNode(
-                withName: name,
-                recursively: true
-            ) {
-                return existing
-            }
-            let box = SCNBox(
-                width: 0.05,
-                height: 0.05,
-                length: 0.05,
-                chamferRadius: 0
-            )
-            box.firstMaterial?.diffuse.contents = color
-            box.firstMaterial?.emission.contents = color
-            let node = SCNNode(geometry: box)
-            node.name = name
-            node.renderingOrder = 200
-            view.scene.rootNode.addChildNode(node)
-            return node
-        }
-
         func updateARSkeleton(
-            _ points: [CrackSkeleton3DPoint],
+            _ groups: [[CrackSkeleton3DPoint]],
+            lineWidth: Int,
             in view: ARSCNView
         ) {
             var hash = 0
-            for point in points {
-                hash = hash &* 31 &+ point.pixel.x
-                hash = hash &* 31 &+ point.pixel.y
-                hash = hash &* 31 &+ point.surfaceID.hashValue
+            for group in groups {
+                for point in group {
+                    hash = hash &* 31 &+ point.pixel.x
+                    hash = hash &* 31 &+ point.pixel.y
+                    hash = hash &* 31 &+ point.surfaceID.hashValue
+                }
             }
+            hash = hash &* 31 &+ lineWidth
             guard hash != lastSkeletonHash else { return }
             lastSkeletonHash = hash
 
@@ -864,61 +662,77 @@ private struct WallDefectARView: UIViewRepresentable {
                 withName: skeletonNodeName,
                 recursively: true
             )?.removeFromParentNode()
-            guard !points.isEmpty else { return }
+            let material = SCNMaterial()
+            material.lightingModel = .constant
+            material.diffuse.contents = UIColor.red
+            material.emission.contents = UIColor.red
+            material.isDoubleSided = true
+            let radius = CGFloat(max(1, min(lineWidth, 5))) * 0.0012
+            let rootNode = SCNNode()
+            rootNode.name = skeletonNodeName
+            rootNode.renderingOrder = 100
 
-            var vertices: [SCNVector3] = []
-            var indices: [Int32] = []
-            var indexByPoint: [CrackPoint: Int] = [:]
-            for (index, point) in points.enumerated() {
-                vertices.append(
-                    SCNVector3(
-                        point.world.x,
-                        point.world.y,
-                        point.world.z
-                    )
-                )
-                indexByPoint[point.pixel] = index
-            }
-
-            let maxPixel = points
-                .map { max($0.pixel.x, $0.pixel.y) }
-                .max() ?? 1024
-            let neighborRadius = max(2, maxPixel / 160 + 2)
-            for (point, index) in indexByPoint {
-                for dy in -neighborRadius...neighborRadius {
-                    for dx in -neighborRadius...neighborRadius {
-                        if dx == 0 && dy == 0 { continue }
-                        let neighbor = CrackPoint(
-                            x: point.x + dx,
-                            y: point.y + dy
+            for group in groups where group.count >= 2 {
+                var vertices: [SCNVector3] = []
+                var indexByPoint: [CrackPoint: Int] = [:]
+                for (index, point) in group.enumerated() {
+                    vertices.append(
+                        SCNVector3(
+                            point.world.x,
+                            point.world.y,
+                            point.world.z
                         )
-                        if let neighborIndex = indexByPoint[neighbor],
-                           index < neighborIndex {
-                            indices.append(Int32(index))
-                            indices.append(Int32(neighborIndex))
+                    )
+                    indexByPoint[point.pixel] = index
+                }
+                let maxPixel = group
+                    .map { max($0.pixel.x, $0.pixel.y) }
+                    .max() ?? 1024
+                let neighborRadius = max(2, maxPixel / 160 + 2)
+                var seenEdges = Set<Int>()
+                for (point, index) in indexByPoint {
+                    for dy in -neighborRadius...neighborRadius {
+                        for dx in -neighborRadius...neighborRadius {
+                            if dx == 0 && dy == 0 { continue }
+                            let neighbor = CrackPoint(
+                                x: point.x + dx,
+                                y: point.y + dy
+                            )
+                            guard let neighborIndex = indexByPoint[neighbor] else {
+                                continue
+                            }
+                            let edgeKey = index < neighborIndex
+                                ? index * 100000 + neighborIndex
+                                : neighborIndex * 100000 + index
+                            guard !seenEdges.contains(edgeKey) else { continue }
+                            seenEdges.insert(edgeKey)
+                            let start = SCNVector3ToFloat3(vertices[index])
+                            let end = SCNVector3ToFloat3(vertices[neighborIndex])
+                            let delta = end - start
+                            let length = simd_length(delta)
+                            guard length > 0.0001 else { continue }
+                            let cylinder = SCNCylinder(
+                                radius: radius,
+                                height: CGFloat(length)
+                            )
+                            cylinder.materials = [material]
+                            let node = SCNNode(geometry: cylinder)
+                            node.position = SCNVector3(
+                                (start.x + end.x) / 2,
+                                (start.y + end.y) / 2,
+                                (start.z + end.z) / 2
+                            )
+                            let direction = delta / length
+                            node.simdOrientation = simd_quatf(
+                                from: SIMD3<Float>(0, 1, 0),
+                                to: direction
+                            )
+                            rootNode.addChildNode(node)
                         }
                     }
                 }
             }
-            guard !indices.isEmpty else { return }
-
-            let source = SCNGeometrySource(vertices: vertices)
-            let element = SCNGeometryElement(
-                indices: indices,
-                primitiveType: .line
-            )
-            let geometry = SCNGeometry(
-                sources: [source],
-                elements: [element]
-            )
-            geometry.firstMaterial?.diffuse.contents = UIColor.yellow
-            geometry.firstMaterial?.emission.contents = UIColor.yellow
-            geometry.firstMaterial?.isDoubleSided = true
-
-            let node = SCNNode(geometry: geometry)
-            node.name = skeletonNodeName
-            node.renderingOrder = 100
-            view.scene.rootNode.addChildNode(node)
+            view.scene.rootNode.addChildNode(rootNode)
         }
     }
 }

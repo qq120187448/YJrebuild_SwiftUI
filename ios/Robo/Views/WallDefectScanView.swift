@@ -23,6 +23,7 @@ struct WallDefectScanView: View {
                     WallDefectModelView(
                         arSession: arSession,
                         latestRecognition: latestRecognition,
+                        arSkeletonGroups: arSkeletonGroups,
                         isRecognizing: isPhotoAnalyzing,
                         progressMessage: recognitionProgress,
                         onPhoto: { capture, plane in
@@ -343,5 +344,31 @@ struct WallDefectScanView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private var arSkeletonGroups: [[CrackSkeleton3DPoint]] {
+        photos.compactMap { photo -> [CrackSkeleton3DPoint]? in
+            guard let points = photo.arSkeleton3D,
+                  !points.isEmpty else {
+                return nil
+            }
+            let surfaceID = photo.planeSurface?.id ?? UUID()
+            return points.compactMap { values -> CrackSkeleton3DPoint? in
+                guard values.count >= 5 else { return nil }
+                return CrackSkeleton3DPoint(
+                    surfaceID: surfaceID,
+                    pixel: CrackPoint(
+                        x: Int(values[0]),
+                        y: Int(values[1])
+                    ),
+                    world: SIMD3<Float>(
+                        Float(values[2]),
+                        Float(values[3]),
+                        Float(values[4])
+                    )
+                )
+            }
+        }
+        .filter { !$0.isEmpty }
     }
 }

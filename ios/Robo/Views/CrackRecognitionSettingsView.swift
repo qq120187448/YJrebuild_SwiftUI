@@ -6,12 +6,6 @@ struct CrackRecognitionSettingsView: View {
     var body: some View {
         Form {
             Section("识别模式") {
-                Picker("识别模式", selection: $config.mode) {
-                    Text("常规").tag("normal")
-                    Text("发丝级").tag("hairline")
-                }
-                .pickerStyle(.segmented)
-
                 Picker("YOLO 模型", selection: $config.modelSize) {
                     Text("n").tag("n")
                     Text("s").tag("s")
@@ -80,7 +74,7 @@ struct CrackRecognitionSettingsView: View {
                 stepperRow(
                     title: "候选框上限",
                     value: $config.maxDetections,
-                    range: 1...25,
+                    range: 1...10,
                     step: 1
                 )
                 Text("候选框越多识别越全，但掩码生成更慢。")
@@ -140,32 +134,15 @@ struct CrackRecognitionSettingsView: View {
                     range: 512...2048,
                     step: 128
                 )
+                stepperRow(
+                    title: "AR 投影宽度",
+                    value: $config.arLineWidth,
+                    range: 1...5,
+                    step: 1
+                )
                 Text("补拍时按该分辨率输出方形照片送模型识别。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
-
-            Section("长度单位") {
-                Picker("长度单位", selection: $config.lengthUnit) {
-                    Text("像素").tag("pixel")
-                    Text("已知毫米").tag("known")
-                }
-                .pickerStyle(.segmented)
-
-                if config.lengthUnit == "known" {
-                    HStack {
-                        Text("每像素毫米数")
-                        Spacer()
-                        TextField(
-                            "0",
-                            value: $config.mmPerPixel,
-                            format: .number
-                        )
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 80)
-                    }
-                }
             }
 
             Section("跨照片去重") {
