@@ -165,19 +165,11 @@ struct WallDefectScanView: View {
             let pose = capture.pose
             let intrinsics = capture.intrinsics
             let depthContext: CrackDepthContext?
-            if let depth = capture.depth,
-               let depthWidth = capture.depthWidth,
-               let depthHeight = capture.depthHeight,
-               let depthBytesPerRow = capture.depthBytesPerRow {
+            if !capture.pointCloud.isEmpty {
                 depthContext = CrackDepthContext(
-                    depth: depth,
-                    depthWidth: depthWidth,
-                    depthHeight: depthHeight,
-                    depthBytesPerRow: depthBytesPerRow,
-                    sensorIntrinsics: capture.sensorIntrinsics,
+                    pointCloud: capture.pointCloud,
                     cropRect: capture.cropRect,
                     sensorImageSize: capture.sensorImageSize,
-                    cameraTransform: capture.pose,
                     analysisToCaptureRatio: Float(
                         capture.image.size.width
                             / max(image.size.width, 1)

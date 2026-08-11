@@ -11,6 +11,7 @@ struct DefectCameraCapture {
     let image: UIImage
     let pose: [Float]
     let intrinsics: [Float]
+    let pointCloud: [DefectPointCloudPoint]
     let depth: Data?
     let depthWidth: Int?
     let depthHeight: Int?
@@ -189,12 +190,18 @@ final class DefectCameraModel: ObservableObject {
 
         let pose = flatten(matrix: frame.camera.transform)
         let intrinsics = flatten(matrix: frame.camera.intrinsics)
+        var pointCloud: [DefectPointCloudPoint] = []
 
         var depth: Data?
         var depthWidth: Int?
         var depthHeight: Int?
         var depthBytesPerRow: Int?
         if let depthMap = frame.sceneDepth?.depthMap {
+            pointCloud = WallDefectProjection.makePointCloud(
+                frame: frame,
+                depthMap: depthMap,
+                sampleStep: 2
+            )
             let copied = copyDepth(pixelBuffer: depthMap)
             depth = copied.data
             depthWidth = copied.width
@@ -207,6 +214,7 @@ final class DefectCameraModel: ObservableObject {
             image: image,
             pose: pose,
             intrinsics: intrinsics,
+            pointCloud: pointCloud,
             depth: depth,
             depthWidth: depthWidth,
             depthHeight: depthHeight,

@@ -1,38 +1,114 @@
 import ARKit
+import ARKit
 import CoreVideo
 import CoreGraphics
 import Foundation
 import simd
 
+struct DefectPointCloudPoint {
+    let world: SIMD3<Float>
+    let image: CGPoint
+}
+
 struct CrackDepthContext {
-    let depth: Data
-    let depthWidth: Int
-    let depthHeight: Int
-    let depthBytesPerRow: Int
-    let sensorIntrinsics: [Float]
+    let pointCloud: [DefectPointCloudPoint]
     let cropRect: CGRect
     let sensorImageSize: CGSize
-    let cameraTransform: [Float]
     let analysisToCaptureRatio: Float
 }
 
 enum WallDefectProjection {
 
-    /// Unprojects an analysis-image pixel to AR world coordinates using the
-    /// LiDAR depth from the exact same frame as the photo. The YOLO pixel is
-    /// first restored to the capturedImage pixel, then projected with the
-    /// native ARCamera intrinsics and transform. No CI orientation,
-    /// displayTransform or portrait intrinsics are involved in the ray.
+    /// Apple SceneDepth point cloud projection. Every depth-map sample is
+    /// unprojected with the official chain:
+    /// depth pixel -> camera image pixel -> intrinsics.inverse -> depth
+    /// -> viewMatrix(for:).inverse * rotateToARCamera -> world.
+    /// No displayTransform or manual intrinsics rotation is involved.
+    static func makePointCloud(
+        frame: ARFrame,
+        depthMap: CVPixelBuffer,
+        sampleStep: Int = 2
+    ) -> [DefectPointCloudPoint] {
+        let width = CVPixelBufferGetWidth(depthMap)
+        let height = CVPixelBufferGetHeight(depthMap)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(depthMap)
+        guard width > 0, height > 0, bytesPerRow > 0 else {
+            return []
+        }
+        let imageWidth = Float(frame.camera.imageResolution.width)
+        let imageHeight = Float(frame.camera.imageResolution.height)
+        let intrinsicsInverse = frame.camera.intrinsics.inverse
+        let localToWorld = frame.camera.viewMatrix(
+            for: .portrait
+        ).inverse * rotateToARCameraMatrix(orientation: .portrait)
+
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        defer {
+            CVPixelBufferUnlockBaseAddress(depthMap, .readOnly)
+        }
+        guard let base = CVPixelBufferGetBaseAddress(depthMap) else {
+            return []
+        }
+        let pointer = base.assumingMemoryBound(to: Float32.self)
+        let stride = bytesPerRow / MemoryLayout<Float32>.size
+        let step = max(1, sampleStep)
+        var points: [DefectPointCloudPoint] = []
+        points.reserveCapacity(
+            (width / step) * (height / step)
+        )
+        var y = 0
+        while y < height {
+            var x = 0
+            while x < width {
+                let depthValue = pointer[y * stride + x]
+                if depthValue.isFinite,
+                   depthValue > 0.05,
+                   depthValue < 8 {
+                    let u = Float(x) * imageWidth / Float(width)
+                    let v = Float(y) * imageHeight / Float(height)
+                    let local = intrinsicsInverse
+                        * SIMD3<Float>(u, v, 1)
+                        * depthValue
+                    let world = localToWorld * SIMD4<Float>(
+                        local.x,
+                        local.y,
+                        local.z,
+                        1
+                    )
+                    points.append(
+                        DefectPointCloudPoint(
+                            world: SIMD3<Float>(
+                                world.x,
+                                world.y,
+                                world.z
+                            ),
+                            image: CGPoint(
+                                x: CGFloat(u),
+                                y: CGFloat(v)
+                            )
+                        )
+                    )
+                }
+                x += step
+            }
+            y += step
+        }
+        return points
+    }
+
+    /// Restores a YOLO analysis pixel to capturedImage pixel space, then
+    /// looks up the closest official point-cloud samples around it.
     static func depthWorldPoint(
         pixel: CGPoint,
         analysisSize: CGSize,
         context: CrackDepthContext
     ) -> SIMD3<Float>? {
         guard analysisSize.width > 0, analysisSize.height > 0,
-              context.depthWidth > 0, context.depthHeight > 0,
-              context.depthBytesPerRow > 0,
-              context.sensorIntrinsics.count == 9,
-              context.cameraTransform.count == 16,
+              !context.pointCloud.isEmpty,
+              context.cropRect.width > 0,
+              context.cropRect.height > 0,
+              context.sensorImageSize.width > 0,
+              context.sensorImageSize.height > 0,
               context.analysisToCaptureRatio > 0 else {
             return nil
         }
@@ -44,166 +120,85 @@ enum WallDefectProjection {
             + (pixel.y / analysisSize.height
                 / CGFloat(context.analysisToCaptureRatio))
                 * context.cropRect.height
-        guard context.sensorImageSize.width > 0,
-              context.sensorImageSize.height > 0,
-              imageX >= 0, imageY >= 0,
+        guard imageX >= 0, imageY >= 0,
               imageX <= context.sensorImageSize.width,
               imageY <= context.sensorImageSize.height else {
             return nil
         }
-        guard let depthValue = medianDepth(
-            imageX: imageX,
-            imageY: imageY,
-            imageSize: context.sensorImageSize,
-            depth: context.depth,
-            depthWidth: context.depthWidth,
-            depthHeight: context.depthHeight,
-            depthBytesPerRow: context.depthBytesPerRow
-        ) else {
-            return nil
-        }
-
-        let fx = context.sensorIntrinsics[0]
-        let fy = context.sensorIntrinsics[4]
-        let cx = context.sensorIntrinsics[2]
-        let cy = context.sensorIntrinsics[5]
-        let local = SIMD4<Float>(
-            (Float(imageX) - cx) / fx * depthValue,
-            -(Float(imageY) - cy) / fy * depthValue,
-            -depthValue,
-            1
+        return worldPoint(
+            near: CGPoint(x: imageX, y: imageY),
+            in: context.pointCloud
         )
-        let matrix = simd_float4x4(columns: (
-            SIMD4<Float>(context.cameraTransform[0], context.cameraTransform[1], context.cameraTransform[2], context.cameraTransform[3]),
-            SIMD4<Float>(context.cameraTransform[4], context.cameraTransform[5], context.cameraTransform[6], context.cameraTransform[7]),
-            SIMD4<Float>(context.cameraTransform[8], context.cameraTransform[9], context.cameraTransform[10], context.cameraTransform[11]),
-            SIMD4<Float>(context.cameraTransform[12], context.cameraTransform[13], context.cameraTransform[14], context.cameraTransform[15])
-        ))
-        let world = matrix * local
-        return SIMD3<Float>(world.x, world.y, world.z)
     }
 
-    /// Live version used by the center-point verification marker. It reads
-    /// the frame directly, so it is only called from the AR session delegate.
-    static func depthWorldPoint(
-        imagePixel: CGPoint,
-        frame: ARFrame
+    /// Averages official world points whose image coordinate is within a
+    /// small radius of the requested pixel. Falls back to the nearest point.
+    static func worldPoint(
+        near imagePixel: CGPoint,
+        in points: [DefectPointCloudPoint],
+        radius: CGFloat = 8
     ) -> SIMD3<Float>? {
-        guard let depthMap = frame.sceneDepth?.depthMap else {
-            return nil
-        }
-        let imageSize = CGSize(
-            width: CGFloat(frame.camera.imageResolution.width),
-            height: CGFloat(frame.camera.imageResolution.height)
-        )
-        guard imageSize.width > 0, imageSize.height > 0,
-              imagePixel.x >= 0, imagePixel.y >= 0,
-              imagePixel.x <= imageSize.width,
-              imagePixel.y <= imageSize.height else {
-            return nil
-        }
-        guard let depthValue = medianDepth(
-            imageX: imagePixel.x,
-            imageY: imagePixel.y,
-            imageSize: imageSize,
-            pixelBuffer: depthMap
-        ) else {
-            return nil
-        }
-        let intrinsics = frame.camera.intrinsics
-        let fx = intrinsics.columns.0.x
-        let fy = intrinsics.columns.1.y
-        let cx = intrinsics.columns.2.x
-        let cy = intrinsics.columns.2.y
-        let local = SIMD4<Float>(
-            (Float(imagePixel.x) - cx) / fx * depthValue,
-            -(Float(imagePixel.y) - cy) / fy * depthValue,
-            -depthValue,
-            1
-        )
-        let world = frame.camera.transform * local
-        return SIMD3<Float>(world.x, world.y, world.z)
-    }
-
-    private static func medianDepth(
-        imageX: CGFloat,
-        imageY: CGFloat,
-        imageSize: CGSize,
-        depth: Data,
-        depthWidth: Int,
-        depthHeight: Int,
-        depthBytesPerRow: Int
-    ) -> Float? {
-        guard depthWidth > 0, depthHeight > 0,
-              depthBytesPerRow > 0 else {
-            return nil
-        }
-        let depthX = Int(imageX / imageSize.width * CGFloat(depthWidth))
-        let depthY = Int(imageY / imageSize.height * CGFloat(depthHeight))
-        var values: [Float] = []
-        for dy in -1...1 {
-            for dx in -1...1 {
-                let x = min(max(depthX + dx, 0), depthWidth - 1)
-                let y = min(max(depthY + dy, 0), depthHeight - 1)
-                let offset = y * depthBytesPerRow
-                    + x * MemoryLayout<Float32>.size
-                guard offset >= 0,
-                      offset + MemoryLayout<Float32>.size <= depth.count else {
-                    continue
-                }
-                let value = depth.withUnsafeBytes { bytes -> Float in
-                    bytes.loadUnaligned(
-                        fromByteOffset: offset,
-                        as: Float.self
-                    )
-                }
-                if value.isFinite, value > 0.05, value < 8 {
-                    values.append(value)
-                }
+        guard !points.isEmpty else { return nil }
+        var bestDistance = CGFloat.infinity
+        var bestIndex = 0
+        for index in points.indices {
+            let point = points[index]
+            let dx = point.image.x - imagePixel.x
+            let dy = point.image.y - imagePixel.y
+            let distance = dx * dx + dy * dy
+            if distance < bestDistance {
+                bestDistance = distance
+                bestIndex = index
             }
         }
-        guard !values.isEmpty else { return nil }
-        values.sort()
-        return values[values.count / 2]
-    }
-
-    private static func medianDepth(
-        imageX: CGFloat,
-        imageY: CGFloat,
-        imageSize: CGSize,
-        pixelBuffer: CVPixelBuffer
-    ) -> Float? {
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
-        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
-        guard width > 0, height > 0, bytesPerRow > 0 else {
-            return nil
+        let radiusSquared = radius * radius
+        guard bestDistance <= radiusSquared else {
+            return points[bestIndex].world
         }
-        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-        defer {
-            CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
-        }
-        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else {
-            return nil
-        }
-        let pointer = base.assumingMemoryBound(to: Float32.self)
-        let stride = bytesPerRow / MemoryLayout<Float32>.size
-        let depthX = Int(imageX / imageSize.width * CGFloat(width))
-        let depthY = Int(imageY / imageSize.height * CGFloat(height))
-        var values: [Float] = []
-        for dy in -1...1 {
-            for dx in -1...1 {
-                let x = min(max(depthX + dx, 0), width - 1)
-                let y = min(max(depthY + dy, 0), height - 1)
-                let value = pointer[y * stride + x]
-                if value.isFinite, value > 0.05, value < 8 {
-                    values.append(value)
-                }
+        var sum = SIMD3<Float>(0, 0, 0)
+        var count = 0
+        for point in points {
+            let dx = point.image.x - imagePixel.x
+            let dy = point.image.y - imagePixel.y
+            if dx * dx + dy * dy <= radiusSquared {
+                sum += point.world
+                count += 1
             }
         }
-        guard !values.isEmpty else { return nil }
-        values.sort()
-        return values[values.count / 2]
+        return count > 0 ? sum / Float(count) : points[bestIndex].world
+    }
+
+    static func cameraToDisplayRotation(
+        orientation: UIInterfaceOrientation
+    ) -> Int {
+        switch orientation {
+        case .landscapeLeft:
+            return 180
+        case .portrait:
+            return 90
+        case .portraitUpsideDown:
+            return -90
+        default:
+            return 0
+        }
+    }
+
+    static func rotateToARCameraMatrix(
+        orientation: UIInterfaceOrientation
+    ) -> simd_float4x4 {
+        let flipYZ = simd_float4x4(columns: (
+            SIMD4<Float>(1, 0, 0, 0),
+            SIMD4<Float>(0, -1, 0, 0),
+            SIMD4<Float>(0, 0, -1, 0),
+            SIMD4<Float>(0, 0, 0, 1)
+        ))
+        let angle = Float(
+            cameraToDisplayRotation(orientation: orientation)
+        ) * Float.pi / 180
+        let rotation = simd_float4x4(
+            simd_quatf(angle: angle, axis: SIMD3<Float>(0, 0, 1))
+        )
+        return flipYZ * rotation
     }
 
     static func associations(
