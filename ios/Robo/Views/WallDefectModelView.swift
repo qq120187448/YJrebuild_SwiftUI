@@ -623,27 +623,30 @@ private struct WallDefectARView: UIViewRepresentable {
         }
 
         @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
-            guard let view = sceneView,
-                  let frame = cameraModel.latestFrame else {
-                return
+            let location = recognizer.location(in: sceneView)
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      let view = self.sceneView,
+                      let frame = self.cameraModel.latestFrame else {
+                    return
+                }
+                guard let world = self.screenWorldPoint(
+                    frame: frame,
+                    view: view,
+                    screenPoint: location
+                ) else {
+                    self.cameraModel.tapWorldPoint = nil
+                    return
+                }
+                self.cameraModel.tapWorldPoint = world
+                let marker = self.verificationNode(
+                    named: self.tapMarkerNodeName,
+                    color: .white,
+                    in: view
+                )
+                marker.isHidden = false
+                marker.position = SCNVector3(world.x, world.y, world.z)
             }
-            let location = recognizer.location(in: view)
-            guard let world = screenWorldPoint(
-                frame: frame,
-                view: view,
-                screenPoint: location
-            ) else {
-                cameraModel.tapWorldPoint = nil
-                return
-            }
-            cameraModel.tapWorldPoint = world
-            let marker = verificationNode(
-                named: tapMarkerNodeName,
-                color: .white,
-                in: view
-            )
-            marker.isHidden = false
-            marker.position = SCNVector3(world.x, world.y, world.z)
         }
 
         private func cropCenter(in view: ARSCNView?) -> CGPoint? {
