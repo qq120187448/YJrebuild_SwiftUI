@@ -686,19 +686,26 @@ private struct WallDefectARView: UIViewRepresentable {
             view: ARSCNView,
             screenPoint: CGPoint
         ) -> SIMD3<Float>? {
-            guard let query = view.raycastQuery(
-                from: screenPoint,
-                allowing: [.existingPlaneGeometry, .estimatedPlane],
-                alignment: .any
-            ), let result = view.session.raycast(query).first else {
-                return nil
+            let targets: [ARRaycastQuery.Target] = [
+                .existingPlaneGeometry,
+                .estimatedPlane
+            ]
+            for target in targets {
+                guard let query = view.raycastQuery(
+                    from: screenPoint,
+                    allowing: target,
+                    alignment: .any
+                ), let result = view.session.raycast(query).first else {
+                    continue
+                }
+                let transform = result.worldTransform
+                return SIMD3<Float>(
+                    transform.columns.3.x,
+                    transform.columns.3.y,
+                    transform.columns.3.z
+                )
             }
-            let transform = result.worldTransform
-            return SIMD3<Float>(
-                transform.columns.3.x,
-                transform.columns.3.y,
-                transform.columns.3.z
-            )
+            return nil
         }
 
         private func verificationNode(
