@@ -876,7 +876,7 @@ enum CrackRecognitionEngine {
         let marginX = CGFloat(width) * 0.015
         let marginY = CGFloat(height) * 0.015
         return detections.filter { detection in
-            let rect = detection.tileRect
+            let rect = detection.box
             return rect.minX >= marginX
                 && rect.minY >= marginY
                 && rect.maxX <= CGFloat(width) - marginX
