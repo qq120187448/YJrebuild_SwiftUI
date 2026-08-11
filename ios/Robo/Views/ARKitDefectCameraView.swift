@@ -10,7 +10,6 @@ import UIKit
 struct DefectCameraCapture {
     let image: UIImage
     let pose: [Float]
-    let worldTransform: [Float]
     let intrinsics: [Float]
     let depth: Data?
     let depthWidth: Int?
@@ -188,20 +187,14 @@ final class DefectCameraModel: ObservableObject {
         }
         let image = resizedSquare(cgImage: croppedCG, side: outputSide)
 
-        let worldMatrix = WallDefectProjection.depthCameraToWorldMatrix(
-            frame: frame,
-            orientation: .portrait
-        )
         let pose = flatten(matrix: frame.camera.transform)
-        let worldTransform = flatten(matrix: worldMatrix)
         let intrinsics = flatten(matrix: frame.camera.intrinsics)
 
         var depth: Data?
         var depthWidth: Int?
         var depthHeight: Int?
         var depthBytesPerRow: Int?
-        if let depthMap = frame.sceneDepth?.depthMap
-            ?? frame.smoothedSceneDepth?.depthMap {
+        if let depthMap = frame.sceneDepth?.depthMap {
             let copied = copyDepth(pixelBuffer: depthMap)
             depth = copied.data
             depthWidth = copied.width
@@ -213,7 +206,6 @@ final class DefectCameraModel: ObservableObject {
         return DefectCameraCapture(
             image: image,
             pose: pose,
-            worldTransform: worldTransform,
             intrinsics: intrinsics,
             depth: depth,
             depthWidth: depthWidth,
@@ -364,9 +356,6 @@ struct ARKitDefectCameraView: UIViewRepresentable {
         }
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
             configuration.frameSemantics.insert(.sceneDepth)
-        }
-        if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
-            configuration.frameSemantics.insert(.smoothedSceneDepth)
         }
         view.session.run(configuration)
         return view

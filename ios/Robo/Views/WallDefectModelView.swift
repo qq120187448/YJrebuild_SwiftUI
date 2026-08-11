@@ -557,8 +557,10 @@ private struct WallDefectARView: UIViewRepresentable {
         let cameraModel: DefectCameraModel
         weak var sceneView: ARSCNView?
         private let skeletonNodeName = "CrackARSkeleton"
+        private let centerNodeName = "DepthCenterVerificationBox"
         private var lastSkeletonHash = Int.min
         private var lastPlaneEstimateTime: TimeInterval = -1
+        private var lastCenterUpdateTime: TimeInterval = -1
 
         init(cameraModel: DefectCameraModel) {
             self.cameraModel = cameraModel
@@ -577,6 +579,13 @@ private struct WallDefectARView: UIViewRepresentable {
                     )
                     self.cameraModel.update(plane: plane)
                 }
+                if frame.timestamp - self.lastCenterUpdateTime >= 0.1 {
+                    self.lastCenterUpdateTime = frame.timestamp
+                    self.updateCenterMarker(
+                        frame: frame,
+                        view: self.sceneView
+                    )
+                }
             }
         }
 
@@ -593,6 +602,70 @@ private struct WallDefectARView: UIViewRepresentable {
                 view.bounds.height * DefectCameraModel.squareCropCenterYRatio
             )
             return CGPoint(x: view.bounds.midX, y: centerY)
+        }
+
+        private func updateCenterMarker(
+            frame: ARFrame,
+            view: ARSCNView?
+        ) {
+            guard let view else { return }
+            let node: SCNNode
+            if let existing = view.scene.rootNode.childNode(
+                withName: centerNodeName,
+                recursively: true
+            ) {
+                node = existing
+            } else {
+                let box = SCNBox(
+                    width: 0.05,
+                    height: 0.05,
+                    length: 0.05,
+                    chamferRadius: 0
+                )
+                box.firstMaterial?.diffuse.contents = UIColor.cyan
+                box.firstMaterial?.emission.contents = UIColor.cyan
+                node = SCNNode(geometry: box)
+                node.name = centerNodeName
+                node.renderingOrder = 200
+                view.scene.rootNode.addChildNode(node)
+            }
+            guard let center = cropCenter(in: view),
+                  let world = centerWorldPoint(
+                    frame: frame,
+                    view: view,
+                    screenPoint: center
+                  ) else {
+                node.isHidden = true
+                return
+            }
+            node.isHidden = false
+            node.position = SCNVector3(world.x, world.y, world.z)
+        }
+
+        private func centerWorldPoint(
+            frame: ARFrame,
+            view: ARSCNView,
+            screenPoint: CGPoint
+        ) -> SIMD3<Float>? {
+            guard view.bounds.width > 0, view.bounds.height > 0 else {
+                return nil
+            }
+            let normalized = screenPoint.applying(
+                frame.displayTransform(
+                    for: .portrait,
+                    viewportSize: view.bounds.size
+                ).inverted()
+            )
+            let imagePixel = CGPoint(
+                x: normalized.x
+                    * CGFloat(frame.camera.imageResolution.width),
+                y: normalized.y
+                    * CGFloat(frame.camera.imageResolution.height)
+            )
+            return WallDefectProjection.depthWorldPoint(
+                imagePixel: imagePixel,
+                frame: frame
+            )
         }
 
         func updateARSkeleton(

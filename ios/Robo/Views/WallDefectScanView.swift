@@ -117,9 +117,6 @@ struct WallDefectScanView: View {
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
             configuration.frameSemantics.insert(.sceneDepth)
         }
-        if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
-            configuration.frameSemantics.insert(.smoothedSceneDepth)
-        }
         session.run(configuration)
         arSession = session
     }
@@ -180,7 +177,7 @@ struct WallDefectScanView: View {
                     sensorIntrinsics: capture.sensorIntrinsics,
                     cropRect: capture.cropRect,
                     sensorImageSize: capture.sensorImageSize,
-                    worldTransform: capture.worldTransform,
+                    cameraTransform: capture.pose,
                     analysisToCaptureRatio: Float(
                         capture.image.size.width
                             / max(image.size.width, 1)
