@@ -110,11 +110,16 @@ struct WallDefectScanView: View {
         let configuration = ARWorldTrackingConfiguration()
         configuration.worldAlignment = .gravity
         configuration.planeDetection = [.horizontal, .vertical]
-        if let wideFormat = ARWorldTrackingConfiguration.supportedVideoFormats
-            .first(where: {
+        let wideFormats = ARWorldTrackingConfiguration
+            .supportedVideoFormats
+            .filter {
                 $0.captureDevicePosition == .back &&
                 $0.captureDeviceType == .builtInWideAngleCamera
-            }) {
+            }
+        if let wideFormat = wideFormats.max(by: {
+            $0.imageResolution.width * $0.imageResolution.height
+                < $1.imageResolution.width * $1.imageResolution.height
+        }) {
             configuration.videoFormat = wideFormat
         }
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
