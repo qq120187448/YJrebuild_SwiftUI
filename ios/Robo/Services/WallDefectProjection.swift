@@ -117,14 +117,17 @@ enum WallDefectProjection {
               context.analysisToCaptureRatio > 0 else {
             return nil
         }
-        let imageX = context.cropRect.minX
-            + (pixel.x / analysisSize.width
-                / CGFloat(context.analysisToCaptureRatio))
-                * context.cropRect.width
-        let imageY = context.cropRect.minY
-            + (pixel.y / analysisSize.height
-                / CGFloat(context.analysisToCaptureRatio))
-                * context.cropRect.height
+        let imageX = (pixel.x / analysisSize.width
+            / CGFloat(context.analysisToCaptureRatio))
+            * context.sensorImageSize.width
+        let imageY = (pixel.y / analysisSize.height
+            / CGFloat(context.analysisToCaptureRatio))
+            * context.sensorImageSize.height
+        guard context.cropRect.contains(
+            CGPoint(x: imageX, y: imageY)
+        ) else {
+            return nil
+        }
         guard imageX >= 0, imageY >= 0,
               imageX <= context.sensorImageSize.width,
               imageY <= context.sensorImageSize.height else {

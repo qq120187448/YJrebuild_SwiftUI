@@ -182,14 +182,14 @@ final class DefectCameraModel: ObservableObject {
             )
         }
         guard cropRect.width > 4, cropRect.height > 4,
-              let croppedCG = sensorCroppedCG(
-                from: frame,
-                cropRect: cropRect
-              ) else {
-            lastError = "无法裁剪方形识别区域"
+              let fullCG = fullSensorCG(from: frame) else {
+            lastError = "无法读取主摄画面"
             return nil
         }
-        let image = resizedSquare(cgImage: croppedCG, side: outputSide)
+        let image = resizedImage(
+            cgImage: fullCG,
+            maxSide: outputSide
+        )
 
         let pose = flatten(matrix: frame.camera.transform)
         let intrinsics = flatten(matrix: frame.camera.intrinsics)
@@ -274,39 +274,30 @@ final class DefectCameraModel: ObservableObject {
         )
     }
 
-    private func sensorCroppedCG(
+    private func fullSensorCG(
         from frame: ARFrame,
-        cropRect: CGRect
     ) -> CGImage? {
         let ciImage = CIImage(cvPixelBuffer: frame.capturedImage)
-        let sensorSize = CGSize(
-            width: CGFloat(ciImage.extent.width),
-            height: CGFloat(ciImage.extent.height)
-        )
-        let ciRect = CGRect(
-            x: cropRect.minX,
-            y: sensorSize.height - cropRect.maxY,
-            width: cropRect.width,
-            height: cropRect.height
-        )
-        let cropped = ciImage.cropped(to: ciRect)
-        return ciContext.createCGImage(cropped, from: cropped.extent)
+        return ciContext.createCGImage(ciImage, from: ciImage.extent)
     }
 
-    private func resizedSquare(
+    private func resizedImage(
         cgImage: CGImage,
-        side: CGFloat
+        maxSide: CGFloat
     ) -> UIImage {
-        let side = max(1, Int(side.rounded()))
+        let largest = max(cgImage.width, cgImage.height)
+        guard largest > 0 else {
+            return UIImage(cgImage: cgImage)
+        }
+        let scale = min(1, maxSide / CGFloat(largest))
+        let width = max(1, Int(CGFloat(cgImage.width) * scale))
+        let height = max(1, Int(CGFloat(cgImage.height) * scale))
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
-        let size = CGSize(width: side, height: side)
+        let size = CGSize(width: width, height: height)
         return UIGraphicsImageRenderer(size: size, format: format)
             .image { rendererContext in
                 rendererContext.cgContext.interpolationQuality = .high
-                // UIImage.draw keeps the CGImage's top-left coordinate space
-                // aligned with ARKit's camera image; drawing the CGImage
-                // directly would flip it inside the UIKit renderer.
                 UIImage(cgImage: cgImage).draw(
                     in: CGRect(origin: .zero, size: size)
                 )
