@@ -367,11 +367,7 @@ enum CrackSkeleton {
             var components = prunedGroups.enumerated().map { index, points in
                 CrackComponent(
                     id: index + 1,
-                    pixelLength: graphLength(
-                        points,
-                        width: width,
-                        spacing: max(1, spacing)
-                    ),
+                    pixelLength: graphLength(points, width: width),
                     mmPerPixel: config.lengthUnit == "known" ? config.mmPerPixel : nil
                 )
             }
