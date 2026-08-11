@@ -23,6 +23,8 @@ struct WallDefectModelView: View {
     let arSession: ARSession
     let latestRecognition: WallDefectPhotoRecognitionResult?
     let arSkeletonGroups: [[CrackSkeleton3DPoint]]
+    let cumulativeCrackCount: Int
+    let cumulativeLengthM: Double
     let isRecognizing: Bool
     let progressMessage: String
     let onPhoto: (DefectCameraCapture, WallDefectSurface?) -> Void
@@ -314,15 +316,17 @@ struct WallDefectModelView: View {
                                 ("主裂缝", "main")
                             ]
                         )
-                        parameterStepper(
-                            title: "AR投影宽度",
-                            value: Binding(
-                                get: { recognitionConfig.arLineWidth },
-                                set: { recognitionConfig.arLineWidth = $0 }
-                            ),
-                            range: 1...5
-                        )
                     }
+                    parameterSlider(
+                        title: "AR投影宽度",
+                        value: Binding(
+                            get: { recognitionConfig.arLineWidth },
+                            set: { recognitionConfig.arLineWidth = $0 }
+                        ),
+                        range: 0.1...5,
+                        step: 0.1,
+                        format: "%.1f"
+                    )
                     parameterStepper(
                         title: "最短骨架长度",
                         value: Binding(
@@ -473,24 +477,22 @@ struct WallDefectModelView: View {
                             .foregroundStyle(.orange)
                     }
                 } else {
-                    let longest = result.components
-                        .map { $0.lengthM ?? 0 }
-                        .max() ?? 0
-                    LabeledContent("裂缝", value: "\(result.components.count) 条")
                     LabeledContent(
-                        "总长",
+                        "本次裂缝",
+                        value: "\(result.components.count) 条"
+                    )
+                    LabeledContent(
+                        "本次增加",
                         value: String(format: "%.3f m", result.totalLengthM)
                     )
                     LabeledContent(
-                        "最长",
-                        value: String(format: "%.3f m", longest)
+                        "累计数量",
+                        value: "\(cumulativeCrackCount) 条"
                     )
-                    if let total = latestRecognition.timings["总计"] {
-                        LabeledContent(
-                            "耗时",
-                            value: String(format: "%.2fs", total)
-                        )
-                    }
+                    LabeledContent(
+                        "累计长度",
+                        value: String(format: "%.3f m", cumulativeLengthM)
+                    )
                 }
                 Text(
                     "YOLO \(latestRecognition.rawDetectionCount)处 · 骨架 \(latestRecognition.skeletonComponentCount)条 · 墙面投影 \(latestRecognition.projectedComponentCount)条"
@@ -516,7 +518,7 @@ private struct WallDefectARView: UIViewRepresentable {
     let arSession: ARSession
     let cameraModel: DefectCameraModel
     let skeletonGroups: [[CrackSkeleton3DPoint]]
-    let lineWidth: Int
+    let lineWidth: Double
 
     func makeUIView(context: Context) -> ARSCNView {
         let view = ARSCNView()
@@ -559,6 +561,11 @@ private struct WallDefectARView: UIViewRepresentable {
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
             DispatchQueue.main.async {
                 self.cameraModel.update(frame: frame)
+                if let view = self.sceneView,
+                   view.bounds.width > 0,
+                   view.bounds.height > 0 {
+                    self.cameraModel.currentViewSize = view.bounds.size
+                }
                 if frame.timestamp - self.lastPlaneEstimateTime >= 0.2 {
                     self.lastPlaneEstimateTime = frame.timestamp
                     let cropCenter = self.cropCenter(in: self.sceneView)
@@ -643,7 +650,7 @@ private struct WallDefectARView: UIViewRepresentable {
 
         func updateARSkeleton(
             _ groups: [[CrackSkeleton3DPoint]],
-            lineWidth: Int,
+            lineWidth: Double,
             in view: ARSCNView
         ) {
             var hash = 0
@@ -667,7 +674,7 @@ private struct WallDefectARView: UIViewRepresentable {
             material.diffuse.contents = UIColor.red
             material.emission.contents = UIColor.red
             material.isDoubleSided = true
-            let radius = CGFloat(max(1, min(lineWidth, 5))) * 0.0012
+            let radius = CGFloat(max(0.1, min(lineWidth, 5))) * 0.0012
             let rootNode = SCNNode()
             rootNode.name = skeletonNodeName
             rootNode.renderingOrder = 100

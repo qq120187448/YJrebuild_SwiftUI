@@ -21,7 +21,7 @@ struct CrackRecognitionConfig: Codable, Equatable {
     var mmPerPixel: Double = 0
     var dedupDistanceMM: Double = 20
     var minPhysicalLengthMM: Double = 5
-    var arLineWidth: Int = 2
+    var arLineWidth: Double = 1
 
     static let defaultConfig = CrackRecognitionConfig()
 
@@ -50,14 +50,14 @@ struct CrackRecognitionConfig: Codable, Equatable {
         mmPerPixel = max(mmPerPixel, 0)
         dedupDistanceMM = min(max(dedupDistanceMM, 1), 100)
         minPhysicalLengthMM = min(max(minPhysicalLengthMM, 1), 100)
-        arLineWidth = min(max(arLineWidth, 1), 5)
+        arLineWidth = min(max(arLineWidth, 0.1), 5)
     }
 }
 
 enum CrackRecognitionSettings {
     private static let key = "crackRecognitionConfig"
     private static let versionKey = "crackRecognitionConfigVersion"
-    private static let currentVersion = 64
+    private static let currentVersion = 65
 
     static func load() -> CrackRecognitionConfig {
         let storedVersion = UserDefaults.standard.integer(forKey: versionKey)
@@ -165,7 +165,7 @@ enum CrackRecognitionSettings {
             config.minPhysicalLengthMM = number
         }
         if let value = components.queryItems?.first(where: { $0.name == "arwidth" })?.value,
-           let number = Int(value) {
+           let number = Double(value) {
             config.arLineWidth = number
         }
         save(config)

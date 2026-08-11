@@ -121,13 +121,9 @@ enum CrackRecognitionEngine {
 
         let prepareStart = CFAbsoluteTimeGetCurrent()
         progress?("正在预处理照片", timings["模型加载"])
-        let hairlineMaxSide = min(
-            4096,
-            max(config.tileSize * 2, 2048)
-        )
         let analysisImage = resizedUIImage(
             image,
-            maxSide: config.mode == "hairline" ? CGFloat(hairlineMaxSide) : 2048
+            maxSide: CGFloat(config.captureResolution)
         )
         guard let cgImage = analysisImage.cgImage else {
             throw CrackRecognitionError.invalidImage
@@ -141,13 +137,18 @@ enum CrackRecognitionEngine {
 
         let inferenceStart = CFAbsoluteTimeGetCurrent()
         progress?("正在 CoreML 推理", timings["预处理"])
-        let detections = try runDetections(
+        var detections = try runDetections(
             cgImage: cgImage,
             model: model,
             config: config,
             progress: { stage in
                 progress?(stage, CFAbsoluteTimeGetCurrent() - overallStart)
             }
+        )
+        detections = filterEdgeDetections(
+            detections,
+            width: width,
+            height: height
         )
         timings["CoreML识别"] = CFAbsoluteTimeGetCurrent() - inferenceStart
 
@@ -864,6 +865,23 @@ enum CrackRecognitionEngine {
             }
         }
         return mask
+    }
+
+    private static func filterEdgeDetections(
+        _ detections: [YOLOSegDetection],
+        width: Int,
+        height: Int
+    ) -> [YOLOSegDetection] {
+        guard width > 0, height > 0 else { return detections }
+        let marginX = CGFloat(width) * 0.015
+        let marginY = CGFloat(height) * 0.015
+        return detections.filter { detection in
+            let rect = detection.tileRect
+            return rect.minX >= marginX
+                && rect.minY >= marginY
+                && rect.maxX <= CGFloat(width) - marginX
+                && rect.maxY <= CGFloat(height) - marginY
+        }
     }
 
     private static func sparseMaskPoints(

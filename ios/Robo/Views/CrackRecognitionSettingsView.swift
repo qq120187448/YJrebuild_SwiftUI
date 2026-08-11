@@ -134,11 +134,12 @@ struct CrackRecognitionSettingsView: View {
                     range: 512...2048,
                     step: 128
                 )
-                stepperRow(
+                sliderRow(
                     title: "AR 投影宽度",
                     value: $config.arLineWidth,
-                    range: 1...5,
-                    step: 1
+                    range: 0.1...5,
+                    step: 0.1,
+                    format: "%.1f"
                 )
                 Text("补拍时按该分辨率输出方形照片送模型识别。")
                     .font(.caption)

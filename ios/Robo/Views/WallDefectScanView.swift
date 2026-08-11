@@ -24,6 +24,8 @@ struct WallDefectScanView: View {
                         arSession: arSession,
                         latestRecognition: latestRecognition,
                         arSkeletonGroups: arSkeletonGroups,
+                        cumulativeCrackCount: cumulativeCrackCount,
+                        cumulativeLengthM: cumulativeLengthM,
                         isRecognizing: isPhotoAnalyzing,
                         progressMessage: recognitionProgress,
                         onPhoto: { capture, plane in
@@ -370,5 +372,17 @@ struct WallDefectScanView: View {
             }
         }
         .filter { !$0.isEmpty }
+    }
+
+    private var cumulativeCrackCount: Int {
+        photos
+            .filter { !$0.isDuplicate }
+            .reduce(0) { $0 + ($1.crackResult?.components.count ?? 0) }
+    }
+
+    private var cumulativeLengthM: Double {
+        photos
+            .filter { !$0.isDuplicate }
+            .reduce(0) { $0 + ($1.crackResult?.totalLengthM ?? 0) }
     }
 }

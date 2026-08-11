@@ -44,6 +44,7 @@ final class DefectCameraModel: ObservableObject {
     @Published var planeSource: String?
     @Published var planeResidualM: Float?
     @Published var currentPlaneSurface: WallDefectSurface?
+    @Published var currentViewSize: CGSize?
 
     private let ciContext = CIContext()
 
@@ -151,7 +152,9 @@ final class DefectCameraModel: ObservableObject {
             width: CGFloat(CVPixelBufferGetWidth(buffer)),
             height: CGFloat(CVPixelBufferGetHeight(buffer))
         )
-        let targetViewSize = viewSize ?? CGSize(width: 390, height: 844)
+        let targetViewSize = currentViewSize
+            ?? viewSize
+            ?? CGSize(width: 390, height: 844)
         let screenRect = squareScreenRect(
             viewSize: targetViewSize,
             centerRatio: centerRatio
