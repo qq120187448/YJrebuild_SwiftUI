@@ -95,6 +95,23 @@ struct WallDefectModelView: View {
 
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
+                if let tap = cameraModel.tapWorldPoint {
+                    Text(
+                        String(
+                            format: "点云命中 (%.3f, %.3f, %.3f)",
+                            tap.x,
+                            tap.y,
+                            tap.z
+                        )
+                    )
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.black.opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .padding(.bottom, 4)
+                }
                 planeStatusPanel
                 if showRecognitionPanel {
                     recognitionPanel
@@ -534,6 +551,11 @@ private struct WallDefectARView: UIViewRepresentable {
         view.session = arSession
         view.session.delegate = context.coordinator
         view.automaticallyUpdatesLighting = true
+        let tap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleTap(_:))
+        )
+        view.addGestureRecognizer(tap)
         context.coordinator.sceneView = view
         return view
     }
@@ -559,9 +581,12 @@ private struct WallDefectARView: UIViewRepresentable {
         private let skeletonNodeName = "CrackARSkeleton"
         private let centerNodeName = "DepthCenterVerificationBox"
         private let raycastNodeName = "RaycastVerificationBox"
+        private let pointCloudNodeName = "DefectDepthPointCloud"
+        private let tapMarkerNodeName = "TapWorldPointMarker"
         private var lastSkeletonHash = Int.min
         private var lastPlaneEstimateTime: TimeInterval = -1
         private var lastCenterUpdateTime: TimeInterval = -1
+        private var lastPointCloudUpdateTime: TimeInterval = -1
 
         init(cameraModel: DefectCameraModel) {
             self.cameraModel = cameraModel
@@ -587,7 +612,38 @@ private struct WallDefectARView: UIViewRepresentable {
                         view: self.sceneView
                     )
                 }
+                if frame.timestamp - self.lastPointCloudUpdateTime >= 0.15 {
+                    self.lastPointCloudUpdateTime = frame.timestamp
+                    self.updateDepthPointCloud(
+                        frame: frame,
+                        view: self.sceneView
+                    )
+                }
             }
+        }
+
+        @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
+            guard let view = sceneView,
+                  let frame = cameraModel.latestFrame else {
+                return
+            }
+            let location = recognizer.location(in: view)
+            guard let world = screenWorldPoint(
+                frame: frame,
+                view: view,
+                screenPoint: location
+            ) else {
+                cameraModel.tapWorldPoint = nil
+                return
+            }
+            cameraModel.tapWorldPoint = world
+            let marker = verificationNode(
+                named: tapMarkerNodeName,
+                color: .white,
+                in: view
+            )
+            marker.isHidden = false
+            marker.position = SCNVector3(world.x, world.y, world.z)
         }
 
         private func cropCenter(in view: ARSCNView?) -> CGPoint? {
@@ -652,6 +708,18 @@ private struct WallDefectARView: UIViewRepresentable {
             view: ARSCNView,
             screenPoint: CGPoint
         ) -> SIMD3<Float>? {
+            screenWorldPoint(
+                frame: frame,
+                view: view,
+                screenPoint: screenPoint
+            )
+        }
+
+        private func screenWorldPoint(
+            frame: ARFrame,
+            view: ARSCNView,
+            screenPoint: CGPoint
+        ) -> SIMD3<Float>? {
             guard let depthMap = frame.sceneDepth?.depthMap else {
                 return nil
             }
@@ -679,6 +747,53 @@ private struct WallDefectARView: UIViewRepresentable {
                 near: imagePixel,
                 in: points
             )
+        }
+
+        private func updateDepthPointCloud(
+            frame: ARFrame,
+            view: ARSCNView?
+        ) {
+            guard let view,
+                  let depthMap = frame.sceneDepth?.depthMap else {
+                return
+            }
+            let points = WallDefectProjection.makePointCloud(
+                frame: frame,
+                depthMap: depthMap,
+                sampleStep: 4
+            )
+            let node = SCNNode()
+            node.name = pointCloudNodeName
+            if !points.isEmpty {
+                let vertices = points.map {
+                    SCNVector3($0.world.x, $0.world.y, $0.world.z)
+                }
+                let source = SCNGeometrySource(vertices: vertices)
+                let indices = (0..<Int32(points.count)).map { $0 }
+                let element = SCNGeometryElement(
+                    indices: indices,
+                    primitiveType: .point
+                )
+                element.pointSize = 2
+                element.minimumPointScreenSpaceRadius = 1
+                element.maximumPointScreenSpaceRadius = 3
+                let geometry = SCNGeometry(
+                    sources: [source],
+                    elements: [element]
+                )
+                let material = SCNMaterial()
+                material.lightingModel = .constant
+                material.diffuse.contents = UIColor.cyan
+                material.emission.contents = UIColor.cyan
+                material.blendMode = .alpha
+                geometry.materials = [material]
+                node.geometry = geometry
+            }
+            view.scene.rootNode.childNode(
+                withName: pointCloudNodeName,
+                recursively: true
+            )?.removeFromParentNode()
+            view.scene.rootNode.addChildNode(node)
         }
 
         private func raycastWorldPoint(

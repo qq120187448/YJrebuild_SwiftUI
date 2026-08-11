@@ -44,6 +44,7 @@ final class DefectCameraModel: ObservableObject {
     @Published var planeSource: String?
     @Published var planeResidualM: Float?
     @Published var currentPlaneSurface: WallDefectSurface?
+    @Published var tapWorldPoint: SIMD3<Float>?
 
     private let ciContext = CIContext()
 
