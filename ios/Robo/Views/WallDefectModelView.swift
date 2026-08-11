@@ -661,7 +661,7 @@ private struct WallDefectARView: UIViewRepresentable {
                     hash = hash &* 31 &+ point.surfaceID.hashValue
                 }
             }
-            hash = hash &* 31 &+ lineWidth
+            hash = hash &* 31 &+ Int(lineWidth * 10)
             guard hash != lastSkeletonHash else { return }
             lastSkeletonHash = hash
 
