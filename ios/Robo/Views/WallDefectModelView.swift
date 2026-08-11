@@ -583,6 +583,7 @@ private struct WallDefectARView: UIViewRepresentable {
         private let raycastNodeName = "RaycastVerificationBox"
         private let pointCloudNodeName = "DefectDepthPointCloud"
         private let tapMarkerNodeName = "TapWorldPointMarker"
+        private var latestPointCloud: [DefectPointCloudPoint] = []
         private var lastSkeletonHash = Int.min
         private var lastPlaneEstimateTime: TimeInterval = -1
         private var lastCenterUpdateTime: TimeInterval = -1
@@ -626,12 +627,10 @@ private struct WallDefectARView: UIViewRepresentable {
             let location = recognizer.location(in: sceneView)
             DispatchQueue.main.async { [weak self] in
                 guard let self,
-                      let view = self.sceneView,
-                      let frame = self.cameraModel.latestFrame else {
+                      let view = self.sceneView else {
                     return
                 }
                 guard let world = self.screenWorldPoint(
-                    frame: frame,
                     view: view,
                     screenPoint: location
                 ) else {
@@ -684,8 +683,7 @@ private struct WallDefectARView: UIViewRepresentable {
                 raycastNode.isHidden = true
                 return
             }
-            if let world = centerWorldPoint(
-                frame: frame,
+            if let world = screenWorldPoint(
                 view: view,
                 screenPoint: center
             ) {
@@ -706,50 +704,46 @@ private struct WallDefectARView: UIViewRepresentable {
             }
         }
 
-        private func centerWorldPoint(
-            frame: ARFrame,
+        private func screenWorldPoint(
             view: ARSCNView,
             screenPoint: CGPoint
         ) -> SIMD3<Float>? {
-            screenWorldPoint(
-                frame: frame,
-                view: view,
-                screenPoint: screenPoint
+            nearestCloudWorldPoint(
+                toScreen: screenPoint,
+                in: view
             )
         }
 
-        private func screenWorldPoint(
-            frame: ARFrame,
-            view: ARSCNView,
-            screenPoint: CGPoint
+        private func nearestCloudWorldPoint(
+            toScreen screenPoint: CGPoint,
+            in view: ARSCNView
         ) -> SIMD3<Float>? {
-            guard let depthMap = frame.sceneDepth?.depthMap else {
+            guard !latestPointCloud.isEmpty else {
                 return nil
             }
-            guard view.bounds.width > 0, view.bounds.height > 0 else {
-                return nil
+            var best: DefectPointCloudPoint?
+            var bestDistance = CGFloat.infinity
+            for point in latestPointCloud {
+                let projected = view.projectPoint(
+                    SCNVector3(
+                        point.world.x,
+                        point.world.y,
+                        point.world.z
+                    )
+                )
+                let projectedPoint = CGPoint(
+                    x: CGFloat(projected.x),
+                    y: CGFloat(projected.y)
+                )
+                let dx = projectedPoint.x - screenPoint.x
+                let dy = projectedPoint.y - screenPoint.y
+                let distance = dx * dx + dy * dy
+                if distance < bestDistance {
+                    bestDistance = distance
+                    best = point
+                }
             }
-            let normalized = screenPoint.applying(
-                frame.displayTransform(
-                    for: .portrait,
-                    viewportSize: view.bounds.size
-                ).inverted()
-            )
-            let imagePixel = CGPoint(
-                x: normalized.x
-                    * CGFloat(frame.camera.imageResolution.width),
-                y: normalized.y
-                    * CGFloat(frame.camera.imageResolution.height)
-            )
-            let points = WallDefectProjection.makePointCloud(
-                frame: frame,
-                depthMap: depthMap,
-                sampleStep: 4
-            )
-            return WallDefectProjection.worldPoint(
-                near: imagePixel,
-                in: points
-            )
+            return best?.world
         }
 
         private func updateDepthPointCloud(
@@ -765,6 +759,7 @@ private struct WallDefectARView: UIViewRepresentable {
                 depthMap: depthMap,
                 sampleStep: 4
             )
+            latestPointCloud = points
             let node = SCNNode()
             node.name = pointCloudNodeName
             if !points.isEmpty {
