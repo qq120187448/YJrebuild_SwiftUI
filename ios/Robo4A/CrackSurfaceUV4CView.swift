@@ -129,13 +129,11 @@ struct CrackSurfaceUV4CView: View {
     // MARK: - RoomPlan
 
     private func setupCoordinator() {
-        coordinator.onDidStart = { [weak self] in
-            guard let self else { return }
+        coordinator.onDidStart = {
             self.isScanning = true
             self.statusText = "RoomPlan 扫描中…（结束扫描后恢复 mesh）"
         }
-        coordinator.onDidEnd = { [weak self] data, error in
-            guard let self else { return }
+        coordinator.onDidEnd = { data, error in
             self.isScanning = false
             if let error {
                 self.statusText = "扫描出错：\(error.localizedDescription)"
@@ -143,7 +141,10 @@ struct CrackSurfaceUV4CView: View {
             }
             Task {
                 do {
-                    let room = try await RoomBuilder().capturedRoom(from: data)
+                    let room = try await RoomBuilder().capturedRoom(
+                        from: data,
+                        options: []
+                    )
                     self.capturedRoom = room
                     self.statusText =
                         "扫描完成：wall \(room.walls.count) · floor \(room.floors.count) · other \(room.doors.count + room.windows.count + room.openings.count)，可拍照映射"
@@ -152,8 +153,7 @@ struct CrackSurfaceUV4CView: View {
                 }
             }
         }
-        coordinator.onDidFail = { [weak self] error in
-            guard let self else { return }
+        coordinator.onDidFail = { error in
             self.isScanning = false
             self.statusText = "RoomPlan 失败：\(error.localizedDescription)"
         }
