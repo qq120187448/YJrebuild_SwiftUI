@@ -141,10 +141,8 @@ struct CrackSurfaceUV4CView: View {
             }
             Task {
                 do {
-                    let room = try await RoomBuilder().capturedRoom(
-                        from: data,
-                        options: []
-                    )
+                    let room = try await RoomBuilder(options: [])
+                        .capturedRoom(from: data)
                     self.capturedRoom = room
                     self.statusText =
                         "扫描完成：wall \(room.walls.count) · floor \(room.floors.count) · other \(room.doors.count + room.windows.count + room.openings.count)，可拍照映射"
