@@ -172,27 +172,17 @@ extension ContentViewModel {
             
             NSLog("\(nmsPredictions.count) boxes left after performing nms with iou threshold of 0.6")
             
-            // 按检测框距图像边缘 1.5% 剔除不完整目标
-            let filteredPredictions = nmsPredictions.filter { prediction in
-                let marginX = Float(prediction.inputImgSize.width) * 0.015
-                let marginY = Float(prediction.inputImgSize.height) * 0.015
-                return prediction.xyxy.x1 >= marginX
-                    && prediction.xyxy.y1 >= marginY
-                    && prediction.xyxy.x2 <= Float(prediction.inputImgSize.width) - marginX
-                    && prediction.xyxy.y2 <= Float(prediction.inputImgSize.height) - marginY
-            }
-
-            guard !filteredPredictions.isEmpty else {
+            guard !nmsPredictions.isEmpty else {
                 await MainActor.run { [weak self] in
                     self?.centerlineResult = nil
                     self?.predictions = []
-                    self?.centerlineStats = "未检测到裂缝（边缘剔除后 0）"
+                    self?.centerlineStats = "未检测到裂缝（检测框 0）"
                 }
                 return
             }
             
-            await MainActor.run { [weak self, filteredPredictions] in
-                self?.predictions = filteredPredictions
+            await MainActor.run { [weak self, nmsPredictions] in
+                self?.predictions = nmsPredictions
             }
             
             guard let masks = masksOutput.featureValue.multiArrayValue else {
@@ -212,7 +202,7 @@ extension ContentViewModel {
 
             await setStatus(to: .generateMasksFromProtos)
             let maskPredictions = masksFromProtos(
-                boxPredictions: filteredPredictions,
+                boxPredictions: nmsPredictions,
                 maskProtos: maskProtos,
                 maskSize: (
                     width: Int(truncating: masks.shape[3]),
