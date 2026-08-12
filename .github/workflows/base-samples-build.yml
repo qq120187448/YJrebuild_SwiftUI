@@ -1,0 +1,80 @@
+﻿name: Base Samples Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    paths:
+      - '.github/workflows/base-samples-build.yml'
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Apple-SceneReconstruction
+            artifact: Apple-SceneReconstruction-Debug-IPA
+            fetch: |
+              curl -sSL --retry 5 -o sample.zip \
+                "https://docs-assets.developer.apple.com/published/4ecffc064c76/VisualizingAndInteractingWithAReconstructedScene.zip"
+              unzip -q sample.zip -d project
+            project: project/VisualizingSceneSemantics.xcodeproj
+            build_args: -scheme "Visualizing Scene Semantics"
+
+          - name: RoomPlanExampleApp
+            artifact: RoomPlanExampleApp-Debug-IPA
+            fetch: git clone --depth 1 https://github.com/holg/RoomPlanExampleApp.git project
+            project: project/RoomPlanSimple.xcodeproj
+            build_args: -scheme RoomPlanSimple
+
+          - name: YOLOv8-seg-iOS
+            artifact: YOLOv8-seg-iOS-Debug-IPA
+            fetch: git clone --depth 1 https://github.com/MaciDE/YOLOv8-seg-iOS.git project
+            project: project/YOLOv8-seg-iOS.xcodeproj
+            build_args: -target YOLOv8-seg-iOS
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Fetch base sample source
+        run: ${{ matrix.fetch }}
+
+      - name: Build unsigned app
+        run: |
+          xcodebuild \
+            -project "${{ matrix.project }}" \
+            ${{ matrix.build_args }} \
+            -configuration Debug \
+            -sdk iphoneos \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package IPA
+        run: |
+          APP_PATH=$(find "$RUNNER_TEMP/DerivedData" -type d -name "*.app" -path "*Debug-iphoneos*" | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "App bundle not found in DerivedData" >&2
+            exit 1
+          fi
+          echo "Found app at: $APP_PATH"
+          STAGING="$RUNNER_TEMP/ipa-staging"
+          rm -rf "$STAGING"
+          mkdir -p "$STAGING/Payload"
+          cp -R "$APP_PATH" "$STAGING/Payload/"
+          cd "$STAGING"
+          zip -qry "$RUNNER_TEMP/${{ matrix.artifact }}.ipa" Payload
+          ls -lh "$RUNNER_TEMP/${{ matrix.artifact }}.ipa"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: "$RUNNER_TEMP/${{ matrix.artifact }}.ipa"
