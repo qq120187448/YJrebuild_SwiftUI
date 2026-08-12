@@ -28,12 +28,6 @@ struct CrackRecognitionConfig: Codable, Equatable {
     var polylineEpsilonPx: Double = 1.5
     /// ARMesh 射线求交的最大距离（米），防止误打到远处 mesh。
     var meshRayMaxDistanceM: Double = 3.0
-    /// 剔除“直线疑似”组件（墙根线/阴角线/门框等被误检为裂缝的笔直边线）。
-    var rejectStraightLines: Bool = true
-    /// 直线度阈值：折线长度 / 首尾弦长，越小越直；<= 该值判为疑似直线。
-    var maxStraightnessRatio: Double = 1.08
-    /// 只有像素长度 >= 该值才参与直线剔除（避免误删短的真实裂缝）。
-    var straightRejectMinPixel: Double = 60
 
     static let defaultConfig = CrackRecognitionConfig()
 
@@ -68,15 +62,13 @@ struct CrackRecognitionConfig: Codable, Equatable {
             : "meshuv"
         polylineEpsilonPx = min(max(polylineEpsilonPx, 0.1), 10)
         meshRayMaxDistanceM = min(max(meshRayMaxDistanceM, 0.5), 8)
-        maxStraightnessRatio = min(max(maxStraightnessRatio, 1.01), 1.5)
-        straightRejectMinPixel = min(max(straightRejectMinPixel, 10), 500)
     }
 }
 
 enum CrackRecognitionSettings {
     private static let key = "crackRecognitionConfig"
     private static let versionKey = "crackRecognitionConfigVersion"
-    private static let currentVersion = 67
+    private static let currentVersion = 66
 
     static func load() -> CrackRecognitionConfig {
         let storedVersion = UserDefaults.standard.integer(forKey: versionKey)

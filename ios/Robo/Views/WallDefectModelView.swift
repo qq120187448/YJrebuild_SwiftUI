@@ -27,7 +27,6 @@ struct WallDefectPhotoRecognitionResult {
     let meshFaceCount: Int
     let measurementEngine: String?
     let measurementVersion: String?
-    let straightRejectedCount: Int
 }
 
 struct WallDefectModelView: View {
@@ -441,41 +440,6 @@ struct WallDefectModelView: View {
                         step: 0.5,
                         format: "%.1f"
                     )
-                    Toggle(isOn: Binding(
-                        get: { recognitionConfig.rejectStraightLines },
-                        set: { recognitionConfig.rejectStraightLines = $0 }
-                    )) {
-                        Text("剔除直线疑似（墙根线/阴角线等）")
-                            .font(.caption2.bold())
-                            .foregroundStyle(.white.opacity(0.8))
-                    }
-                    .tint(.cyan)
-                    parameterSlider(
-                        title: "直线度阈值",
-                        value: Binding(
-                            get: { recognitionConfig.maxStraightnessRatio },
-                            set: {
-                                recognitionConfig.maxStraightnessRatio = $0
-                            }
-                        ),
-                        range: 1.01...1.3,
-                        step: 0.01,
-                        format: "%.2f"
-                    )
-                    parameterStepper(
-                        title: "直线剔除最短长度(px)",
-                        value: Binding(
-                            get: {
-                                Int(recognitionConfig.straightRejectMinPixel)
-                            },
-                            set: {
-                                recognitionConfig.straightRejectMinPixel =
-                                    Double($0)
-                            }
-                        ),
-                        range: 10...500,
-                        step: 10
-                    )
                 }
             }
             .frame(maxHeight: 210)
@@ -677,13 +641,6 @@ struct WallDefectModelView: View {
                         Text("算法版本 \(version)")
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.white.opacity(0.5))
-                    }
-                    if latestRecognition.straightRejectedCount > 0 {
-                        Text(
-                            "剔除直线疑似 \(latestRecognition.straightRejectedCount) 条"
-                        )
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.orange)
                     }
                 }
             } else {
