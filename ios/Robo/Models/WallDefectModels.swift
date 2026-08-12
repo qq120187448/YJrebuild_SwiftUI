@@ -41,7 +41,7 @@ enum DefectType: String, Codable, CaseIterable, Equatable {
 
 /// 测量算法版本。历史数据必须记录该值，算法升级后仍能区分旧结果。
 enum MeasurementEngineVersion {
-    static let current = "0.65-mesh-uv-1"
+    static let current = "0.66-mesh-uv-1"
     static let legacy = "0.65-legacy-nearest"
 }
 

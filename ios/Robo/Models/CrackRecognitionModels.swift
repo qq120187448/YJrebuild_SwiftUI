@@ -75,7 +75,7 @@ struct CrackRecognitionResult: Codable, Equatable {
     let mode: String
     let modelSize: String
     let engine: String
-    /// 测量算法版本（如 0.65-mesh-uv-1）。旧数据为 nil。
+    /// 测量算法版本（如 0.66-mesh-uv-1）。旧数据为 nil。
     let measurementVersion: String?
     /// 本次使用的测量引擎：nearest（旧）/ meshuv（新）。
     let measurementEngine: String?
