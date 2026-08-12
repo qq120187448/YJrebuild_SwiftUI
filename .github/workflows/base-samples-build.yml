@@ -80,11 +80,12 @@ jobs:
           mkdir -p "$STAGING/Payload"
           cp -R "$APP_PATH" "$STAGING/Payload/"
           cd "$STAGING"
-          zip -qry "$RUNNER_TEMP/${{ matrix.artifact }}.ipa" Payload
-          ls -lh "$RUNNER_TEMP/${{ matrix.artifact }}.ipa"
+          mkdir -p "$GITHUB_WORKSPACE/ipa-output"
+          zip -qry "$GITHUB_WORKSPACE/ipa-output/${{ matrix.artifact }}.ipa" Payload
+          ls -lh "$GITHUB_WORKSPACE/ipa-output/${{ matrix.artifact }}.ipa"
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: "$RUNNER_TEMP/${{ matrix.artifact }}.ipa"
+          path: ipa-output/${{ matrix.artifact }}.ipa
