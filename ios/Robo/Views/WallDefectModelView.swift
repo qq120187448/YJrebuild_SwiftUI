@@ -692,11 +692,15 @@ private struct WallDefectARView: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(cameraModel: cameraModel)
+        Coordinator(
+            cameraModel: cameraModel,
+            meshMaxDistance: meshMaxDistance
+        )
     }
 
     final class Coordinator: NSObject, ARSessionDelegate {
         let cameraModel: DefectCameraModel
+        let meshMaxDistance: Double
         weak var sceneView: ARSCNView?
         private let skeletonNodeName = "CrackARSkeleton"
         private let pointCloudNodeName = "DefectDepthPointCloud"
@@ -704,8 +708,9 @@ private struct WallDefectARView: UIViewRepresentable {
         private var lastPlaneEstimateTime: TimeInterval = -1
         private var lastPointCloudUpdateTime: TimeInterval = -1
 
-        init(cameraModel: DefectCameraModel) {
+        init(cameraModel: DefectCameraModel, meshMaxDistance: Double) {
             self.cameraModel = cameraModel
+            self.meshMaxDistance = meshMaxDistance
         }
 
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
@@ -919,10 +924,12 @@ private struct WallDefectARView: UIViewRepresentable {
                   let frame = view.session.currentFrame,
                   view.bounds.width > 0,
                   view.bounds.height > 0 else {
-                cameraModel.updateReprojection(
-                    errorPx: nil,
-                    detail: "无 AR 帧"
-                )
+                DispatchQueue.main.async {
+                    self.cameraModel.updateReprojection(
+                        errorPx: nil,
+                        detail: "无 AR 帧"
+                    )
+                }
                 return
             }
             let location = recognizer.location(in: view)
@@ -953,10 +960,12 @@ private struct WallDefectARView: UIViewRepresentable {
                 pose: pose,
                 intrinsics: intrinsics
             ) else {
-                cameraModel.updateReprojection(
-                    errorPx: nil,
-                    detail: "相机射线失败"
-                )
+                DispatchQueue.main.async {
+                    self.cameraModel.updateReprojection(
+                        errorPx: nil,
+                        detail: "相机射线失败"
+                    )
+                }
                 return
             }
             let anchors = frame.anchors.compactMap {
@@ -968,10 +977,12 @@ private struct WallDefectARView: UIViewRepresentable {
                 anchors: anchors,
                 maxDistance: Float(meshMaxDistance)
             ) else {
-                cameraModel.updateReprojection(
-                    errorPx: nil,
-                    detail: "mesh 未命中（anchor \(anchors.count)）"
-                )
+                DispatchQueue.main.async {
+                    self.cameraModel.updateReprojection(
+                        errorPx: nil,
+                        detail: "mesh 未命中（anchor \(self.anchorsCount(anchors))）"
+                    )
+                }
                 return
             }
             guard let projected = WallDefectProjection.projectToScreen(
@@ -979,10 +990,12 @@ private struct WallDefectARView: UIViewRepresentable {
                 pose: pose,
                 intrinsics: intrinsics
             ) else {
-                cameraModel.updateReprojection(
-                    errorPx: nil,
-                    detail: "反投影失败"
-                )
+                DispatchQueue.main.async {
+                    self.cameraModel.updateReprojection(
+                        errorPx: nil,
+                        detail: "反投影失败"
+                    )
+                }
                 return
             }
             let error = hypot(
@@ -992,14 +1005,20 @@ private struct WallDefectARView: UIViewRepresentable {
             let faceCount = anchors.reduce(0) {
                 $0 + $1.geometry.faces.count
             }
-            cameraModel.updateReprojection(
-                errorPx: error,
-                detail: String(
-                    format: "screen→world→screen · mesh %d面 · 误差 %.1f px",
-                    faceCount,
-                    error
+            DispatchQueue.main.async {
+                self.cameraModel.updateReprojection(
+                    errorPx: error,
+                    detail: String(
+                        format: "screen→world→screen · mesh %d面 · 误差 %.1f px",
+                        faceCount,
+                        error
+                    )
                 )
-            )
+            }
+        }
+
+        private func anchorsCount(_ anchors: [ARMeshAnchor]) -> Int {
+            anchors.count
         }
 
         private func flatten4(_ matrix: simd_float4x4) -> [Float] {
