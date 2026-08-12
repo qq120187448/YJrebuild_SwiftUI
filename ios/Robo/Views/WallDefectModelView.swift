@@ -17,6 +17,16 @@ struct WallDefectPhotoRecognitionResult {
     let maskPointCount: Int
     let preFilterComponentCount: Int
     let filteredReason: String?
+    let meshHitCount: Int
+    let depthHitCount: Int
+    let planeHitCount: Int
+    let missCount: Int
+    let reprojectionErrorPx: Double?
+    let meshAnchorCount: Int
+    let meshVertexCount: Int
+    let meshFaceCount: Int
+    let measurementEngine: String?
+    let measurementVersion: String?
 }
 
 struct WallDefectModelView: View {
@@ -36,6 +46,9 @@ struct WallDefectModelView: View {
     @State private var showSaveConfirm = false
     @State private var showRecognitionPanel = false
     @State private var recognitionConfig = CrackRecognitionSettings.load()
+    @State private var calibrationKnownMM = 1000
+    @State private var calibrationCount = 0
+    @State private var lastCalibrationText: String?
 
     private var captureCenterRatio: CGFloat {
         guard cameraViewSize.width > 0, cameraViewSize.height > 0 else {
@@ -68,7 +81,8 @@ struct WallDefectModelView: View {
                 arSession: arSession,
                 cameraModel: cameraModel,
                 skeletonGroups: arSkeletonGroups,
-                lineWidth: recognitionConfig.arLineWidth
+                lineWidth: recognitionConfig.arLineWidth,
+                meshMaxDistance: recognitionConfig.meshRayMaxDistanceM
             )
             .ignoresSafeArea()
 
@@ -110,6 +124,9 @@ struct WallDefectModelView: View {
         .onChange(of: recognitionConfig) { _, newValue in
             CrackRecognitionSettings.save(newValue)
         }
+        .onAppear {
+            calibrationCount = WallDefectStore.calibrationCount()
+        }
         .alert("保存扫描包？", isPresented: $showSaveConfirm) {
             Button("保存") {
                 onSave()
@@ -120,6 +137,33 @@ struct WallDefectModelView: View {
             Button("取消", role: .cancel) {}
         } message: {
             Text("照片会与墙面平面、裂缝长度一起归档，用于缺陷工程量计算。")
+        }
+    }
+
+    private func recordCalibration() {
+        guard let recognition = latestRecognition else { return }
+        let result = recognition.result
+        let measuredMM = result.totalLengthM * 1000
+        let record = CalibrationRecord(
+            knownLengthMM: Double(calibrationKnownMM),
+            measuredLengthMM: measuredMM,
+            measurementEngine: recognition.measurementEngine ?? "unknown",
+            measurementVersion: recognition.measurementVersion,
+            pixelLength: result.totalPixelLength,
+            confidence: result.confidence,
+            createdAt: Date()
+        )
+        do {
+            try WallDefectStore.saveCalibration(record)
+            calibrationCount += 1
+            lastCalibrationText = String(
+                format: "已知 %.0fmm → 实测 %.1fmm（误差 %.1fmm）",
+                record.knownLengthMM,
+                record.measuredLengthMM,
+                record.measuredLengthMM - record.knownLengthMM
+            )
+        } catch {
+            lastCalibrationText = "记录失败：\(error.localizedDescription)"
         }
     }
 
@@ -145,6 +189,11 @@ struct WallDefectModelView: View {
                     )
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.white.opacity(0.65))
+                    if let reprojection = cameraModel.reprojectionDetail {
+                        Text(reprojection)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.mint)
+                    }
                 }
                 Spacer()
             } else {
@@ -356,9 +405,83 @@ struct WallDefectModelView: View {
                         ),
                         range: 1...100
                     )
+                    HStack(spacing: 8) {
+                        parameterPicker(
+                            title: "测量引擎",
+                            selection: Binding(
+                                get: { recognitionConfig.measurementEngine },
+                                set: {
+                                    recognitionConfig.measurementEngine = $0
+                                }
+                            ),
+                            options: [
+                                ("ARMesh+UV", "meshuv"),
+                                ("LiDAR最近邻", "nearest")
+                            ]
+                        )
+                    }
+                    parameterSlider(
+                        title: "折线简化阈值(px)",
+                        value: Binding(
+                            get: { recognitionConfig.polylineEpsilonPx },
+                            set: { recognitionConfig.polylineEpsilonPx = $0 }
+                        ),
+                        range: 0.1...5,
+                        step: 0.1,
+                        format: "%.1f"
+                    )
+                    parameterSlider(
+                        title: "Mesh求交距离上限(m)",
+                        value: Binding(
+                            get: { recognitionConfig.meshRayMaxDistanceM },
+                            set: { recognitionConfig.meshRayMaxDistanceM = $0 }
+                        ),
+                        range: 0.5...8,
+                        step: 0.5,
+                        format: "%.1f"
+                    )
                 }
             }
             .frame(maxHeight: 210)
+
+            Divider()
+                .overlay(.white.opacity(0.25))
+            HStack(spacing: 8) {
+                Text("标定长度")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.white.opacity(0.7))
+                Picker("标定长度", selection: $calibrationKnownMM) {
+                    Text("500mm").tag(500)
+                    Text("1000mm").tag(1000)
+                    Text("2000mm").tag(2000)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            HStack(spacing: 8) {
+                Button {
+                    recordCalibration()
+                } label: {
+                    Label("记录本次测量", systemImage: "ruler")
+                        .font(.caption.bold())
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.teal)
+                        .foregroundStyle(.white)
+                        .clipShape(Capsule())
+                }
+                .disabled(latestRecognition == nil)
+                Spacer()
+                Text("已记录 \(calibrationCount) 条")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            if let text = lastCalibrationText {
+                Text(text)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+            }
         }
         .padding(10)
         .background(.black.opacity(0.78))
@@ -499,6 +622,27 @@ struct WallDefectModelView: View {
                 )
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.white.opacity(0.75))
+                if let engine = latestRecognition.measurementEngine {
+                    Text(
+                        String(
+                            format: "测量 %@ · mesh %d / depth %d / plane %d / miss %d · 重投影 %.1fpx · mesh面 %d",
+                            engine == "meshuv" ? "ARMesh+UV" : "LiDAR最近邻",
+                            latestRecognition.meshHitCount,
+                            latestRecognition.depthHitCount,
+                            latestRecognition.planeHitCount,
+                            latestRecognition.missCount,
+                            latestRecognition.reprojectionErrorPx ?? -1,
+                            latestRecognition.meshFaceCount
+                        )
+                    )
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.75))
+                    if let version = latestRecognition.measurementVersion {
+                        Text("算法版本 \(version)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                }
             } else {
                 Text("尚未识别，对准裂缝后点击拍照")
                     .font(.caption)
@@ -519,6 +663,7 @@ private struct WallDefectARView: UIViewRepresentable {
     let cameraModel: DefectCameraModel
     let skeletonGroups: [[CrackSkeleton3DPoint]]
     let lineWidth: Double
+    let meshMaxDistance: Double
 
     func makeUIView(context: Context) -> ARSCNView {
         let view = ARSCNView()
@@ -526,6 +671,11 @@ private struct WallDefectARView: UIViewRepresentable {
         view.session.delegate = context.coordinator
         view.automaticallyUpdatesLighting = true
         context.coordinator.sceneView = view
+        let tap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleReprojectionTap(_:))
+        )
+        view.addGestureRecognizer(tap)
         return view
     }
 
@@ -750,6 +900,123 @@ private struct WallDefectARView: UIViewRepresentable {
                 }
             }
             view.scene.rootNode.addChildNode(rootNode)
+        }
+
+        // MARK: - P0 闭环测试（screen -> world -> screen）
+
+        @objc func handleReprojectionTap(
+            _ recognizer: UITapGestureRecognizer
+        ) {
+            DispatchQueue.main.async {
+                self.runReprojectionTest(recognizer: recognizer)
+            }
+        }
+
+        private func runReprojectionTest(
+            recognizer: UITapGestureRecognizer
+        ) {
+            guard let view = sceneView,
+                  let frame = view.session.currentFrame,
+                  view.bounds.width > 0,
+                  view.bounds.height > 0 else {
+                cameraModel.updateReprojection(
+                    errorPx: nil,
+                    detail: "无 AR 帧"
+                )
+                return
+            }
+            let location = recognizer.location(in: view)
+            let pose = flatten4(frame.camera.transform)
+            let intrinsics = flatten3(frame.camera.intrinsics)
+            let transform = frame.displayTransform(
+                for: .portrait,
+                viewportSize: view.bounds.size
+            ).inverted()
+            let normalized = CGPoint(
+                x: location.x,
+                y: location.y
+            ).applying(transform)
+            let sensorSize = CGSize(
+                width: CGFloat(
+                    CVPixelBufferGetWidth(frame.capturedImage)
+                ),
+                height: CGFloat(
+                    CVPixelBufferGetHeight(frame.capturedImage)
+                )
+            )
+            let sensorPixel = CGPoint(
+                x: normalized.x * sensorSize.width,
+                y: normalized.y * sensorSize.height
+            )
+            guard let ray = WallDefectProjection.cameraRay(
+                pixel: sensorPixel,
+                pose: pose,
+                intrinsics: intrinsics
+            ) else {
+                cameraModel.updateReprojection(
+                    errorPx: nil,
+                    detail: "相机射线失败"
+                )
+                return
+            }
+            let anchors = frame.anchors.compactMap {
+                $0 as? ARMeshAnchor
+            }
+            guard let world = WallDefectProjection.rayMeshIntersection(
+                rayOrigin: ray.origin,
+                rayDirection: ray.direction,
+                anchors: anchors,
+                maxDistance: Float(meshMaxDistance)
+            ) else {
+                cameraModel.updateReprojection(
+                    errorPx: nil,
+                    detail: "mesh 未命中（anchor \(anchors.count)）"
+                )
+                return
+            }
+            guard let projected = WallDefectProjection.projectToScreen(
+                world: world,
+                pose: pose,
+                intrinsics: intrinsics
+            ) else {
+                cameraModel.updateReprojection(
+                    errorPx: nil,
+                    detail: "反投影失败"
+                )
+                return
+            }
+            let error = hypot(
+                Double(projected.x - sensorPixel.x),
+                Double(projected.y - sensorPixel.y)
+            )
+            let faceCount = anchors.reduce(0) {
+                $0 + $1.geometry.faces.count
+            }
+            cameraModel.updateReprojection(
+                errorPx: error,
+                detail: String(
+                    format: "screen→world→screen · mesh %d面 · 误差 %.1f px",
+                    faceCount,
+                    error
+                )
+            )
+        }
+
+        private func flatten4(_ matrix: simd_float4x4) -> [Float] {
+            [
+                matrix.columns.0.x, matrix.columns.0.y, matrix.columns.0.z, matrix.columns.0.w,
+                matrix.columns.1.x, matrix.columns.1.y, matrix.columns.1.z, matrix.columns.1.w,
+                matrix.columns.2.x, matrix.columns.2.y, matrix.columns.2.z, matrix.columns.2.w,
+                matrix.columns.3.x, matrix.columns.3.y, matrix.columns.3.z, matrix.columns.3.w
+            ]
+        }
+
+        private func flatten3(_ matrix: simd_float3x3) -> [Float] {
+            [
+                matrix.columns.0.x, matrix.columns.0.y, matrix.columns.0.z,
+                matrix.columns.1.x, matrix.columns.1.y, matrix.columns.1.z,
+                matrix.columns.2.x, matrix.columns.2.y, matrix.columns.2.z
+            ]
         }
     }
 }

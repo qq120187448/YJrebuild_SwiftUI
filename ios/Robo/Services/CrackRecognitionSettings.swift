@@ -22,6 +22,12 @@ struct CrackRecognitionConfig: Codable, Equatable {
     var dedupDistanceMM: Double = 20
     var minPhysicalLengthMM: Double = 5
     var arLineWidth: Double = 1
+    /// 测量引擎：nearest（旧：LiDAR 最近邻）/ meshuv（新：ARMesh 交点 + Surface UV）。
+    var measurementEngine: String = "meshuv"
+    /// Douglas-Peucker 折线简化阈值（像素）。
+    var polylineEpsilonPx: Double = 1.5
+    /// ARMesh 射线求交的最大距离（米），防止误打到远处 mesh。
+    var meshRayMaxDistanceM: Double = 3.0
 
     static let defaultConfig = CrackRecognitionConfig()
 
@@ -51,13 +57,18 @@ struct CrackRecognitionConfig: Codable, Equatable {
         dedupDistanceMM = min(max(dedupDistanceMM, 1), 100)
         minPhysicalLengthMM = min(max(minPhysicalLengthMM, 1), 100)
         arLineWidth = min(max(arLineWidth, 0.1), 5)
+        measurementEngine = measurementEngine == "nearest"
+            ? "nearest"
+            : "meshuv"
+        polylineEpsilonPx = min(max(polylineEpsilonPx, 0.1), 10)
+        meshRayMaxDistanceM = min(max(meshRayMaxDistanceM, 0.5), 8)
     }
 }
 
 enum CrackRecognitionSettings {
     private static let key = "crackRecognitionConfig"
     private static let versionKey = "crackRecognitionConfigVersion"
-    private static let currentVersion = 65
+    private static let currentVersion = 66
 
     static func load() -> CrackRecognitionConfig {
         let storedVersion = UserDefaults.standard.integer(forKey: versionKey)

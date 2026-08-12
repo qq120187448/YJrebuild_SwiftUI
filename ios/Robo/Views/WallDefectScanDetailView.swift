@@ -177,7 +177,9 @@ struct WallDefectScanDetailView: View {
             surfaceSummaries: [],
             mode: "normal",
             modelSize: "s",
-            engine: "yolo"
+            engine: "yolo",
+            measurementVersion: nil,
+            measurementEngine: nil
         )
     }
 

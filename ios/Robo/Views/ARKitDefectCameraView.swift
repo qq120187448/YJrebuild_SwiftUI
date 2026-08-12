@@ -20,6 +20,8 @@ struct DefectCameraCapture {
     let cropRect: CGRect
     let sensorImageSize: CGSize
     let planeSurface: WallDefectSurface?
+    /// 拍摄瞬间的 Scene Reconstruction 网格锚点（仅内存使用，不入 Codable）。
+    let meshAnchors: [ARMeshAnchor]
 }
 
 @MainActor
@@ -45,6 +47,9 @@ final class DefectCameraModel: ObservableObject {
     @Published var planeResidualM: Float?
     @Published var currentPlaneSurface: WallDefectSurface?
     @Published var currentViewSize: CGSize?
+    /// 闭环测试：screen -> world -> screen 重投影误差（sensor 像素）。
+    @Published var reprojectionErrorPx: Double?
+    @Published var reprojectionDetail: String?
 
     private let ciContext = CIContext()
 
@@ -117,6 +122,11 @@ final class DefectCameraModel: ObservableObject {
 
     func requestRealignment() {
         realignmentRequestedCount += 1
+    }
+
+    func updateReprojection(errorPx: Double?, detail: String?) {
+        reprojectionErrorPx = errorPx
+        reprojectionDetail = detail
     }
 
     func poseArray() -> [Float]? {
@@ -212,6 +222,7 @@ final class DefectCameraModel: ObservableObject {
             depthBytesPerRow = copied.bytesPerRow
         }
         let sensorIntrinsics = flatten(matrix: frame.camera.intrinsics)
+        let meshAnchors = frame.anchors.compactMap { $0 as? ARMeshAnchor }
 
         return DefectCameraCapture(
             image: image,
@@ -225,7 +236,8 @@ final class DefectCameraModel: ObservableObject {
             sensorIntrinsics: sensorIntrinsics,
             cropRect: cropRect,
             sensorImageSize: sensorSize,
-            planeSurface: currentPlaneSurface
+            planeSurface: currentPlaneSurface,
+            meshAnchors: meshAnchors
         )
     }
 
@@ -363,6 +375,16 @@ struct ARKitDefectCameraView: UIViewRepresentable {
         }
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
             configuration.frameSemantics.insert(.sceneDepth)
+        }
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(
+            .smoothedSceneDepth
+        ) {
+            configuration.frameSemantics.insert(.smoothedSceneDepth)
+        }
+        if ARWorldTrackingConfiguration.supportsSceneReconstruction(
+            .meshWithClassification
+        ) {
+            configuration.sceneReconstruction = .meshWithClassification
         }
         view.session.run(configuration)
         return view

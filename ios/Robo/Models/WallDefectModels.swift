@@ -14,6 +14,166 @@ enum WallDefectSurfaceKind: String, Codable, CaseIterable, Equatable {
     }
 }
 
+/// 缺陷类别：当前主线为裂缝，区域类缺陷为后续扩展预留。
+enum DefectType: String, Codable, CaseIterable, Equatable {
+    case crack
+    case waterStain
+    case mold
+    case pollution
+    case efflorescence
+    case peelingSpalling
+    case rust
+    case unknown
+
+    var displayName: String {
+        switch self {
+        case .crack: return "裂缝"
+        case .waterStain: return "水渍"
+        case .mold: return "发霉"
+        case .pollution: return "污染"
+        case .efflorescence: return "泛碱"
+        case .peelingSpalling: return "起皮/剥落"
+        case .rust: return "锈蚀"
+        case .unknown: return "未知"
+        }
+    }
+}
+
+/// 测量算法版本。历史数据必须记录该值，算法升级后仍能区分旧结果。
+enum MeasurementEngineVersion {
+    static let current = "0.65-mesh-uv-1"
+    static let legacy = "0.65-legacy-nearest"
+}
+
+/// 缺陷业务记录：长期坐标 = surfaceID + Surface UV（米制），不依赖单一 ARWorld。
+/// 后续 P2/P4/P5/P6 均以此记录为持久化基础。
+struct DefectRecord: Codable, Equatable, Identifiable {
+    let id: UUID
+    let type: DefectType
+    let surfaceID: UUID
+    let confidence: Double
+    /// 墙面展开图上的折线，单位为米（U=水平，V=垂直）。
+    let uvPolyline: [[Double]]
+    let lengthMeters: Double?
+    let areaSquareMeters: Double?
+    let photoID: UUID
+    let createdAt: Date
+    let measurementVersion: String
+
+    init(
+        id: UUID = UUID(),
+        type: DefectType,
+        surfaceID: UUID,
+        confidence: Double,
+        uvPolyline: [[Double]],
+        lengthMeters: Double?,
+        areaSquareMeters: Double?,
+        photoID: UUID,
+        createdAt: Date = Date(),
+        measurementVersion: String = MeasurementEngineVersion.current
+    ) {
+        self.id = id
+        self.type = type
+        self.surfaceID = surfaceID
+        self.confidence = confidence
+        self.uvPolyline = uvPolyline
+        self.lengthMeters = lengthMeters
+        self.areaSquareMeters = areaSquareMeters
+        self.photoID = photoID
+        self.createdAt = createdAt
+        self.measurementVersion = measurementVersion
+    }
+}
+
+/// 原始观测：保存拍摄瞬间的空间信息与识别中间产物，
+/// 供未来换模型后离线“重识别重算”（P3/P4 接口预留）。
+struct DefectObservation: Codable, Equatable {
+    let frameTimestamp: Date
+    let cameraTransform: [Float]
+    let intrinsics: [Float]
+    let cropRect: [Double]
+    let sensorImageSize: [Double]
+    let analysisToCaptureRatio: Double
+    let depthFileName: String?
+    let depthWidth: Int?
+    let depthHeight: Int?
+    let pointCloudSampleCount: Int
+    let meshAnchorCount: Int
+    let meshVertexCount: Int
+    let meshFaceCount: Int
+    let confidence: Double
+    let skeletonPixelCount: Int
+    let measurementVersion: String
+
+    init(
+        frameTimestamp: Date,
+        cameraTransform: [Float],
+        intrinsics: [Float],
+        cropRect: [Double],
+        sensorImageSize: [Double],
+        analysisToCaptureRatio: Double,
+        depthFileName: String?,
+        depthWidth: Int?,
+        depthHeight: Int?,
+        pointCloudSampleCount: Int,
+        meshAnchorCount: Int,
+        meshVertexCount: Int,
+        meshFaceCount: Int,
+        confidence: Double,
+        skeletonPixelCount: Int,
+        measurementVersion: String = MeasurementEngineVersion.current
+    ) {
+        self.frameTimestamp = frameTimestamp
+        self.cameraTransform = cameraTransform
+        self.intrinsics = intrinsics
+        self.cropRect = cropRect
+        self.sensorImageSize = sensorImageSize
+        self.analysisToCaptureRatio = analysisToCaptureRatio
+        self.depthFileName = depthFileName
+        self.depthWidth = depthWidth
+        self.depthHeight = depthHeight
+        self.pointCloudSampleCount = pointCloudSampleCount
+        self.meshAnchorCount = meshAnchorCount
+        self.meshVertexCount = meshVertexCount
+        self.meshFaceCount = meshFaceCount
+        self.confidence = confidence
+        self.skeletonPixelCount = skeletonPixelCount
+        self.measurementVersion = measurementVersion
+    }
+}
+
+/// 已知长度真值标定记录（P0：500/1000/2000mm 误差统计）。
+struct CalibrationRecord: Codable, Equatable, Identifiable {
+    let id: UUID
+    let knownLengthMM: Double
+    let measuredLengthMM: Double
+    let measurementEngine: String
+    let measurementVersion: String?
+    let pixelLength: Double
+    let confidence: Double
+    let createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        knownLengthMM: Double,
+        measuredLengthMM: Double,
+        measurementEngine: String,
+        measurementVersion: String?,
+        pixelLength: Double,
+        confidence: Double,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.knownLengthMM = knownLengthMM
+        self.measuredLengthMM = measuredLengthMM
+        self.measurementEngine = measurementEngine
+        self.measurementVersion = measurementVersion
+        self.pixelLength = pixelLength
+        self.confidence = confidence
+        self.createdAt = createdAt
+    }
+}
+
 struct WallDefectSurface: Identifiable, Codable, Equatable {
     let id: UUID
     let kind: WallDefectSurfaceKind
@@ -78,6 +238,10 @@ struct WallDefectPhoto: Identifiable, Codable, Equatable {
     var planeSurface: WallDefectSurface?
     var arSkeleton3D: [[Double]]?
     var isDuplicate: Bool = false
+    /// 缺陷业务记录（surfaceID + UV 米制），为长期测量坐标。
+    var defectRecords: [DefectRecord]?
+    /// 原始观测（P3 接口：用于未来重识别重算）。
+    var observation: DefectObservation?
 
     init(
         id: UUID = UUID(),
@@ -96,7 +260,9 @@ struct WallDefectPhoto: Identifiable, Codable, Equatable {
         crackResult: CrackRecognitionResult? = nil,
         planeSurface: WallDefectSurface? = nil,
         arSkeleton3D: [[Double]]? = nil,
-        isDuplicate: Bool = false
+        isDuplicate: Bool = false,
+        defectRecords: [DefectRecord]? = nil,
+        observation: DefectObservation? = nil
     ) {
         self.id = id
         self.wallID = wallID
@@ -115,6 +281,8 @@ struct WallDefectPhoto: Identifiable, Codable, Equatable {
         self.planeSurface = planeSurface
         self.arSkeleton3D = arSkeleton3D
         self.isDuplicate = isDuplicate
+        self.defectRecords = defectRecords
+        self.observation = observation
     }
 }
 

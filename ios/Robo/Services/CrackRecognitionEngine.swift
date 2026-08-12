@@ -24,6 +24,30 @@ struct CrackRecognitionOutput {
     let maskPointCount: Int
     let preFilterComponentCount: Int
     let filteredReason: String?
+    /// P0 测量诊断：mesh / depth / plane 命中与未命中统计。
+    let meshHitCount: Int
+    let depthHitCount: Int
+    let planeHitCount: Int
+    let missCount: Int
+    /// 屏幕重投影误差（像素），闭环测试用；nil 表示未计算。
+    let reprojectionErrorPx: Double?
+    let meshAnchorCount: Int
+    let meshVertexCount: Int
+    let meshFaceCount: Int
+}
+
+/// 稀疏骨架测量结果（含 P0 诊断统计）。meshuv 与 legacy 两种引擎共用。
+private struct SparseMeasurementResult {
+    let summaries: [CrackSurfaceSummary]
+    let components: [CrackComponentMeasurement]
+    let totalLengthM: Double
+    let totalAreaM2: Double
+    let arPoints: [CrackSkeleton3DPoint]
+    let meshHitCount: Int
+    let depthHitCount: Int
+    let planeHitCount: Int
+    let missCount: Int
+    let reprojectionErrorPx: Double?
 }
 
 struct CrackResolutionValidationResult: Identifiable {
@@ -110,7 +134,8 @@ enum CrackRecognitionEngine {
         surfaces: [WallDefectSurface],
         config: CrackRecognitionConfig,
         progress: ((String, Double?) -> Void)? = nil,
-        depthContext: CrackDepthContext? = nil
+        depthContext: CrackDepthContext? = nil,
+        meshContext: CrackMeshContext? = nil
     ) throws -> CrackRecognitionOutput {
         var timings: [String: Double] = [:]
         let overallStart = CFAbsoluteTimeGetCurrent()
@@ -177,17 +202,46 @@ enum CrackRecognitionEngine {
         let measurePoints = skeleton.fullSkeletonPoints.isEmpty
             ? skeleton.skeletonPoints
             : skeleton.fullSkeletonPoints
-        let measurements = measureSparseSkeleton(
-            points: measurePoints,
-            spacing: sparse.spacing,
-            width: width,
-            height: height,
-            pose: pose,
-            intrinsics: scaledIntrinsics,
-            surfaces: surfaces,
-            config: config,
-            depthContext: depthContext
-        )
+        let measurements: SparseMeasurementResult
+        if config.measurementEngine == "meshuv" {
+            measurements = measureSparseSkeletonMeshUV(
+                points: measurePoints,
+                spacing: sparse.spacing,
+                width: width,
+                height: height,
+                pose: pose,
+                intrinsics: scaledIntrinsics,
+                sensorIntrinsics: intrinsics,
+                surfaces: surfaces,
+                config: config,
+                depthContext: depthContext,
+                meshContext: meshContext
+            )
+        } else {
+            let legacy = measureSparseSkeleton(
+                points: measurePoints,
+                spacing: sparse.spacing,
+                width: width,
+                height: height,
+                pose: pose,
+                intrinsics: scaledIntrinsics,
+                surfaces: surfaces,
+                config: config,
+                depthContext: depthContext
+            )
+            measurements = SparseMeasurementResult(
+                summaries: legacy.summaries,
+                components: legacy.components,
+                totalLengthM: legacy.totalLengthM,
+                totalAreaM2: legacy.totalAreaM2,
+                arPoints: legacy.arPoints,
+                meshHitCount: 0,
+                depthHitCount: 0,
+                planeHitCount: 0,
+                missCount: 0,
+                reprojectionErrorPx: nil
+            )
+        }
         timings["墙面投射与长度"] = CFAbsoluteTimeGetCurrent() - measureStart
 
         let confidence = detections.map(\.score).max() ?? 0
@@ -197,7 +251,9 @@ enum CrackRecognitionEngine {
                 id: component.id,
                 pixelLength: component.pixelLength,
                 mmLength: component.mmLength,
-                lengthM: lengthM
+                lengthM: lengthM,
+                uvPolyline: nil,
+                measurementVersion: MeasurementEngineVersion.legacy
             )
         }
         let finalComponents: [CrackComponentMeasurement]
@@ -259,7 +315,11 @@ enum CrackRecognitionEngine {
             surfaceSummaries: measurements.summaries,
             mode: config.mode,
             modelSize: config.modelSize,
-            engine: config.engine
+            engine: config.engine,
+            measurementVersion: config.measurementEngine == "meshuv"
+                ? MeasurementEngineVersion.current
+                : MeasurementEngineVersion.legacy,
+            measurementEngine: config.measurementEngine
         )
         timings["总计"] = CFAbsoluteTimeGetCurrent() - overallStart
         progress?("识别完成", timings["总计"])
@@ -274,7 +334,15 @@ enum CrackRecognitionEngine {
             pixelLengthReported: pixelLengthReported,
             maskPointCount: sparse.points.count,
             preFilterComponentCount: skeleton.fullComponentCount,
-            filteredReason: filteredReason
+            filteredReason: filteredReason,
+            meshHitCount: measurements.meshHitCount,
+            depthHitCount: measurements.depthHitCount,
+            planeHitCount: measurements.planeHitCount,
+            missCount: measurements.missCount,
+            reprojectionErrorPx: measurements.reprojectionErrorPx,
+            meshAnchorCount: meshContext?.anchorCount ?? 0,
+            meshVertexCount: meshContext?.vertexCount ?? 0,
+            meshFaceCount: meshContext?.faceCount ?? 0
         )
     }
 
@@ -943,6 +1011,346 @@ enum CrackRecognitionEngine {
             }
         }
         return (points: points, spacing: spacing)
+    }
+
+    /// P0/P1 新测量路径：
+    /// YOLO skeleton -> Camera Ray -> ARMesh 交点 -> World -> Surface UV。
+    /// 三级回退：ARMesh -> sceneDepth/Depth Cloud -> RoomPlan/拟合平面。
+    /// 裂缝长度：骨架 -> 剪枝(上游) -> Douglas-Peucker -> UV 折线 -> 米制长度。
+    private static func measureSparseSkeletonMeshUV(
+        points: Set<CrackPoint>,
+        spacing: Int,
+        width: Int,
+        height: Int,
+        pose: [Float],
+        intrinsics: [Float],
+        sensorIntrinsics: [Float],
+        surfaces: [WallDefectSurface],
+        config: CrackRecognitionConfig,
+        depthContext: CrackDepthContext? = nil,
+        meshContext: CrackMeshContext? = nil
+    ) -> SparseMeasurementResult {
+        guard !points.isEmpty else {
+            return SparseMeasurementResult(
+                summaries: [],
+                components: [],
+                totalLengthM: 0,
+                totalAreaM2: 0,
+                arPoints: [],
+                meshHitCount: 0,
+                depthHitCount: 0,
+                planeHitCount: 0,
+                missCount: 0,
+                reprojectionErrorPx: nil
+            )
+        }
+        let analysisSize = CGSize(width: width, height: height)
+        let projections = WallDefectProjection.projectSparsePoints(
+            points: points,
+            pose: pose,
+            intrinsics: intrinsics,
+            surfaces: surfaces
+        )
+
+        // 优先 1：ARMesh 交点（最终表面几何）。
+        var meshWorldByPoint: [CrackPoint: SIMD3<Float>] = [:]
+        var reprojectionSum = 0.0
+        var reprojectionCount = 0
+        if let meshContext, !meshContext.anchors.isEmpty {
+            for point in points {
+                let pixel = CGPoint(x: CGFloat(point.x), y: CGFloat(point.y))
+                guard let world = WallDefectProjection.meshWorldPoint(
+                    pixel: pixel,
+                    analysisSize: analysisSize,
+                    context: meshContext,
+                    pose: pose,
+                    intrinsics: sensorIntrinsics,
+                    maxDistance: Float(config.meshRayMaxDistanceM)
+                ) else {
+                    continue
+                }
+                meshWorldByPoint[point] = world
+                // 闭环：world 反投影回 sensor 像素，与原始像素比较。
+                if let original = WallDefectProjection.sensorPoint(
+                    for: pixel,
+                    analysisSize: analysisSize,
+                    context: meshContext
+                ), let projected = WallDefectProjection.projectToScreen(
+                    world: world,
+                    pose: pose,
+                    intrinsics: sensorIntrinsics
+                ) {
+                    reprojectionSum += hypot(
+                        Double(projected.x - original.x),
+                        Double(projected.y - original.y)
+                    )
+                    reprojectionCount += 1
+                }
+            }
+        }
+
+        // 优先 2：sceneDepth / Depth Cloud（沿用原最近邻，职责改为快速对应与回退）。
+        var depthWorldByPoint: [CrackPoint: SIMD3<Float>] = [:]
+        if let depthContext {
+            for point in points {
+                if let world = WallDefectProjection.depthWorldPoint(
+                    pixel: CGPoint(
+                        x: CGFloat(point.x),
+                        y: CGFloat(point.y)
+                    ),
+                    analysisSize: analysisSize,
+                    context: depthContext
+                ) {
+                    depthWorldByPoint[point] = world
+                }
+            }
+            if !depthWorldByPoint.isEmpty,
+               let plane = WallDefectProjection.fitPlane(
+                points: depthContext.pointCloud,
+                cropRect: depthContext.cropRect
+               ) {
+                for key in depthWorldByPoint.keys {
+                    if let world = depthWorldByPoint[key] {
+                        depthWorldByPoint[key] =
+                            WallDefectProjection.projectToPlane(
+                                point: world,
+                                plane: plane
+                            )
+                    }
+                }
+            }
+        }
+
+        // 优先 3：RoomPlan / 拟合平面射线求交（projections 已含 ray-plane world）。
+        var planeWorldByPoint: [CrackPoint: SIMD3<Float>] = [:]
+        for (_, projected) in projections {
+            for item in projected where planeWorldByPoint[item.point] == nil {
+                planeWorldByPoint[item.point] = item.world
+            }
+        }
+
+        // 汇总每点最终世界坐标与命中层级。
+        var worldByPoint: [CrackPoint: SIMD3<Float>] = [:]
+        var hitLevelByPoint: [CrackPoint: String] = [:]
+        var missCount = 0
+        for point in points {
+            if let world = meshWorldByPoint[point] {
+                worldByPoint[point] = world
+                hitLevelByPoint[point] = "mesh"
+            } else if let world = depthWorldByPoint[point] {
+                worldByPoint[point] = world
+                hitLevelByPoint[point] = "depth"
+            } else if let world = planeWorldByPoint[point] {
+                worldByPoint[point] = world
+                hitLevelByPoint[point] = "plane"
+            } else {
+                missCount += 1
+            }
+        }
+        let meshHitCount = hitLevelByPoint.values.filter { $0 == "mesh" }.count
+        let depthHitCount = hitLevelByPoint.values.filter { $0 == "depth" }.count
+        let planeHitCount = hitLevelByPoint.values.filter { $0 == "plane" }.count
+
+        var uvByPoint: [CrackPoint: SIMD2<Double>] = [:]
+        var surfaceIDByPoint: [CrackPoint: UUID] = [:]
+        for (surfaceID, projected) in projections {
+            for item in projected {
+                uvByPoint[item.point] = item.uv
+                surfaceIDByPoint[item.point] = surfaceID
+            }
+        }
+
+        var summaries: [CrackSurfaceSummary] = []
+        var components: [CrackComponentMeasurement] = []
+        var totalLength = 0.0
+        var totalArea = 0.0
+        let minPhysicalM = config.minPhysicalLengthMM / 1000
+        let groups = CrackSkeleton.componentPointsSparse(
+            points,
+            spacing: spacing
+        )
+        let measurementVersion = MeasurementEngineVersion.current
+
+        for group in groups {
+            var worldByGroup: [CrackPoint: SIMD3<Float>] = [:]
+            var uvByGroup: [CrackPoint: SIMD2<Double>] = [:]
+            var dominantSurfaceID: UUID?
+            for point in group {
+                if let world = worldByPoint[point] {
+                    worldByGroup[point] = world
+                }
+                if let uv = uvByPoint[point] {
+                    uvByGroup[point] = uv
+                    if dominantSurfaceID == nil {
+                        dominantSurfaceID = surfaceIDByPoint[point]
+                    }
+                }
+            }
+            let depthPhysical = CrackSkeleton.worldGraphLength(
+                group,
+                worldByPoint: worldByGroup,
+                spacing: spacing
+            )
+            let uvPhysical = CrackSkeleton.physicalGraphLength(
+                group,
+                uvByPoint: uvByGroup,
+                spacing: spacing
+            )
+            let pixelLength = CrackSkeleton.pixelLength(
+                of: group,
+                spacing: spacing
+            )
+            // 新：骨架 -> 有序折线 -> Douglas-Peucker -> UV 折线（米）。
+            let uvPolyline = CrackSkeleton.uvPolyline(
+                from: group,
+                uvByPoint: uvByGroup,
+                simplifyEpsilonPx: config.polylineEpsilonPx
+            )
+            let uvPolylineM = WallDefectProjection.uvPolylineLength(
+                uvPolyline
+            )
+            let physical = uvPolylineM > 0
+                ? uvPolylineM
+                : (uvPhysical ?? depthPhysical)
+            let lengthM = physical ?? 0
+            let keep: Bool
+            if let physical {
+                keep = physical >= minPhysicalM
+            } else {
+                keep = pixelLength >= Double(config.minSkeletonLength)
+            }
+            guard keep else { continue }
+
+            let mm: Double?
+            if let physical {
+                mm = physical * 1000
+            } else if config.lengthUnit == "known",
+                      config.mmPerPixel > 0 {
+                mm = pixelLength * config.mmPerPixel
+            } else {
+                mm = nil
+            }
+            components.append(
+                CrackComponentMeasurement(
+                    id: components.count + 1,
+                    pixelLength: pixelLength,
+                    mmLength: mm,
+                    lengthM: lengthM > 0 ? lengthM : nil,
+                    uvPolyline: uvPolyline.isEmpty
+                        ? nil
+                        : uvPolyline.map { [$0.x, $0.y] },
+                    measurementVersion: measurementVersion,
+                    surfaceID: dominantSurfaceID
+                )
+            )
+            totalLength += lengthM
+            totalArea += 0
+
+            var pointsBySurface: [UUID: [CrackPoint]] = [:]
+            for point in group {
+                if let surfaceID = surfaceIDByPoint[point] {
+                    pointsBySurface[surfaceID, default: []].append(point)
+                }
+            }
+            for (surfaceID, surfacePoints) in pointsBySurface {
+                guard let surface = surfaces.first(
+                    where: { $0.id == surfaceID }
+                ) else {
+                    continue
+                }
+                var surfaceUV: [CrackPoint: SIMD2<Double>] = [:]
+                for point in surfacePoints {
+                    if let uv = uvByPoint[point] {
+                        surfaceUV[point] = uv
+                    }
+                }
+                let surfaceUVPolyline = CrackSkeleton.uvPolyline(
+                    from: surfacePoints,
+                    uvByPoint: surfaceUV,
+                    simplifyEpsilonPx: config.polylineEpsilonPx
+                )
+                let surfaceLength = WallDefectProjection.uvPolylineLength(
+                    surfaceUVPolyline
+                )
+                if let index = summaries.firstIndex(
+                    where: { $0.surfaceID == surfaceID }
+                ) {
+                    let old = summaries[index]
+                    summaries[index] = CrackSurfaceSummary(
+                        surfaceID: surfaceID,
+                        label: surface.label,
+                        pixelArea: old.pixelArea + surfacePoints.count,
+                        areaM2: old.areaM2,
+                        totalLengthM: old.totalLengthM + surfaceLength,
+                        longestLengthM: max(
+                            old.longestLengthM,
+                            surfaceLength
+                        ),
+                        componentCount: old.componentCount + 1,
+                        uvPolygon: old.uvPolygon
+                    )
+                } else {
+                    summaries.append(
+                        CrackSurfaceSummary(
+                            surfaceID: surfaceID,
+                            label: surface.label,
+                            pixelArea: surfacePoints.count,
+                            areaM2: 0,
+                            totalLengthM: surfaceLength,
+                            longestLengthM: surfaceLength,
+                            componentCount: 1,
+                            uvPolygon: uvPolygonSparse(
+                                projections[surfaceID] ?? []
+                            )
+                        )
+                    )
+                }
+            }
+        }
+
+        var arPoints: [CrackSkeleton3DPoint] = []
+        var arPointSet = Set<CrackPoint>()
+        for point in points where !arPointSet.contains(point) {
+            let surfaceID = surfaceIDByPoint[point] ?? UUID()
+            if let world = worldByPoint[point] {
+                arPoints.append(
+                    CrackSkeleton3DPoint(
+                        surfaceID: surfaceID,
+                        pixel: point,
+                        world: world
+                    )
+                )
+                arPointSet.insert(point)
+            } else if let projectedSurfaceID = surfaceIDByPoint[point],
+                      let projected = projections[projectedSurfaceID]?.first(
+                        where: { $0.point == point }
+                      ) {
+                arPoints.append(
+                    CrackSkeleton3DPoint(
+                        surfaceID: projectedSurfaceID,
+                        pixel: point,
+                        world: projected.world
+                    )
+                )
+                arPointSet.insert(point)
+            }
+        }
+
+        let reprojectionErrorPx = reprojectionCount > 0
+            ? reprojectionSum / Double(reprojectionCount)
+            : nil
+        return SparseMeasurementResult(
+            summaries: summaries,
+            components: components,
+            totalLengthM: totalLength,
+            totalAreaM2: totalArea,
+            arPoints: arPoints,
+            meshHitCount: meshHitCount,
+            depthHitCount: depthHitCount,
+            planeHitCount: planeHitCount,
+            missCount: missCount,
+            reprojectionErrorPx: reprojectionErrorPx
+        )
     }
 
     private static func measureSparseSkeleton(

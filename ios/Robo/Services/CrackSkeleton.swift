@@ -538,6 +538,200 @@ enum CrackSkeleton {
         graphLength(points, width: 0, spacing: spacing)
     }
 
+    // MARK: - 折线化与简化（P1：裂缝长度稳定性）
+
+    /// 把连通域点集沿骨架追踪为有序折线（从端点开始，8 邻域贪心）。
+    /// 用于 Douglas-Peucker 简化与 UV 折线测量；主裂缝模式下骨架近似单路径。
+    static func orderedPath(
+        from points: [CrackPoint],
+        spacing: Int = 1
+    ) -> [CrackPoint] {
+        guard points.count >= 2 else { return points }
+        let pointSet = Set(points)
+        let step = max(1, spacing)
+
+        // 找端点（邻居数=1）；没有端点则选度数最小的点。
+        var start = points[0]
+        var bestDegree = Int.max
+        for point in points {
+            let degree = neighborDegree(point, in: pointSet, step: step)
+            if degree == 1 {
+                start = point
+                break
+            }
+            if degree < bestDegree {
+                bestDegree = degree
+                start = point
+            }
+        }
+
+        var ordered: [CrackPoint] = []
+        var visited = Set<CrackPoint>()
+        var current = start
+        ordered.append(current)
+        visited.insert(current)
+
+        while visited.count < pointSet.count {
+            var advanced = false
+            while true {
+                var candidates: [(CrackPoint, Double)] = []
+                for dy in -step...step where dy % step == 0 {
+                    for dx in -step...step where dx % step == 0 {
+                        if dy == 0 && dx == 0 { continue }
+                        let next = CrackPoint(
+                            x: current.x + dx,
+                            y: current.y + dy
+                        )
+                        if pointSet.contains(next),
+                           !visited.contains(next) {
+                            candidates.append((
+                                next,
+                                hypot(Double(dx), Double(dy))
+                            ))
+                        }
+                    }
+                }
+                guard !candidates.isEmpty else { break }
+                candidates.sort { $0.1 < $1.1 }
+                let next = candidates[0].0
+                ordered.append(next)
+                visited.insert(next)
+                current = next
+                advanced = true
+            }
+            if !advanced { break }
+            // 处理分支：从剩余点中找离当前端点最近的继续。
+            var nearest: CrackPoint?
+            var bestDistance = Double.greatestFiniteMagnitude
+            for point in pointSet where !visited.contains(point) {
+                let distance = hypot(
+                    Double(point.x - current.x),
+                    Double(point.y - current.y)
+                )
+                if distance < bestDistance {
+                    bestDistance = distance
+                    nearest = point
+                }
+            }
+            guard let next = nearest else { break }
+            current = next
+            ordered.append(next)
+            visited.insert(next)
+        }
+        return ordered
+    }
+
+    /// Douglas-Peucker 折线简化，返回简化后的有序点列。
+    static func douglasPeucker(
+        _ points: [CrackPoint],
+        epsilon: Double
+    ) -> [CrackPoint] {
+        guard points.count > 2 else { return points }
+        let eps = max(epsilon, 0.01)
+        var keep = [Bool](repeating: false, count: points.count)
+        keep[0] = true
+        keep[points.count - 1] = true
+        var stack: [(Int, Int)] = [(0, points.count - 1)]
+
+        while let (startIndex, endIndex) = stack.popLast() {
+            guard endIndex > startIndex + 1 else { continue }
+            var maxDistance = 0.0
+            var maxIndex = startIndex
+            for i in (startIndex + 1)..<endIndex {
+                let distance = perpendicularDistance(
+                    points[i],
+                    a: points[startIndex],
+                    b: points[endIndex]
+                )
+                if distance > maxDistance {
+                    maxDistance = distance
+                    maxIndex = i
+                }
+            }
+            if maxDistance > eps {
+                keep[maxIndex] = true
+                stack.append((startIndex, maxIndex))
+                stack.append((maxIndex, endIndex))
+            }
+        }
+
+        var result: [CrackPoint] = []
+        for i in points.indices where keep[i] {
+            result.append(points[i])
+        }
+        return result
+    }
+
+    /// 便捷入口：有序化 + Douglas-Peucker 简化。
+    static func simplifyPolyline(
+        _ points: [CrackPoint],
+        epsilon: Double
+    ) -> [CrackPoint] {
+        douglasPeucker(
+            orderedPath(from: points),
+            epsilon: epsilon
+        )
+    }
+
+    /// 把骨架点映射为墙面展开图 UV 折线（米）。
+    /// 先在像素域有序化并简化，再映射 UV，长度更稳定。
+    static func uvPolyline(
+        from points: [CrackPoint],
+        uvByPoint: [CrackPoint: SIMD2<Double>],
+        simplifyEpsilonPx: Double
+    ) -> [SIMD2<Double>] {
+        let simplified = simplifyPolyline(
+            points,
+            epsilon: simplifyEpsilonPx
+        )
+        return simplified.compactMap { uvByPoint[$0] }
+    }
+
+    private static func neighborDegree(
+        _ point: CrackPoint,
+        in input: Set<CrackPoint>,
+        step: Int
+    ) -> Int {
+        var count = 0
+        for dy in -step...step where dy % step == 0 {
+            for dx in -step...step where dx % step == 0 {
+                if dy == 0 && dx == 0 { continue }
+                if input.contains(
+                    CrackPoint(x: point.x + dx, y: point.y + dy)
+                ) {
+                    count += 1
+                }
+            }
+        }
+        return count
+    }
+
+    private static func perpendicularDistance(
+        _ point: CrackPoint,
+        a: CrackPoint,
+        b: CrackPoint
+    ) -> Double {
+        let dx = Double(b.x - a.x)
+        let dy = Double(b.y - a.y)
+        let lengthSquared = dx * dx + dy * dy
+        guard lengthSquared > 0 else {
+            return hypot(
+                Double(point.x - a.x),
+                Double(point.y - a.y)
+            )
+        }
+        let t = (
+            Double(point.x - a.x) * dx
+                + Double(point.y - a.y) * dy
+        ) / lengthSquared
+        let projectionX = Double(a.x) + t * dx
+        let projectionY = Double(a.y) + t * dy
+        return hypot(
+            Double(point.x) - projectionX,
+            Double(point.y) - projectionY
+        )
+    }
+
     static func componentPoints(
         _ input: [Bool],
         width: Int,

@@ -125,6 +125,16 @@ struct WallDefectScanView: View {
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
             configuration.frameSemantics.insert(.sceneDepth)
         }
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(
+            .smoothedSceneDepth
+        ) {
+            configuration.frameSemantics.insert(.smoothedSceneDepth)
+        }
+        if ARWorldTrackingConfiguration.supportsSceneReconstruction(
+            .meshWithClassification
+        ) {
+            configuration.sceneReconstruction = .meshWithClassification
+        }
         session.run(configuration)
         arSession = session
     }
@@ -186,6 +196,20 @@ struct WallDefectScanView: View {
             } else {
                 depthContext = nil
             }
+            let meshContext: CrackMeshContext?
+            if !capture.meshAnchors.isEmpty {
+                meshContext = CrackMeshContext(
+                    anchors: capture.meshAnchors,
+                    cropRect: capture.cropRect,
+                    sensorImageSize: capture.sensorImageSize,
+                    analysisToCaptureRatio: Float(
+                        capture.image.size.width
+                            / max(image.size.width, 1)
+                    )
+                )
+            } else {
+                meshContext = nil
+            }
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
                     let output = try CrackRecognitionEngine.analyze(
@@ -199,7 +223,8 @@ struct WallDefectScanView: View {
                                 self.recognitionProgress = message
                             }
                         },
-                        depthContext: depthContext
+                        depthContext: depthContext,
+                        meshContext: meshContext
                     )
                     DispatchQueue.main.async {
                         guard let index = self.photos.firstIndex(
@@ -218,6 +243,18 @@ struct WallDefectScanView: View {
                                 Double($0.world.z)
                             ]
                         }
+                        self.photos[index].defectRecords =
+                            self.makeDefectRecords(
+                                from: output,
+                                photoID: photoID
+                            )
+                        self.photos[index].observation =
+                            self.makeObservation(
+                                capture: capture,
+                                stored: stored,
+                                output: output,
+                                meshContext: meshContext
+                            )
                         if output.result.isEmpty {
                             let reason = output.filteredReason
                                 ?? "未识别到有效裂缝"
@@ -237,7 +274,17 @@ struct WallDefectScanView: View {
                             pixelLengthReported: output.pixelLengthReported,
                             maskPointCount: output.maskPointCount,
                             preFilterComponentCount: output.preFilterComponentCount,
-                            filteredReason: output.filteredReason
+                            filteredReason: output.filteredReason,
+                            meshHitCount: output.meshHitCount,
+                            depthHitCount: output.depthHitCount,
+                            planeHitCount: output.planeHitCount,
+                            missCount: output.missCount,
+                            reprojectionErrorPx: output.reprojectionErrorPx,
+                            meshAnchorCount: output.meshAnchorCount,
+                            meshVertexCount: output.meshVertexCount,
+                            meshFaceCount: output.meshFaceCount,
+                            measurementEngine: output.result.measurementEngine,
+                            measurementVersion: output.result.measurementVersion
                         )
                         self.isPhotoAnalyzing = false
                         self.recognitionProgress = ""
@@ -307,6 +354,70 @@ struct WallDefectScanView: View {
                 }
             }
         }
+    }
+
+    private func makeDefectRecords(
+        from output: CrackRecognitionOutput,
+        photoID: UUID
+    ) -> [DefectRecord]? {
+        let records = output.result.components.compactMap { component
+            -> DefectRecord? in
+            guard let surfaceID = component.surfaceID,
+                  let uvPolyline = component.uvPolyline,
+                  !uvPolyline.isEmpty else {
+                return nil
+            }
+            return DefectRecord(
+                type: .crack,
+                surfaceID: surfaceID,
+                confidence: output.result.confidence,
+                uvPolyline: uvPolyline,
+                lengthMeters: component.lengthM,
+                areaSquareMeters: nil,
+                photoID: photoID,
+                measurementVersion: component.measurementVersion
+                    ?? MeasurementEngineVersion.current
+            )
+        }
+        return records.isEmpty ? nil : records
+    }
+
+    private func makeObservation(
+        capture: DefectCameraCapture,
+        stored: (imageFileName: String, depthFileName: String?),
+        output: CrackRecognitionOutput,
+        meshContext: CrackMeshContext?
+    ) -> DefectObservation? {
+        DefectObservation(
+            frameTimestamp: Date(),
+            cameraTransform: capture.pose,
+            intrinsics: capture.intrinsics,
+            cropRect: [
+                Double(capture.cropRect.minX),
+                Double(capture.cropRect.minY),
+                Double(capture.cropRect.width),
+                Double(capture.cropRect.height)
+            ],
+            sensorImageSize: [
+                Double(capture.sensorImageSize.width),
+                Double(capture.sensorImageSize.height)
+            ],
+            analysisToCaptureRatio: Double(
+                capture.image.size.width
+                    / max(capture.image.size.width, 1)
+            ),
+            depthFileName: stored.depthFileName,
+            depthWidth: capture.depthWidth,
+            depthHeight: capture.depthHeight,
+            pointCloudSampleCount: capture.pointCloud.count,
+            meshAnchorCount: meshContext?.anchorCount ?? 0,
+            meshVertexCount: meshContext?.vertexCount ?? 0,
+            meshFaceCount: meshContext?.faceCount ?? 0,
+            confidence: output.result.confidence,
+            skeletonPixelCount: output.maskPointCount,
+            measurementVersion: output.result.measurementVersion
+                ?? MeasurementEngineVersion.current
+        )
     }
 
     private func uniquePlaneSurfaces() -> [WallDefectSurface] {

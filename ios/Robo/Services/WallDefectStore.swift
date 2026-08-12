@@ -88,6 +88,39 @@ enum WallDefectStore {
         .sorted { $0.capturedAt > $1.capturedAt }
     }
 
+    // MARK: - 真值标定（P0：已知长度误差统计）
+
+    static func saveCalibration(_ record: CalibrationRecord) throws {
+        let url = rootDirectory().appendingPathComponent("calibration.jsonl")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        var line = try encoder.encode(record)
+        line.append(0x0A)
+        let handle = try FileHandle(forWritingTo: url)
+        defer {
+            try? handle.close()
+        }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: line)
+    }
+
+    static func loadCalibrations() -> [CalibrationRecord] {
+        let url = rootDirectory().appendingPathComponent("calibration.jsonl")
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return data.split(separator: 0x0A).compactMap { line in
+            try? decoder.decode(CalibrationRecord.self, from: Data(line))
+        }
+    }
+
+    static func calibrationCount() -> Int {
+        loadCalibrations().count
+    }
+
     static func delete(documentID: UUID) {
         let directory = rootDirectory().appendingPathComponent(documentID.uuidString)
         try? FileManager.default.removeItem(at: directory)

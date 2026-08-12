@@ -5,12 +5,28 @@ struct CrackComponentMeasurement: Codable, Equatable {
     let pixelLength: Double
     let mmLength: Double?
     let lengthM: Double?
+    /// 墙面展开图 UV 折线（米）。旧数据无该字段时解码为 nil。
+    let uvPolyline: [[Double]]?
+    let measurementVersion: String?
+    /// 所属表面（缺陷长期坐标的 surfaceID）。
+    let surfaceID: UUID?
 
-    init(id: Int, pixelLength: Double, mmLength: Double?, lengthM: Double?) {
+    init(
+        id: Int,
+        pixelLength: Double,
+        mmLength: Double?,
+        lengthM: Double?,
+        uvPolyline: [[Double]]? = nil,
+        measurementVersion: String? = nil,
+        surfaceID: UUID? = nil
+    ) {
         self.id = id
         self.pixelLength = pixelLength
         self.mmLength = mmLength
         self.lengthM = lengthM
+        self.uvPolyline = uvPolyline
+        self.measurementVersion = measurementVersion
+        self.surfaceID = surfaceID
     }
 }
 
@@ -59,6 +75,10 @@ struct CrackRecognitionResult: Codable, Equatable {
     let mode: String
     let modelSize: String
     let engine: String
+    /// 测量算法版本（如 0.65-mesh-uv-1）。旧数据为 nil。
+    let measurementVersion: String?
+    /// 本次使用的测量引擎：nearest（旧）/ meshuv（新）。
+    let measurementEngine: String?
 
     var isEmpty: Bool {
         components.isEmpty

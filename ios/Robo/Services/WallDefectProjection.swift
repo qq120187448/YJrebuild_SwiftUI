@@ -22,6 +22,23 @@ struct CrackDepthContext {
     let analysisToCaptureRatio: Float
 }
 
+/// ARMesh 上下文：拍摄瞬间的 Scene Reconstruction 网格锚点。
+/// 与 depthContext 职责分离：ARMesh 负责最终表面几何，Depth 只做快速对应与回退。
+struct CrackMeshContext {
+    let anchors: [ARMeshAnchor]
+    let cropRect: CGRect
+    let sensorImageSize: CGSize
+    let analysisToCaptureRatio: Float
+
+    var anchorCount: Int { anchors.count }
+    var vertexCount: Int {
+        anchors.reduce(0) { $0 + $1.geometry.vertices.count }
+    }
+    var faceCount: Int {
+        anchors.reduce(0) { $0 + $1.geometry.faces.count }
+    }
+}
+
 enum WallDefectProjection {
 
     /// Apple SceneDepth point cloud projection. Every depth-map sample is
@@ -495,6 +512,247 @@ enum WallDefectProjection {
             Float(point.y),
             Float(point.z)
         )
+    }
+
+    // MARK: - ARMesh 射线求交（P0：最终表面几何）
+
+    /// 把 YOLO 分析像素还原到 sensor 像素，再与 ARMesh 求交得到世界点。
+    /// 返回 nil 表示未命中 mesh（调用方回退到 sceneDepth / 平面）。
+    static func meshWorldPoint(
+        pixel: CGPoint,
+        analysisSize: CGSize,
+        context: CrackMeshContext,
+        pose: [Float],
+        intrinsics: [Float],
+        maxDistance: Float = 3
+    ) -> SIMD3<Float>? {
+        guard analysisSize.width > 0, analysisSize.height > 0,
+              !context.anchors.isEmpty,
+              context.cropRect.width > 0,
+              context.cropRect.height > 0,
+              context.sensorImageSize.width > 0,
+              context.sensorImageSize.height > 0,
+              context.analysisToCaptureRatio > 0 else {
+            return nil
+        }
+        let imageX = (pixel.x / analysisSize.width
+            / CGFloat(context.analysisToCaptureRatio))
+            * context.sensorImageSize.width
+        let imageY = (pixel.y / analysisSize.height
+            / CGFloat(context.analysisToCaptureRatio))
+            * context.sensorImageSize.height
+        guard context.cropRect.contains(
+            CGPoint(x: imageX, y: imageY)
+        ) else {
+            return nil
+        }
+        let camera = Camera(pose: pose, intrinsics: intrinsics)
+        guard camera.isValid else { return nil }
+        let ray = camera.ray(pixel: CGPoint(x: imageX, y: imageY))
+        return rayMeshIntersection(
+            rayOrigin: SIMD3<Float>(
+                Float(ray.origin.x),
+                Float(ray.origin.y),
+                Float(ray.origin.z)
+            ),
+            rayDirection: SIMD3<Float>(
+                Float(ray.direction.x),
+                Float(ray.direction.y),
+                Float(ray.direction.z)
+            ),
+            anchors: context.anchors,
+            maxDistance: maxDistance
+        )
+    }
+
+    /// 把分析图像素映射回 sensor 图像像素（与 depthWorldPoint 相同的换算链）。
+    static func sensorPoint(
+        for pixel: CGPoint,
+        analysisSize: CGSize,
+        context: CrackMeshContext
+    ) -> CGPoint? {
+        guard analysisSize.width > 0, analysisSize.height > 0,
+              context.cropRect.width > 0,
+              context.cropRect.height > 0,
+              context.sensorImageSize.width > 0,
+              context.sensorImageSize.height > 0,
+              context.analysisToCaptureRatio > 0 else {
+            return nil
+        }
+        let imageX = (pixel.x / analysisSize.width
+            / CGFloat(context.analysisToCaptureRatio))
+            * context.sensorImageSize.width
+        let imageY = (pixel.y / analysisSize.height
+            / CGFloat(context.analysisToCaptureRatio))
+            * context.sensorImageSize.height
+        let point = CGPoint(x: imageX, y: imageY)
+        guard context.cropRect.contains(point),
+              imageX >= 0, imageY >= 0,
+              imageX <= context.sensorImageSize.width,
+              imageY <= context.sensorImageSize.height else {
+            return nil
+        }
+        return point
+    }
+
+    /// 对全部 ARMeshAnchor 做 Möller–Trumbore 三角形求交，返回最近命中点。
+    static func rayMeshIntersection(
+        rayOrigin: SIMD3<Float>,
+        rayDirection: SIMD3<Float>,
+        anchors: [ARMeshAnchor],
+        maxDistance: Float = 3
+    ) -> SIMD3<Float>? {
+        guard !anchors.isEmpty else { return nil }
+        let direction = simd_normalize(rayDirection)
+        var bestT = Float.greatestFiniteMagnitude
+        var bestPoint: SIMD3<Float>?
+
+        for anchor in anchors {
+            let transform = anchor.transform
+            let vertices = anchor.geometry.vertices
+            let faces = anchor.geometry.faces
+            let vertexCount = vertices.count
+            let faceCount = faces.count
+            guard vertexCount > 0, faceCount > 0 else { continue }
+
+            let vertexBuffer = vertices.buffer
+                .contents()
+                .assumingMemoryBound(to: SIMD3<Float>.self)
+            let indexBuffer = faces.buffer
+                .contents()
+                .assumingMemoryBound(to: UInt32.self)
+            let indexStride = faces.bytesPerIndex / MemoryLayout<UInt32>.size
+
+            func worldVertex(_ index: Int) -> SIMD3<Float> {
+                let local = vertexBuffer[index]
+                let world = transform * SIMD4<Float>(
+                    local.x,
+                    local.y,
+                    local.z,
+                    1
+                )
+                return SIMD3<Float>(world.x, world.y, world.z)
+            }
+
+            for faceIndex in 0..<faceCount {
+                let i0 = Int(indexBuffer[faceIndex * 3 * indexStride])
+                let i1 = Int(indexBuffer[(faceIndex * 3 + 1) * indexStride])
+                let i2 = Int(indexBuffer[(faceIndex * 3 + 2) * indexStride])
+                guard i0 < vertexCount, i1 < vertexCount, i2 < vertexCount else {
+                    continue
+                }
+                let v0 = worldVertex(i0)
+                let v1 = worldVertex(i1)
+                let v2 = worldVertex(i2)
+                guard let t = rayTriangleIntersection(
+                    rayOrigin: rayOrigin,
+                    rayDirection: direction,
+                    v0: v0,
+                    v1: v1,
+                    v2: v2
+                ), t > 0, t < maxDistance, t < bestT else {
+                    continue
+                }
+                bestT = t
+                bestPoint = rayOrigin + direction * t
+            }
+        }
+        return bestPoint
+    }
+
+    /// 公开的相机射线构造（sensor 像素坐标 + sensor 内参），供闭环测试使用。
+    static func cameraRay(
+        pixel: CGPoint,
+        pose: [Float],
+        intrinsics: [Float]
+    ) -> (origin: SIMD3<Float>, direction: SIMD3<Float>)? {
+        let camera = Camera(pose: pose, intrinsics: intrinsics)
+        guard camera.isValid else { return nil }
+        let ray = camera.ray(pixel: pixel)
+        return (
+            SIMD3<Float>(
+                Float(ray.origin.x),
+                Float(ray.origin.y),
+                Float(ray.origin.z)
+            ),
+            SIMD3<Float>(
+                Float(ray.direction.x),
+                Float(ray.direction.y),
+                Float(ray.direction.z)
+            )
+        )
+    }
+
+    /// Möller–Trumbore 射线-三角形求交，返回参数 t。
+    static func rayTriangleIntersection(
+        rayOrigin: SIMD3<Float>,
+        rayDirection: SIMD3<Float>,
+        v0: SIMD3<Float>,
+        v1: SIMD3<Float>,
+        v2: SIMD3<Float>
+    ) -> Float? {
+        let e1 = v1 - v0
+        let e2 = v2 - v0
+        let p = simd_cross(rayDirection, e2)
+        let det = simd_dot(e1, p)
+        guard abs(det) > 1e-9 else { return nil }
+        let invDet = 1 / det
+        let tVec = rayOrigin - v0
+        let u = simd_dot(tVec, p) * invDet
+        guard u >= 0, u <= 1 else { return nil }
+        let q = simd_cross(tVec, e1)
+        let v = simd_dot(rayDirection, q) * invDet
+        guard v >= 0, u + v <= 1 else { return nil }
+        let t = simd_dot(e2, q) * invDet
+        return t > 0 ? t : nil
+    }
+
+    // MARK: - 屏幕闭环测试（screen -> world -> screen）
+
+    /// 把世界点投影回 sensor 图像像素（用于验证重投影误差）。
+    static func projectToScreen(
+        world: SIMD3<Float>,
+        pose: [Float],
+        intrinsics: [Float]
+    ) -> CGPoint? {
+        let camera = Camera(pose: pose, intrinsics: intrinsics)
+        guard camera.isValid else { return nil }
+        let inv = camera.matrix.inverse
+        let cam = inv * SIMD4<Float>(world.x, world.y, world.z, 1)
+        let z = -cam.z
+        guard z > 0.0001 else { return nil }
+        let fx = camera.intrinsics.columns.0.x
+        let fy = camera.intrinsics.columns.1.y
+        let cx = camera.intrinsics.columns.2.x
+        let cy = camera.intrinsics.columns.2.y
+        let x = fx * cam.x / z + cx
+        let y = fy * cam.y / z + cy
+        return CGPoint(x: CGFloat(x), y: CGFloat(y))
+    }
+
+    // MARK: - Surface UV 折线与多边形（P1：墙面展开图上的物理测量）
+
+    /// 折线长度：sum hypot(dU, dV)，单位米。
+    static func uvPolylineLength(_ polyline: [SIMD2<Double>]) -> Double {
+        guard polyline.count >= 2 else { return 0 }
+        var length = 0.0
+        for i in 1..<polyline.count {
+            let delta = polyline[i] - polyline[i - 1]
+            length += (delta.x * delta.x + delta.y * delta.y).squareRoot()
+        }
+        return length
+    }
+
+    /// 多边形面积（鞋带公式），输入为闭合或未闭合 UV 点列，单位 m²。
+    static func uvPolygonArea(_ polygon: [SIMD2<Double>]) -> Double {
+        guard polygon.count >= 3 else { return 0 }
+        var sum = 0.0
+        for i in 0..<polygon.count {
+            let a = polygon[i]
+            let b = polygon[(i + 1) % polygon.count]
+            sum += a.x * b.y - b.x * a.y
+        }
+        return abs(sum) / 2
     }
 
     private static func uvCoordinate(
