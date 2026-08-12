@@ -284,7 +284,8 @@ struct WallDefectScanView: View {
                             meshVertexCount: output.meshVertexCount,
                             meshFaceCount: output.meshFaceCount,
                             measurementEngine: output.result.measurementEngine,
-                            measurementVersion: output.result.measurementVersion
+                            measurementVersion: output.result.measurementVersion,
+                            straightRejectedCount: output.straightRejectedCount
                         )
                         self.isPhotoAnalyzing = false
                         self.recognitionProgress = ""

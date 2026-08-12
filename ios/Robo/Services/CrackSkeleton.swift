@@ -85,31 +85,46 @@ enum CrackSkeleton {
                 pruned,
                 spacing: max(1, spacing)
             )
-            var components = prunedGroups.enumerated().map { index, points in
-                CrackComponent(
-                    id: index + 1,
-                    pixelLength: graphLength(
-                        points,
-                        width: width,
-                        spacing: max(1, spacing)
+            var keptPairs: [
+                (component: CrackComponent, points: [CrackPoint])
+            ] = prunedGroups.enumerated().compactMap { index, points in
+                let pixelLength = graphLength(
+                    points,
+                    width: width,
+                    spacing: max(1, spacing)
+                )
+                guard pixelLength >= Double(config.minSkeletonLength) else {
+                    return nil
+                }
+                // 直线疑似剔除（墙根线/阴角线等误检）：组件层静默过滤，
+                // 保证无墙面回退路径也不会把直线当裂缝显示。
+                guard !shouldRejectStraight(
+                    points: points,
+                    pixelLength: pixelLength,
+                    config: config
+                ) else {
+                    return nil
+                }
+                return (
+                    CrackComponent(
+                        id: index + 1,
+                        pixelLength: pixelLength,
+                        mmPerPixel: mmPerPixel
                     ),
-                    mmPerPixel: mmPerPixel
+                    points
                 )
             }
-            components = components
-                .filter {
-                    $0.pixelLength >= Double(config.minSkeletonLength)
-                }
-                .sorted { $0.pixelLength > $1.pixelLength }
-            if components.count > config.topCracks {
-                components = Array(components.prefix(config.topCracks))
+            keptPairs.sort {
+                $0.component.pixelLength > $1.component.pixelLength
+            }
+            if keptPairs.count > config.topCracks {
+                keptPairs = Array(keptPairs.prefix(config.topCracks))
             }
 
-            let keptIDs = Set(components.map(\.id))
+            let components = keptPairs.map(\.component)
             var display = Set<CrackPoint>()
-            for (index, points) in prunedGroups.enumerated()
-                where keptIDs.contains(index + 1) {
-                display.formUnion(points)
+            for pair in keptPairs {
+                display.formUnion(pair.points)
             }
             let totalPixel = components.reduce(0) { $0 + $1.pixelLength }
             let longest = components.map(\.pixelLength).max() ?? 0
@@ -685,6 +700,42 @@ enum CrackSkeleton {
             epsilon: simplifyEpsilonPx
         )
         return simplified.compactMap { uvByPoint[$0] }
+    }
+
+    // MARK: - 直线疑似剔除（墙根线/阴角线/门框等误检）
+
+    /// 直线度 = 折线长度 / 首尾弦长。1.0 表示完全笔直，越大越弯曲。
+    static func straightnessRatio(
+        of points: [CrackPoint],
+        spacing: Int = 1
+    ) -> Double {
+        let ordered = orderedPath(from: points, spacing: spacing)
+        guard ordered.count >= 2,
+              let first = ordered.first,
+              let last = ordered.last else {
+            return 1
+        }
+        let pathLength = pixelLength(of: ordered, spacing: spacing)
+        let chord = hypot(
+            Double(last.x - first.x),
+            Double(last.y - first.y)
+        )
+        guard chord > 0, pathLength > 0 else { return 1 }
+        return pathLength / chord
+    }
+
+    /// 是否应判为“直线疑似”并剔除。
+    static func shouldRejectStraight(
+        points: [CrackPoint],
+        pixelLength: Double,
+        config: CrackRecognitionConfig
+    ) -> Bool {
+        guard config.rejectStraightLines,
+              pixelLength >= config.straightRejectMinPixel else {
+            return false
+        }
+        return straightnessRatio(of: points, spacing: 1)
+            <= config.maxStraightnessRatio
     }
 
     private static func neighborDegree(

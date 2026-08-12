@@ -34,6 +34,8 @@ struct CrackRecognitionOutput {
     let meshAnchorCount: Int
     let meshVertexCount: Int
     let meshFaceCount: Int
+    /// 直线疑似剔除数量（墙根线/阴角线等误检）。
+    let straightRejectedCount: Int
 }
 
 /// 稀疏骨架测量结果（含 P0 诊断统计）。meshuv 与 legacy 两种引擎共用。
@@ -48,6 +50,7 @@ private struct SparseMeasurementResult {
     let planeHitCount: Int
     let missCount: Int
     let reprojectionErrorPx: Double?
+    let straightRejectedCount: Int
 }
 
 struct CrackResolutionValidationResult: Identifiable {
@@ -239,7 +242,8 @@ enum CrackRecognitionEngine {
                 depthHitCount: 0,
                 planeHitCount: 0,
                 missCount: 0,
-                reprojectionErrorPx: nil
+                reprojectionErrorPx: nil,
+                straightRejectedCount: legacy.straightRejectedCount
             )
         }
         timings["墙面投射与长度"] = CFAbsoluteTimeGetCurrent() - measureStart
@@ -289,7 +293,10 @@ enum CrackRecognitionEngine {
 
         let filteredReason: String?
         if finalComponents.isEmpty {
-            if sparse.points.isEmpty {
+            if measurements.straightRejectedCount > 0 {
+                filteredReason = "已剔除直线疑似 "
+                    + "\(measurements.straightRejectedCount) 条（墙根线/阴角线等）"
+            } else if sparse.points.isEmpty {
                 filteredReason = "掩码为空"
             } else if skeleton.fullComponentCount == 0 {
                 filteredReason = "骨架提取为空"
@@ -342,7 +349,8 @@ enum CrackRecognitionEngine {
             reprojectionErrorPx: measurements.reprojectionErrorPx,
             meshAnchorCount: meshContext?.anchorCount ?? 0,
             meshVertexCount: meshContext?.vertexCount ?? 0,
-            meshFaceCount: meshContext?.faceCount ?? 0
+            meshFaceCount: meshContext?.faceCount ?? 0,
+            straightRejectedCount: measurements.straightRejectedCount
         )
     }
 
@@ -1164,6 +1172,7 @@ enum CrackRecognitionEngine {
         var components: [CrackComponentMeasurement] = []
         var totalLength = 0.0
         var totalArea = 0.0
+        var straightRejectedCount = 0
         let minPhysicalM = config.minPhysicalLengthMM / 1000
         let groups = CrackSkeleton.componentPointsSparse(
             points,
@@ -1200,6 +1209,15 @@ enum CrackRecognitionEngine {
                 of: group,
                 spacing: spacing
             )
+            // 直线疑似剔除：笔直的墙根线/阴角线/门框等不进入测量与 AR 显示。
+            if CrackSkeleton.shouldRejectStraight(
+                points: group,
+                pixelLength: pixelLength,
+                config: config
+            ) {
+                straightRejectedCount += 1
+                continue
+            }
             // 新：骨架 -> 有序折线 -> Douglas-Peucker -> UV 折线（米）。
             let uvPolyline = CrackSkeleton.uvPolyline(
                 from: group,
@@ -1349,7 +1367,8 @@ enum CrackRecognitionEngine {
             depthHitCount: depthHitCount,
             planeHitCount: planeHitCount,
             missCount: missCount,
-            reprojectionErrorPx: reprojectionErrorPx
+            reprojectionErrorPx: reprojectionErrorPx,
+            straightRejectedCount: straightRejectedCount
         )
     }
 
@@ -1368,10 +1387,11 @@ enum CrackRecognitionEngine {
         components: [CrackComponentMeasurement],
         totalLengthM: Double,
         totalAreaM2: Double,
-        arPoints: [CrackSkeleton3DPoint]
+        arPoints: [CrackSkeleton3DPoint],
+        straightRejectedCount: Int
     ) {
         guard !points.isEmpty else {
-            return ([], [], 0, 0, [])
+            return ([], [], 0, 0, [], 0)
         }
         let projections = WallDefectProjection.projectSparsePoints(
             points: points,
@@ -1425,6 +1445,7 @@ enum CrackRecognitionEngine {
         var components: [CrackComponentMeasurement] = []
         var totalLength = 0.0
         var totalArea = 0.0
+        var straightRejectedCount = 0
         let minPhysicalM = config.minPhysicalLengthMM / 1000
         let groups = CrackSkeleton.componentPointsSparse(
             points,
@@ -1457,6 +1478,14 @@ enum CrackRecognitionEngine {
                 of: group,
                 spacing: spacing
             )
+            if CrackSkeleton.shouldRejectStraight(
+                points: group,
+                pixelLength: pixelLength,
+                config: config
+            ) {
+                straightRejectedCount += 1
+                continue
+            }
             let lengthM = physical ?? 0
             let keep: Bool
             if let physical {
@@ -1572,7 +1601,14 @@ enum CrackRecognitionEngine {
                 arPointSet.insert(point)
             }
         }
-        return (summaries, components, totalLength, totalArea, arPoints)
+        return (
+            summaries,
+            components,
+            totalLength,
+            totalArea,
+            arPoints,
+            straightRejectedCount
+        )
     }
 
     private static func uvPolygonSparse(
