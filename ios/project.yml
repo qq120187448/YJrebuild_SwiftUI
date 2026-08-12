@@ -143,3 +143,31 @@ targets:
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         ITSAppUsesNonExemptEncryption: false
+
+  RoboScan4A:
+    type: application
+    platform: iOS
+    sources:
+      - path: Robo4A
+      - path: Robo/Services/CrackYOLODecoder.swift
+      - path: Robo/Services/CrackSkeleton.swift
+      - path: Robo/Services/CrackRecognitionSettings.swift
+      - path: Robo/Resources/Models
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_NAME: RoboScan4A
+        MARKETING_VERSION: 0.66
+        CURRENT_PROJECT_VERSION: 1
+        SWIFT_VERSION: 5.9
+        IPHONEOS_DEPLOYMENT_TARGET: 17.0
+        TARGETED_DEVICE_FAMILY: 1
+    info:
+      path: Robo4A/Info.plist
+      properties:
+        CFBundleDisplayName: 裂缝4A
+        CFBundleDevelopmentRegion: zh-Hans
+        NSPhotoLibraryUsageDescription: 需要相册权限选择裂缝照片进行识别。
+        UILaunchScreen: {}
+        UIRequiresFullScreen: true
