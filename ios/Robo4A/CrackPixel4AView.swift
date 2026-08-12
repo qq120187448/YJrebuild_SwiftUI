@@ -11,6 +11,8 @@ struct CrackPixel4AView: View {
     @State private var detection: CrackPixelDetection?
     @State private var statusText = ""
     @State private var isRunning = false
+    @State private var modelSize = "n"
+    @State private var confidence = 0.5
     private let pipeline = CrackPixelPipeline()
 
     var body: some View {
@@ -33,9 +35,14 @@ struct CrackPixel4AView: View {
                 if let detection {
                     VStack(spacing: 4) {
                         Text(
-                            "中心线 \(detection.centerline.count) 点 · 采样点 \(detection.samplePoints.count) 个 · 像素长度 \(String(format: "%.1f", detection.totalPixelLength)) px"
+                            "检测框 \(detection.detectionCount) · mask 像素 \(detection.maskPixelCount) · 骨架点 \(detection.skeletonPointCount)"
                         )
                         .font(.caption)
+                        Text(
+                            "中心线 \(detection.centerline.count) 点 · 采样点 \(detection.samplePoints.count) 个 · 像素长度 \(String(format: "%.1f", detection.totalPixelLength)) px"
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                         Text(
                             "模型 \(detection.modelName) · 推理 \(String(format: "%.2f", detection.timings["CoreML推理"] ?? 0))s · 总耗时 \(String(format: "%.2f", detection.timings["总耗时"] ?? 0))s"
                         )
@@ -47,6 +54,22 @@ struct CrackPixel4AView: View {
                 Text(statusText)
                     .font(.caption)
                     .foregroundStyle(.orange)
+
+                VStack(spacing: 8) {
+                    HStack {
+                        Text("模型")
+                        Picker("模型", selection: $modelSize) {
+                            Text("crack_seg_n").tag("n")
+                            Text("crack_seg_s").tag("s")
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                    HStack {
+                        Text("置信度 \(String(format: "%.2f", confidence))")
+                        Slider(value: $confidence, in: 0.2...0.8, step: 0.05)
+                    }
+                    .font(.caption)
+                }
 
                 HStack {
                     PhotosPicker(selection: $pickerItem, matching: .images) {
@@ -81,12 +104,20 @@ struct CrackPixel4AView: View {
         guard let image else { return }
         isRunning = true
         statusText = "识别中…"
+        pipeline.config.modelSize = modelSize
+        pipeline.config.confidence = confidence
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let result = try pipeline.detect(image: image)
                 DispatchQueue.main.async {
                     detection = result
-                    statusText = "完成"
+                    if result.detectionCount == 0 {
+                        statusText = "未检测到裂缝（检测框 0 个）——可降低置信度或改用 crack_seg_s"
+                    } else if result.centerline.isEmpty {
+                        statusText = "检测到 mask 但未形成中心线（mask 像素 \(result.maskPixelCount)）"
+                    } else {
+                        statusText = "完成"
+                    }
                     isRunning = false
                 }
             } catch {

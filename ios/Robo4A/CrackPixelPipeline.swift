@@ -33,6 +33,12 @@ struct CrackPixelDetection {
     var components: [CrackComponent]
     /// 主裂缝像素长度
     var totalPixelLength: Double
+    /// NMS 后检测框数量（诊断）
+    var detectionCount: Int
+    /// mask 非零像素数量（诊断）
+    var maskPixelCount: Int
+    /// 骨架稀疏点数量（诊断）
+    var skeletonPointCount: Int
     /// 使用的模型名（crack_seg_n / crack_seg_s）
     var modelName: String
     var timings: [String: Double]
@@ -52,8 +58,6 @@ enum CrackPixelError: LocalizedError {
             return "未找到 crack_seg 模型（crack_seg_n.mlmodelc）"
         case .noOutput:
             return "CoreML 输出不符合 YOLOv8-seg 格式（boxes[1,4+nc+32,8400] + masks[1,32,H,W]）"
-        case .noCrack:
-            return "未检测到裂缝"
         }
     }
 }
@@ -181,10 +185,6 @@ final class CrackPixelPipeline: CrackPixelDetecting {
         }
         timings["骨架化"] = CFAbsoluteTimeGetCurrent() - skeletonStart
 
-        guard !bestCenterline.isEmpty else {
-            throw CrackPixelError.noCrack
-        }
-
         let samplePoints = CrackSamplePoints.evenlySpaced(
             bestCenterline,
             spacingPx: 24,
@@ -206,6 +206,9 @@ final class CrackPixelPipeline: CrackPixelDetecting {
             samplePoints: samplePoints,
             components: skeleton.components,
             totalPixelLength: bestLength,
+            detectionCount: detections.count,
+            maskPixelCount: mask.reduce(0) { $0 + ($1 ? 1 : 0) },
+            skeletonPointCount: rawPoints.count,
             modelName: modelName,
             timings: timings
         )
