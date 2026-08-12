@@ -149,7 +149,6 @@ targets:
     platform: iOS
     sources:
       - path: Robo4A
-      - path: Robo/Services/CrackYOLODecoder.swift
       - path: Robo/Services/CrackSkeleton.swift
       - path: Robo/Services/CrackRecognitionSettings.swift
       - path: Robo/Resources/Models
