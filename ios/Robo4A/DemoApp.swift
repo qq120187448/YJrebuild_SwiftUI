@@ -20,6 +20,10 @@ struct DemoApp: App {
                     .tabItem {
                         Label("4B Raycast", systemImage: "viewfinder")
                     }
+                CrackSurfaceUV4CView()
+                    .tabItem {
+                        Label("4C Surface UV", systemImage: "square.grid.3x3")
+                    }
             }
         }
     }
