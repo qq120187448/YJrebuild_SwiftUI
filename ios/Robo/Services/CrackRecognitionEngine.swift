@@ -1049,7 +1049,8 @@ enum CrackRecognitionEngine {
                 depthHitCount: 0,
                 planeHitCount: 0,
                 missCount: 0,
-                reprojectionErrorPx: nil
+                reprojectionErrorPx: nil,
+                straightRejectedCount: 0
             )
         }
         let analysisSize = CGSize(width: width, height: height)
