@@ -1,0 +1,97 @@
+﻿name: RoboScan 4A Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    paths:
+      - '.github/workflows/roboscan-4a-build.yml'
+
+jobs:
+  build:
+    name: RoboScan4A Debug IPA
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download crack YOLO weights
+        run: |
+          mkdir -p crack-recognition/models
+          curl -sSL --retry 5 -o crack-recognition/models/crack_seg_n.pt \
+            https://huggingface.co/OpenSistemas/YOLOv8-crack-seg/resolve/main/yolov8n/weights/best.pt
+          curl -sSL --retry 5 -o crack-recognition/models/crack_seg_s.pt \
+            https://huggingface.co/OpenSistemas/YOLOv8-crack-seg/resolve/main/yolov8s/weights/best.pt
+          ls -lh crack-recognition/models
+
+      - name: Export crack CoreML models
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet "ultralytics>=8.2" "coremltools>=8,<9"
+          python tools/coreml_export/export_yolo_seg.py
+          mkdir -p ios/Robo/Resources/Models/compiled
+          for name in crack_seg_n crack_seg_s; do
+            xcrun coremlcompiler compile \
+              "ios/Robo/Resources/Models/$name.mlpackage" \
+              ios/Robo/Resources/Models/compiled
+          done
+          for name in crack_seg_n crack_seg_s; do
+            rm -rf "ios/Robo/Resources/Models/$name.mlpackage"
+            mv "ios/Robo/Resources/Models/compiled/$name.mlmodelc" \
+              ios/Robo/Resources/Models/
+          done
+          rmdir ios/Robo/Resources/Models/compiled
+          ls -lhR ios/Robo/Resources/Models
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Build RoboScan4A
+        working-directory: ios
+        run: |
+          xcodebuild \
+            -project RoboScan.xcodeproj \
+            -scheme RoboScan4A \
+            -configuration Debug \
+            -sdk iphoneos \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package IPA
+        run: |
+          APP_PATH=$(find "$RUNNER_TEMP/DerivedData" -type d -name "*.app" -path "*Debug-iphoneos*" | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "App bundle not found in DerivedData" >&2
+            exit 1
+          fi
+          echo "Found app at: $APP_PATH"
+          STAGING="$RUNNER_TEMP/ipa-staging"
+          rm -rf "$STAGING"
+          mkdir -p "$STAGING/Payload"
+          cp -R "$APP_PATH" "$STAGING/Payload/"
+          cd "$STAGING"
+          mkdir -p "$GITHUB_WORKSPACE/ipa-output"
+          zip -qry "$GITHUB_WORKSPACE/ipa-output/RoboScan4A-Debug.ipa" Payload
+          ls -lh "$GITHUB_WORKSPACE/ipa-output/RoboScan4A-Debug.ipa"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: RoboScan4A-Debug-IPA
+          path: ipa-output/RoboScan4A-Debug.ipa
