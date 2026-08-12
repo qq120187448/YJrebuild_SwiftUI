@@ -32,8 +32,6 @@ jobs:
           mkdir -p crack-recognition/models
           curl -sSL --retry 5 -o crack-recognition/models/crack_seg_n.pt \
             https://huggingface.co/OpenSistemas/YOLOv8-crack-seg/resolve/main/yolov8n/weights/best.pt
-          curl -sSL --retry 5 -o crack-recognition/models/crack_seg_s.pt \
-            https://huggingface.co/OpenSistemas/YOLOv8-crack-seg/resolve/main/yolov8s/weights/best.pt
           ls -lh crack-recognition/models
 
       - name: Export crack CoreML models
@@ -42,18 +40,16 @@ jobs:
           source .venv/bin/activate
           python -m pip install --quiet --upgrade pip
           python -m pip install --quiet "ultralytics>=8.2" "coremltools>=8,<9"
-          python tools/coreml_export/export_yolo_seg.py
+          python tools/coreml_export/export_yolo_seg.py \
+            --input crack-recognition/models/crack_seg_n.pt \
+            --output ios/Robo/Resources/Models
           mkdir -p ios/Robo/Resources/Models/compiled
-          for name in crack_seg_n crack_seg_s; do
-            xcrun coremlcompiler compile \
-              "ios/Robo/Resources/Models/$name.mlpackage" \
-              ios/Robo/Resources/Models/compiled
-          done
-          for name in crack_seg_n crack_seg_s; do
-            rm -rf "ios/Robo/Resources/Models/$name.mlpackage"
-            mv "ios/Robo/Resources/Models/compiled/$name.mlmodelc" \
-              ios/Robo/Resources/Models/
-          done
+          xcrun coremlcompiler compile \
+            "ios/Robo/Resources/Models/crack_seg_n.mlpackage" \
+            ios/Robo/Resources/Models/compiled
+          rm -rf "ios/Robo/Resources/Models/crack_seg_n.mlpackage"
+          mv "ios/Robo/Resources/Models/compiled/crack_seg_n.mlmodelc" \
+            ios/Robo/Resources/Models/
           rmdir ios/Robo/Resources/Models/compiled
           ls -lhR ios/Robo/Resources/Models
 

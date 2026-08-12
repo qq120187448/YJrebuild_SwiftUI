@@ -1,20 +1,26 @@
 import Foundation
 import UIKit
 
-/// 4A 新层：在 MaciDE mask 输出之上计算裂缝中心线与采样点。
-/// mask（MaskPrediction[]）→ 全图 bool 网格 → 稀疏点 → 骨架 → 主中心线 → 等距采样点。
-/// 像素行为与 v0.66 的 CrackSkeleton 保持一致；不涉及 ARMesh / RoomPlan / 测量。
+/// 4A 折线方案（用户定稿）：
+/// mask（protos×系数→上采样）→ 框内自适应稀疏化采样（保连通）
+/// → Zhang-Suen 类骨架化 → 端点回溯剪枝(<30px) → 按长度保留 1~5 条主裂缝(≥80px)
+/// → 每分量 BFS 最长路径 → 有序点序列 → Douglas-Peucker(ε=1.5px) → 采样点。
+/// 每条主裂缝只输出一条折线，避免重复计算。
 enum CrackCenterlineOverlay {
 
     struct Result {
-        var centerline: [CrackPoint]
+        /// 每条主裂缝一条折线（有序 + DP 简化）
+        var polylines: [[CrackPoint]]
+        /// 每条折线的等距采样点（供 4B raycast）
+        var samplePointsPerPolyline: [[CrackPoint]]
+        /// 全部采样点（按折线顺序拼接）
         var samplePoints: [CrackPoint]
         var maskPixelCount: Int
-        var skeletonPointCount: Int
         var sparsePointCount: Int
+        var skeletonPointCount: Int
         var componentCount: Int
-        var largestComponentPointCount: Int
-        var centerlinePixelLength: Double
+        var totalPixelLength: Double
+        var longestPixelLength: Double
     }
 
     static func compute(
@@ -24,8 +30,9 @@ enum CrackCenterlineOverlay {
     ) -> Result {
         let width = max(1, Int(imageSize.width.rounded()))
         let height = max(1, Int(imageSize.height.rounded()))
-        var grid = [Bool](repeating: false, count: width * height)
 
+        // 1. mask → 全图 bool 网格（每个 mask 单元覆盖整片像素，保证连通）
+        var grid = [Bool](repeating: false, count: width * height)
         for prediction in masks {
             let maskWidth = prediction.maskSize.width
             let maskHeight = prediction.maskSize.height
@@ -55,7 +62,7 @@ enum CrackCenterlineOverlay {
             maskPixelCount += 1
         }
 
-        // 稀疏化：间距随图像尺寸自适应（约 2px/1024 分辨率），保证点数可控且相邻点可连通。
+        // 2. 框内自适应稀疏化采样（保连通）：间距随图像尺寸自适应
         let spacing = max(
             2,
             Int(ceil(Double(max(width, height)) / 1024.0)) * 2
@@ -67,56 +74,125 @@ enum CrackCenterlineOverlay {
             }
         }
 
+        // 3. 骨架化：Zhang-Suen 类细化 + 端点回溯剪枝(<30px) + 保留 1~5 条(≥80px)
+        var crackConfig = config
+        crackConfig.skeletonMode = "main"
+        crackConfig.minSpurLength = 30
+        crackConfig.minSkeletonLength = 80
+        crackConfig.topCracks = 5
         let skeleton = CrackSkeleton.analyzeSparse(
             points: sparse,
             spacing: spacing,
             width: width,
             height: height,
-            config: config
+            config: crackConfig
         )
-        let raw = skeleton.fullSkeletonPoints.isEmpty
-            ? skeleton.skeletonPoints
-            : skeleton.fullSkeletonPoints
-        let groups = CrackSkeleton.componentPointsSparse(raw, spacing: spacing)
+        // skeletonPoints 只含“剪枝后保留的主裂缝”点集
+        let groups = CrackSkeleton.componentPointsSparse(
+            skeleton.skeletonPoints,
+            spacing: spacing
+        )
 
-        var best: [CrackPoint] = []
-        var bestLength = 0.0
-        var largestGroupSize = 0
+        // 4. 每分量 BFS 最长路径 → DP 简化 → 一条折线
+        var polylines: [[CrackPoint]] = []
+        var samplesPerPolyline: [[CrackPoint]] = []
         for group in groups {
-            // 稀疏点必须按实际间距排序，再 Douglas-Peucker 简化。
-            let ordered = CrackSkeleton.orderedPath(
-                from: group,
-                spacing: spacing
-            )
+            let path = longestPath(in: group, spacing: spacing)
+            guard path.count >= 2 else { continue }
             let simplified = CrackSkeleton.douglasPeucker(
-                ordered,
-                epsilon: config.polylineEpsilonPx
+                path,
+                epsilon: 1.5
             )
             let length = polylineLength(simplified)
-            largestGroupSize = max(largestGroupSize, group.count)
-            if best.isEmpty || length > bestLength {
-                bestLength = length
-                best = simplified
+            guard length >= Double(crackConfig.minSkeletonLength) else {
+                continue
             }
+            polylines.append(simplified)
+            samplesPerPolyline.append(
+                CrackSamplePoints.evenlySpaced(
+                    simplified,
+                    spacingPx: 24,
+                    maxPoints: 64
+                )
+            )
         }
 
-        let samples = best.isEmpty
-            ? []
-            : CrackSamplePoints.evenlySpaced(best, spacingPx: 24, maxPoints: 64)
+        // 5. 按长度降序，最多 5 条
+        let indexed = polylines.indices.sorted {
+            polylineLength(polylines[$0]) > polylineLength(polylines[$1])
+        }
+        let keptIndices = indexed.prefix(5)
+        polylines = keptIndices.map { polylines[$0] }
+        samplesPerPolyline = keptIndices.map { samplesPerPolyline[$0] }
+
+        let total = polylines.reduce(0.0) { $0 + polylineLength($1) }
+        let longest = polylines.map(polylineLength).max() ?? 0
+        let flatSamples = samplesPerPolyline.flatMap { $0 }
 
         return Result(
-            centerline: best,
-            samplePoints: samples,
+            polylines: polylines,
+            samplePointsPerPolyline: samplesPerPolyline,
+            samplePoints: flatSamples,
             maskPixelCount: maskPixelCount,
-            skeletonPointCount: raw.count,
             sparsePointCount: sparse.count,
+            skeletonPointCount: skeleton.skeletonPoints.count,
             componentCount: groups.count,
-            largestComponentPointCount: largestGroupSize,
-            centerlinePixelLength: bestLength
+            totalPixelLength: total,
+            longestPixelLength: longest
         )
     }
 
-    /// 有序折线像素长度（直接累加相邻点欧氏距离，不依赖稀疏步长）。
+    /// 骨架图上 BFS 求直径（两次 BFS），返回从一端到另一端的有序路径。
+    private static func longestPath(
+        in points: Set<CrackPoint>,
+        spacing: Int
+    ) -> [CrackPoint] {
+        guard let start = points.first else { return [] }
+        let step = max(1, spacing)
+
+        func bfs(
+            from source: CrackPoint
+        ) -> (CrackPoint, [CrackPoint: CrackPoint]) {
+            var visited = Set<CrackPoint>([source])
+            var parent: [CrackPoint: CrackPoint] = [:]
+            var queue = [source]
+            var queueIndex = 0
+            var last = source
+            while queueIndex < queue.count {
+                let current = queue[queueIndex]
+                queueIndex += 1
+                last = current
+                for dy in -step...step where dy % step == 0 {
+                    for dx in -step...step where dx % step == 0 {
+                        if dy == 0 && dx == 0 { continue }
+                        let next = CrackPoint(
+                            x: current.x + dx,
+                            y: current.y + dy
+                        )
+                        if points.contains(next), !visited.contains(next) {
+                            visited.insert(next)
+                            parent[next] = current
+                            queue.append(next)
+                        }
+                    }
+                }
+            }
+            return (last, parent)
+        }
+
+        let (farEnd, _) = bfs(from: start)
+        let (otherEnd, parent) = bfs(from: farEnd)
+
+        var path: [CrackPoint] = []
+        var current: CrackPoint? = otherEnd
+        while let point = current {
+            path.append(point)
+            current = parent[point]
+        }
+        return path.reversed()
+    }
+
+    /// 有序折线像素长度（直接累加相邻点欧氏距离）。
     private static func polylineLength(_ points: [CrackPoint]) -> Double {
         var total = 0.0
         for index in 1..<points.count {
@@ -129,6 +205,6 @@ enum CrackCenterlineOverlay {
     }
 
     static func statsText(detectionCount: Int, result: Result) -> String {
-        "检测框 \(detectionCount) · mask 像素 \(result.maskPixelCount) · 稀疏点 \(result.sparsePointCount) · 骨架点 \(result.skeletonPointCount) · 分量 \(result.componentCount)（最大 \(result.largestComponentPointCount) 点）· 中心线 \(result.centerline.count) 点 · 采样点 \(result.samplePoints.count) 个 · 像素长度 \(String(format: "%.1f", result.centerlinePixelLength)) px"
+        "主裂缝 \(result.polylines.count) 条 · mask 像素 \(result.maskPixelCount) · 稀疏点 \(result.sparsePointCount) · 骨架点 \(result.skeletonPointCount) · 总长 \(String(format: "%.1f", result.totalPixelLength)) px · 最长 \(String(format: "%.1f", result.longestPixelLength)) px · 采样点 \(result.samplePoints.count) 个"
     }
 }

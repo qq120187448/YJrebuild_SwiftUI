@@ -97,6 +97,11 @@ struct ContentView: View {
                 Text(viewModel.centerlineStats)
                     .font(.caption)
                     .foregroundStyle(.orange)
+                if !viewModel.modelNote.isEmpty {
+                    Text(viewModel.modelNote)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
             
             Section {
@@ -205,19 +210,21 @@ struct CenterlineOverlayView: View {
                     y: (geo.size.height - imageSize.height * scale) / 2
                 )
                 Canvas { context, _ in
-                    var path = Path()
-                    for (index, point) in result.centerline.enumerated() {
-                        let location = CGPoint(
-                            x: offset.x + CGFloat(point.x) * scale,
-                            y: offset.y + CGFloat(point.y) * scale
-                        )
-                        if index == 0 {
-                            path.move(to: location)
-                        } else {
-                            path.addLine(to: location)
+                    for polyline in result.polylines {
+                        var path = Path()
+                        for (index, point) in polyline.enumerated() {
+                            let location = CGPoint(
+                                x: offset.x + CGFloat(point.x) * scale,
+                                y: offset.y + CGFloat(point.y) * scale
+                            )
+                            if index == 0 {
+                                path.move(to: location)
+                            } else {
+                                path.addLine(to: location)
+                            }
                         }
+                        context.stroke(path, with: .color(.red), lineWidth: 2)
                     }
-                    context.stroke(path, with: .color(.red), lineWidth: 2)
 
                     for point in result.samplePoints {
                         let location = CGPoint(

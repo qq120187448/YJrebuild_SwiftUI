@@ -61,6 +61,7 @@ class ContentViewModel: ObservableObject {
     
     @Published var combinedMaskImage: UIImage?
     @Published var modelSize: String = "n"
+    @Published var modelNote: String = ""
     @Published var centerlineResult: CrackCenterlineOverlay.Result?
     @Published var centerlineStats: String = ""
     
@@ -171,16 +172,27 @@ extension ContentViewModel {
             
             NSLog("\(nmsPredictions.count) boxes left after performing nms with iou threshold of 0.6")
             
-            guard !nmsPredictions.isEmpty else {
+            // 按检测框距图像边缘 1.5% 剔除不完整目标
+            let filteredPredictions = nmsPredictions.filter { prediction in
+                let marginX = prediction.inputImgSize.width * 0.015
+                let marginY = prediction.inputImgSize.height * 0.015
+                return prediction.xyxy.x1 >= marginX
+                    && prediction.xyxy.y1 >= marginY
+                    && prediction.xyxy.x2 <= prediction.inputImgSize.width - marginX
+                    && prediction.xyxy.y2 <= prediction.inputImgSize.height - marginY
+            }
+
+            guard !filteredPredictions.isEmpty else {
                 await MainActor.run { [weak self] in
                     self?.centerlineResult = nil
-                    self?.centerlineStats = "未检测到裂缝（检测框 0）"
+                    self?.predictions = []
+                    self?.centerlineStats = "未检测到裂缝（边缘剔除后 0）"
                 }
                 return
             }
             
-            await MainActor.run { [weak self, nmsPredictions] in
-                self?.predictions = nmsPredictions
+            await MainActor.run { [weak self, filteredPredictions] in
+                self?.predictions = filteredPredictions
             }
             
             guard let masks = masksOutput.featureValue.multiArrayValue else {
@@ -200,7 +212,7 @@ extension ContentViewModel {
 
             await setStatus(to: .generateMasksFromProtos)
             let maskPredictions = masksFromProtos(
-                boxPredictions: nmsPredictions,
+                boxPredictions: filteredPredictions,
                 maskProtos: maskProtos,
                 maskSize: (
                     width: Int(truncating: masks.shape[3]),
@@ -244,12 +256,26 @@ extension ContentViewModel {
         do {
             let config = MLModelConfiguration()
             
-            let modelName = modelSize == "s" ? "crack_seg_s" : "crack_seg_n"
-            guard let modelURL = Bundle.main.url(
+            let requestedName = modelSize == "s" ? "crack_seg_s" : "crack_seg_n"
+            var modelName = requestedName
+            var modelURL = Bundle.main.url(
                 forResource: modelName,
                 withExtension: "mlmodelc",
                 subdirectory: "Models"
-            ) else {
+            )
+            if modelURL == nil, requestedName == "crack_seg_s" {
+                // s 模型暂未打包：回退 n，接口保留
+                modelName = "crack_seg_n"
+                modelURL = Bundle.main.url(
+                    forResource: modelName,
+                    withExtension: "mlmodelc",
+                    subdirectory: "Models"
+                )
+                await MainActor.run { [weak self] in
+                    self?.modelNote = "crack_seg_s 未打包，已回退 crack_seg_n"
+                }
+            }
+            guard let modelURL else {
                 print("failed to find crack model: \(modelName)")
                 return
             }
