@@ -167,6 +167,7 @@ targets:
       properties:
         CFBundleDisplayName: 裂缝4A
         CFBundleDevelopmentRegion: zh-Hans
+        NSCameraUsageDescription: 需要相机和 LiDAR 权限进行墙面测量。
         NSPhotoLibraryUsageDescription: 需要相册权限选择裂缝照片进行识别。
         UILaunchScreen: {}
         UIRequiresFullScreen: true

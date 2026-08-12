@@ -11,7 +11,16 @@ import SwiftUI
 struct DemoApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView(viewModel: ContentViewModel())
+            TabView {
+                ContentView(viewModel: ContentViewModel())
+                    .tabItem {
+                        Label("4A 像素", systemImage: "scope")
+                    }
+                CrackRaycast4BView()
+                    .tabItem {
+                        Label("4B Raycast", systemImage: "viewfinder")
+                    }
+            }
         }
     }
 }
