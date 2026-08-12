@@ -174,12 +174,12 @@ extension ContentViewModel {
             
             // 按检测框距图像边缘 1.5% 剔除不完整目标
             let filteredPredictions = nmsPredictions.filter { prediction in
-                let marginX = prediction.inputImgSize.width * 0.015
-                let marginY = prediction.inputImgSize.height * 0.015
+                let marginX = Float(prediction.inputImgSize.width) * 0.015
+                let marginY = Float(prediction.inputImgSize.height) * 0.015
                 return prediction.xyxy.x1 >= marginX
                     && prediction.xyxy.y1 >= marginY
-                    && prediction.xyxy.x2 <= prediction.inputImgSize.width - marginX
-                    && prediction.xyxy.y2 <= prediction.inputImgSize.height - marginY
+                    && prediction.xyxy.x2 <= Float(prediction.inputImgSize.width) - marginX
+                    && prediction.xyxy.y2 <= Float(prediction.inputImgSize.height) - marginY
             }
 
             guard !filteredPredictions.isEmpty else {

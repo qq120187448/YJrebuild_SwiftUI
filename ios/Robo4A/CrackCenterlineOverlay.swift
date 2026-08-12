@@ -97,7 +97,7 @@ enum CrackCenterlineOverlay {
         var polylines: [[CrackPoint]] = []
         var samplesPerPolyline: [[CrackPoint]] = []
         for group in groups {
-            let path = longestPath(in: group, spacing: spacing)
+            let path = longestPath(in: Set(group), spacing: spacing)
             guard path.count >= 2 else { continue }
             let simplified = CrackSkeleton.douglasPeucker(
                 path,
