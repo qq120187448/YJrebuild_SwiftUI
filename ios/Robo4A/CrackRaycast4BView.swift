@@ -1,5 +1,6 @@
 import ARKit
 import RealityKit
+import simd
 import SwiftUI
 import UIKit
 
@@ -13,6 +14,7 @@ struct CrackRaycast4BView: View {
     @State private var report: Raycast4BReport?
     @State private var history: [Raycast4BReport] = []
     @State private var arViewReference: ARView?
+    @State private var worldAnchors: [AnchorEntity] = []
 
     var body: some View {
         VStack(spacing: 8) {
@@ -34,6 +36,9 @@ struct CrackRaycast4BView: View {
             Text(statusText)
                 .font(.caption)
                 .foregroundStyle(.orange)
+            Text("红色球/线 = raycast 命中的世界点，应贴合墙面裂缝")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
 
             HStack {
                 Button {
@@ -59,6 +64,12 @@ struct CrackRaycast4BView: View {
                     } label: {
                         Label("复制全部", systemImage: "doc.on.doc.fill")
                     }
+                }
+
+                Button {
+                    clearWorldVisualization()
+                } label: {
+                    Label("清除投影", systemImage: "xmark.circle")
                 }
             }
             .buttonStyle(.borderedProminent)
@@ -114,6 +125,7 @@ struct CrackRaycast4BView: View {
                     samplePointsPerPolyline: samples,
                     imageToViewScale: scale
                 )
+                addWorldVisualization(arView: arView, report: measured)
                 report = measured
                 history.append(measured)
                 statusText = String(
@@ -125,6 +137,77 @@ struct CrackRaycast4BView: View {
                 isRunning = false
             }
         }
+    }
+
+    // MARK: - AR 世界点可视化（红球 + 相邻点连线）
+
+    private func addWorldVisualization(
+        arView: ARView,
+        report: Raycast4BReport
+    ) {
+        clearWorldVisualization()
+        for polyline in report.polylines {
+            var previousWorld: SIMD3<Float>?
+            for point in polyline.points {
+                guard let world = point.world else {
+                    previousWorld = nil
+                    continue
+                }
+                let anchor = AnchorEntity(world: world)
+                let sphere = ModelEntity(
+                    mesh: .generateSphere(radius: 0.004),
+                    materials: [SimpleMaterial(color: .red, isMetallic: false)]
+                )
+                anchor.addChild(sphere)
+                arView.scene.addAnchor(anchor)
+                worldAnchors.append(anchor)
+
+                if let previous = previousWorld {
+                    if let line = Self.lineEntity(
+                        from: previous,
+                        to: world,
+                        color: .red
+                    ) {
+                        let midpoint = (previous + world) * 0.5
+                        let lineAnchor = AnchorEntity(world: midpoint)
+                        lineAnchor.addChild(line)
+                        arView.scene.addAnchor(lineAnchor)
+                        worldAnchors.append(lineAnchor)
+                    }
+                }
+                previousWorld = world
+            }
+        }
+    }
+
+    private func clearWorldVisualization() {
+        for anchor in worldAnchors {
+            anchor.removeFromParent()
+        }
+        worldAnchors.removeAll()
+    }
+
+    private static func lineEntity(
+        from a: SIMD3<Float>,
+        to b: SIMD3<Float>,
+        color: UIColor
+    ) -> ModelEntity? {
+        let delta = b - a
+        let length = simd_length(delta)
+        guard length > 0.001 else { return nil }
+        let direction = delta / length
+        let entity = ModelEntity(
+            mesh: .generateBox(
+                size: SIMD3<Float>(0.003, 0.003, length),
+                cornerRadius: 0.0015
+            ),
+            materials: [SimpleMaterial(color: color, isMetallic: false)]
+        )
+        entity.orientation = simd_quatf(
+            from: SIMD3<Float>(0, 0, 1),
+            to: direction
+        )
+        return entity
     }
 }
 
