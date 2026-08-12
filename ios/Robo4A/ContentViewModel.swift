@@ -243,6 +243,7 @@ extension ContentViewModel {
         NSLog("Start inference using Vision")
         
         var requests = [VNRequest]()
+        var handleTask: Task<Void, Never>?
         do {
             let config = MLModelConfiguration()
             
@@ -288,7 +289,7 @@ extension ContentViewModel {
                     }
                     
                     if let results = request.results {
-                        Task {
+                        handleTask = Task {
                             await self.setStatus(to: .postProcessing)
                             await handleResults(results, inputSize: imgsz, originalImgSize: uiImage.size)
                         }
@@ -314,6 +315,9 @@ extension ContentViewModel {
             try imageRequestHandler.perform(requests)
         } catch {
             print(error)
+        }
+        if let handleTask {
+            await handleTask.value
         }
     }
 }

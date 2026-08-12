@@ -74,16 +74,21 @@ struct CrackRaycast4BView: View {
             }
             .buttonStyle(.borderedProminent)
 
-            if let report {
-                ScrollView {
+            ScrollView {
+                if let report {
                     Text(report.text())
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Text("测量后此处显示 4B 基线报告（区域固定，取景框比例不变）")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 200)
-                .padding(.horizontal)
             }
+            .frame(height: 170)
+            .padding(.horizontal)
         }
         .navigationTitle("4B Raycast")
     }
@@ -101,6 +106,8 @@ struct CrackRaycast4BView: View {
                     return
                 }
                 statusText = "4A 识别裂缝中…"
+                viewModel.centerlineResult = nil
+                viewModel.centerlineStats = ""
                 viewModel.uiImage = image
                 await viewModel.runInference()
 
