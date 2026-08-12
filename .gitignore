@@ -9,3 +9,5 @@ tools/wall-defect-inspector/
 ios/Robo/Resources/Models/*.mlpackage/
 ios/Robo/Resources/Models/*.mlmodelc/
 ios/Robo/Resources/Models/*.mlmodel
+# 基座 Sample（官方/第三方示例，不随仓库提交；本地核验用）
+tools/base-samples/
