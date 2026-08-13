@@ -104,6 +104,13 @@ struct CrackSurfaceUV4CView: View {
         case ready
     }
 
+    private enum MeshControl: String, CaseIterable, Identifiable, Equatable {
+        case baseline = "保留既有 mesh"
+        case clear = "扫描前清空 mesh"
+
+        var id: String { rawValue }
+    }
+
     @StateObject private var viewModel = ContentViewModel()
     @State private var coordinator = RoomPlanSessionCoordinator()
     @State private var sharedSession = ARSession()
@@ -122,6 +129,7 @@ struct CrackSurfaceUV4CView: View {
     @State private var worldAnchors: [AnchorEntity] = []
     @State private var roomCaptureFrameTimestamp: TimeInterval?
     @State private var roomCaptureCameraPosition: SIMD3<Float>?
+    @State private var meshControl: MeshControl = .baseline
 
     var body: some View {
         VStack(spacing: 8) {
@@ -169,6 +177,14 @@ struct CrackSurfaceUV4CView: View {
                 }
             }
             .pickerStyle(.menu)
+            .padding(.horizontal)
+
+            Picker("Mesh 对照", selection: $meshControl) {
+                ForEach(MeshControl.allCases) { control in
+                    Text(control.rawValue).tag(control)
+                }
+            }
+            .pickerStyle(.segmented)
             .padding(.horizontal)
 
             Text(statusText)
@@ -313,9 +329,19 @@ struct CrackSurfaceUV4CView: View {
         // 其 onMake 中执行 captureSession.run。
         coordinator.scanStopped = false
         roomCaptureViewReference = nil
+
+        if meshControl == .clear, let arView = arViewReference {
+            arView.session.run(
+                Self.noMeshConfiguration(),
+                options: [.resetTracking, .removeExistingAnchors]
+            )
+        }
+
         phase = .scanning
         coachingText = "开始扫描：请缓慢移动设备"
-        statusText = "RoomPlan 扫描中…（官方引导 + 底部 3D 模型）"
+        statusText = meshControl == .clear
+            ? "RoomPlan 扫描中…（对照组：已清空既有 mesh）"
+            : "RoomPlan 扫描中…（官方引导 + 底部 3D 模型）"
     }
 
     private func stopScan() {
@@ -636,6 +662,12 @@ struct CrackSurfaceUV4CView: View {
         }
         configuration.planeDetection = [.horizontal, .vertical]
         configuration.environmentTexturing = .automatic
+        return configuration
+    }
+
+    static func noMeshConfiguration() -> ARWorldTrackingConfiguration {
+        let configuration = ARWorldTrackingConfiguration()
+        configuration.planeDetection = []
         return configuration
     }
 }
