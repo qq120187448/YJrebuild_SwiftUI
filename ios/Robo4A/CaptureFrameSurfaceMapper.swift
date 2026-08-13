@@ -1,5 +1,6 @@
 import ARKit
 import Foundation
+import RealityKit
 import RoomPlan
 import UIKit
 
