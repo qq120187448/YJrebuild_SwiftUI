@@ -138,7 +138,8 @@ struct CrackSurfaceUV4CView: View {
     @State private var performanceText = ""
 
     var body: some View {
-        VStack(spacing: 8) {
+        GeometryReader { geo in
+            VStack(spacing: 8) {
             ZStack {
                 // 常驻 ARView：整个 4C 生命周期只创建一次，不销毁不重建；
                 // 扫描期间透明度为 0（保持实例存活），结束后恢复显示用于拍照测量。
@@ -175,7 +176,7 @@ struct CrackSurfaceUV4CView: View {
                         .allowsHitTesting(false)
                 }
             }
-            .frame(maxHeight: .infinity)
+            .frame(height: max(geo.size.height * 0.55, 320))
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .padding(.horizontal)
 
@@ -311,6 +312,8 @@ struct CrackSurfaceUV4CView: View {
             }
             .frame(height: 210)
             .padding(.horizontal)
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
         }
         .navigationTitle("4C Surface UV")
         .onAppear {
