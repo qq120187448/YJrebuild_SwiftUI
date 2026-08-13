@@ -164,7 +164,7 @@ struct CrackSurfaceUV4CView: View {
                 }
 
                 if isRunning {
-                    Text("正在识别…请保持手机静止")
+                    Text("正在分析本次照片…")
                         .font(.headline)
                         .foregroundStyle(.white)
                         .padding(.horizontal, 14)
@@ -498,7 +498,7 @@ struct CrackSurfaceUV4CView: View {
                         isRunning = false
                         return
                     }
-                    statusText = "正在识别裂缝，请保持手机静止…"
+                    statusText = "正在分析本次照片…"
                     viewModel.centerlineResult = nil
                     viewModel.centerlineStats = ""
                     let analysisImage = Self.resizedImage(
@@ -558,12 +558,16 @@ struct CrackSurfaceUV4CView: View {
                         Date().timeIntervalSince(spatialStart) * 1000
                     let totalDuration =
                         Date().timeIntervalSince(totalStart) * 1000
-                    let performance = String(
-                        format: "性能：inference=%.0fms · spatial=%.0fms · total=%.0fms",
-                        inferenceDuration,
-                        spatialDuration,
-                        totalDuration
-                    ) + " · \(viewModel.inferenceHardware)"
+                    let timing = viewModel.stageTimings
+                    let performance = [
+                        String(format: "requestSetup=%.0fms", timing["requestSetup"] ?? 0),
+                        String(format: "coreML=%.0fms", timing["coreML"] ?? 0),
+                        String(format: "maskDecode=%.0fms", timing["maskDecode"] ?? 0),
+                        String(format: "skeleton=%.0fms", timing["skeletonPolyline"] ?? 0),
+                        String(format: "spatial=%.0fms", spatialDuration),
+                        String(format: "total=%.0fms", totalDuration),
+                        viewModel.inferenceHardware
+                    ].joined(separator: " · ")
                     performanceText = performance
                     appendReportLog(performance)
                     statusText = String(

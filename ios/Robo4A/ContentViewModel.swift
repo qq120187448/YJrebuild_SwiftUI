@@ -65,6 +65,7 @@ class ContentViewModel: ObservableObject {
     @Published var centerlineResult: CrackCenterlineOverlay.Result?
     @Published var centerlineStats: String = ""
     @Published var inferenceHardware = ""
+    @Published var stageTimings: [String: Double] = [:]
 
     private static let modelCacheLock = NSLock()
     private static var cachedModelName: String?
@@ -196,6 +197,7 @@ extension ContentViewModel {
                 return
             }
             
+            let maskDecodeStart = CFAbsoluteTimeGetCurrent()
             await setStatus(to: .parsingMaskProtos)
             let maskProtos = getMaskProtosFromOutput(
                 output: masks,
@@ -216,6 +218,8 @@ extension ContentViewModel {
                 ),
                 originalImgSize: originalImgSize
             )
+            let maskDecodeDuration =
+                (CFAbsoluteTimeGetCurrent() - maskDecodeStart) * 1000
           
             NSLog("Set maskpredictions")
             await MainActor.run { [weak self, maskPredictions] in
@@ -223,15 +227,20 @@ extension ContentViewModel {
                 self.maskPredictions = maskPredictions
                 self.processing = false
                 if let uiImage = self.uiImage {
+                    let skeletonStart = CFAbsoluteTimeGetCurrent()
                     let result = CrackCenterlineOverlay.compute(
                         masks: maskPredictions,
                         imageSize: uiImage.size
                     )
+                    let skeletonDuration =
+                        (CFAbsoluteTimeGetCurrent() - skeletonStart) * 1000
                     self.centerlineResult = result
                     self.centerlineStats = CrackCenterlineOverlay.statsText(
                         detectionCount: maskPredictions.count,
                         result: result
                     )
+                    self.stageTimings["maskDecode"] = maskDecodeDuration
+                    self.stageTimings["skeletonPolyline"] = skeletonDuration
                 }
             }
             await setStatus(to: nil)
@@ -252,21 +261,9 @@ extension ContentViewModel {
         var handleTask: Task<Void, Never>?
         do {
             let config = MLModelConfiguration()
-            let computeText: String
-            switch config.computeUnits {
-            case .all:
-                computeText = "CoreML 自动调度 CPU/GPU/Neural Engine"
-            case .cpuAndGPU:
-                computeText = "CoreML CPU+GPU"
-            case .cpuOnly:
-                computeText = "CoreML CPU"
-            case .cpuAndNeuralEngine:
-                computeText = "CoreML CPU+Neural Engine"
-            @unknown default:
-                computeText = "CoreML 未知计算单元"
-            }
+            let requestSetupStart = CFAbsoluteTimeGetCurrent()
             await MainActor.run { [weak self] in
-                self?.inferenceHardware = computeText
+                self?.inferenceHardware = "computeUnitsPolicy = .all"
             }
             
             let requestedName = modelSize == "s" ? "crack_seg_s" : "crack_seg_n"
@@ -367,6 +364,11 @@ extension ContentViewModel {
             
             requests = [segmentationRequest]
             }
+            let requestSetupDuration =
+                (CFAbsoluteTimeGetCurrent() - requestSetupStart) * 1000
+            await MainActor.run { [weak self] in
+                self?.stageTimings["requestSetup"] = requestSetupDuration
+            }
         } catch let error as NSError {
             print("Model loading went wrong: \(error)")
         }
@@ -380,7 +382,13 @@ extension ContentViewModel {
         do {
             await setStatus(to: .inferencing)
             NSLog("Perform inference")
+            let coreMLStart = CFAbsoluteTimeGetCurrent()
             try imageRequestHandler.perform(requests)
+            let coreMLDuration =
+                (CFAbsoluteTimeGetCurrent() - coreMLStart) * 1000
+            await MainActor.run { [weak self] in
+                self?.stageTimings["coreML"] = coreMLDuration
+            }
         } catch {
             print(error)
         }
