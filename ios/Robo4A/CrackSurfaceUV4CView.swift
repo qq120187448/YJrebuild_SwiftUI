@@ -516,7 +516,11 @@ struct CrackSurfaceUV4CView: View {
                     statusText = "正在识别裂缝，请保持手机静止…"
                     viewModel.centerlineResult = nil
                     viewModel.centerlineStats = ""
-                    viewModel.uiImage = image
+                    let analysisImage = Self.resizedImage(
+                        image,
+                        maxSide: 1024
+                    )
+                    viewModel.uiImage = analysisImage
                     let inferenceStart = Date()
                     await viewModel.runInference()
                     let inferenceDuration =
@@ -530,8 +534,8 @@ struct CrackSurfaceUV4CView: View {
                     }
 
                     let scale: CGFloat
-                    if image.size.width > 0 {
-                        scale = arView.bounds.width / image.size.width
+                    if analysisImage.size.width > 0 {
+                        scale = arView.bounds.width / analysisImage.size.width
                     } else {
                         scale = 1
                     }
@@ -829,6 +833,26 @@ struct CrackSurfaceUV4CView: View {
     ) -> String {
         guard let a, let b else { return "-" }
         return String(format: "%.3fm", simd_distance(a, b))
+    }
+
+    private static func resizedImage(
+        _ image: UIImage,
+        maxSide: CGFloat
+    ) -> UIImage {
+        let largest = max(image.size.width, image.size.height)
+        guard largest > maxSide, largest > 0 else { return image }
+        let scale = maxSide / largest
+        let size = CGSize(
+            width: max(1, image.size.width * scale),
+            height: max(1, image.size.height * scale)
+        )
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: size, format: format)
+            .image { context in
+                context.cgContext.interpolationQuality = .high
+                image.draw(in: CGRect(origin: .zero, size: size))
+            }
     }
 
     private static func trackingStateText(
