@@ -5,11 +5,14 @@ import simd
 import SwiftUI
 import UIKit
 
-/// RoomPlan 会话回调桥接（RoomCaptureSession 使用与 ARView 同一个 ARSession）。
-final class RoomPlanSessionCoordinator: NSObject, RoomCaptureSessionDelegate, NSCoding {
+/// RoomPlan 会话回调桥接（RoomCaptureView/RoomCaptureSession 使用与 ARView 同一个 ARSession）。
+@objc(RoboScan4CScanCoordinator)
+final class RoomPlanSessionCoordinator: NSObject, RoomCaptureSessionDelegate, RoomCaptureViewDelegate, NSCoding {
     var onDidEnd: ((CapturedRoomData, Error?) -> Void)?
     var onDidFail: ((Error) -> Void)?
     var onInstruction: ((String) -> Void)?
+    /// 手动结束扫描后置 true，避免 dismantle 重复 stop。
+    var scanStopped = false
 
     override init() {
         super.init()
@@ -50,6 +53,19 @@ final class RoomPlanSessionCoordinator: NSObject, RoomCaptureSessionDelegate, NS
         onInstruction?(Self.coachingText(for: instruction))
     }
 
+    /// 不展示框架自带的处理结果页（我们自己用 RoomBuilder 构建并自绘 UI）。
+    func captureView(
+        shouldPresent roomDataForProcessing: CapturedRoomData,
+        error: (any Error)?
+    ) -> Bool {
+        false
+    }
+
+    func captureView(
+        didPresent processedResult: CapturedRoom,
+        error: (any Error)?
+    ) {}
+
     /// Apple 官方引导指令 → 自定义中文文案。
     private static func coachingText(
         for instruction: RoomCaptureSession.Instruction
@@ -73,7 +89,7 @@ final class RoomPlanSessionCoordinator: NSObject, RoomCaptureSessionDelegate, NS
     }
 }
 
-/// 4C：常驻 ARView（白线 mesh）+ 单一 ARSession + RoomCaptureSession。
+/// 4C：常驻 ARView（测量）+ 单一 ARSession + RoomCaptureView（官方扫描引导/底部 3D 模型）。
 /// 照片叠加 4A 折线/采样点，AR 画面叠加 4B 世界点/连线，便于逐条裂缝对照。
 struct CrackSurfaceUV4CView: View {
 
@@ -87,7 +103,7 @@ struct CrackSurfaceUV4CView: View {
     @StateObject private var viewModel = ContentViewModel()
     @State private var coordinator = RoomPlanSessionCoordinator()
     @State private var sharedSession = ARSession()
-    @State private var roomCaptureSession: RoomCaptureSession?
+    @State private var roomCaptureViewReference: RoomCaptureView?
     @State private var phase: Phase = .idle
     @State private var scenario = CrackRaycast4B.scenarios[0]
     @State private var statusText =
@@ -104,30 +120,24 @@ struct CrackSurfaceUV4CView: View {
     var body: some View {
         VStack(spacing: 8) {
             ZStack {
-                // 常驻 ARView：整个 4C 生命周期只创建一次，不销毁不重建。
+                // 常驻 ARView：整个 4C 生命周期只创建一次，不销毁不重建；
+                // 扫描期间透明度为 0（保持实例存活），结束后恢复显示用于拍照测量。
                 ARViewContainer4C(session: sharedSession) { arView in
                     arViewReference = arView
                 }
+                .opacity(phase == .scanning ? 0 : 1)
 
-                // 自定义引导：白色扫描框（RoomPlanExampleApp 官方示例风格）+ Apple 指令文案。
-                if phase == .scanning || phase == .processing {
-                    VStack {
-                        Spacer()
-                        RoundedRectangle(cornerRadius: 20)
-                            .stroke(Color.white, lineWidth: 3)
-                            .frame(width: 260, height: 340)
-                        Text(coachingText)
-                            .font(.headline)
-                            .multilineTextAlignment(.center)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(Color.black.opacity(0.55))
-                            .clipShape(Capsule())
-                            .padding(.top, 12)
-                        Spacer().frame(height: 24)
+                // 官方 RoomPlan 扫描视图：自带引导、进度与底部 3D 模型（isModelEnabled 默认 true）。
+                if phase == .scanning {
+                    RoomCaptureView4C(
+                        session: sharedSession,
+                        coordinator: coordinator
+                    ) { view in
+                        roomCaptureViewReference = view
+                        var configuration = RoomCaptureSession.Configuration()
+                        configuration.isCoachingEnabled = true
+                        view.captureSession.run(configuration: configuration)
                     }
-                    .allowsHitTesting(false)
                 }
 
                 if isRunning {
@@ -158,7 +168,7 @@ struct CrackSurfaceUV4CView: View {
             Text(statusText)
                 .font(.caption)
                 .foregroundStyle(.orange)
-            Text("照片红线/蓝点 = 4A 折线与采样点；AR 红点/红线 = raycast 世界点；白框 = 扫描引导")
+            Text("照片红线/蓝点 = 4A 折线与采样点；AR 红点/红线 = raycast 世界点；扫描时 = 官方 RoomPlan 引导 + 底部 3D 模型")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
@@ -277,7 +287,7 @@ struct CrackSurfaceUV4CView: View {
     }
 
     private func startScan() {
-        guard let arView = arViewReference else { return }
+        guard arViewReference != nil else { return }
         capturedRoom = nil
         report = nil
         comparisonText = ""
@@ -286,21 +296,21 @@ struct CrackSurfaceUV4CView: View {
         viewModel.centerlineResult = nil
         viewModel.centerlineStats = ""
 
-        let session = RoomCaptureSession(arSession: arView.session)
-        session.delegate = coordinator
-        roomCaptureSession = session
-        var configuration = RoomCaptureSession.Configuration()
-        configuration.isCoachingEnabled = true
-        session.run(configuration: configuration)
-
+        // RoomCaptureView 由 SwiftUI 在 phase == .scanning 时创建，
+        // 其 onMake 中执行 captureSession.run。
+        coordinator.scanStopped = false
+        roomCaptureViewReference = nil
         phase = .scanning
         coachingText = "开始扫描：请缓慢移动设备"
-        statusText = "RoomPlan 扫描中…（Apple 引导文案驱动，无彩色面层）"
+        statusText = "RoomPlan 扫描中…（官方引导 + 底部 3D 模型）"
     }
 
     private func stopScan() {
-        guard let session = roomCaptureSession else { return }
-        session.stop(pauseARSession: false)
+        guard let view = roomCaptureViewReference else { return }
+        if !coordinator.scanStopped {
+            view.captureSession.stop(pauseARSession: false)
+            coordinator.scanStopped = true
+        }
         phase = .processing
         coachingText = "正在生成房间模型…"
         statusText = "RoomPlan 处理中…"
@@ -519,7 +529,43 @@ struct CrackSurfaceUV4CView: View {
     }
 }
 
-/// 常驻 ARView：整个 4C 生命周期只创建一次，扫描白框/引导由 SwiftUI 叠加层绘制。
+/// 官方 RoomPlan 扫描视图（自带引导、进度与底部 3D 模型），与 ARView 共享同一个 ARSession。
+struct RoomCaptureView4C: UIViewRepresentable {
+    let session: ARSession
+    let coordinator: RoomPlanSessionCoordinator
+    var onMake: (RoomCaptureView) -> Void
+
+    func makeUIView(context: Context) -> RoomCaptureView {
+        let view = RoomCaptureView(frame: .zero, arSession: session)
+        view.captureSession.delegate = coordinator
+        view.delegate = coordinator
+        view.isCoachingOverlayEnabled = true
+        onMake(view)
+        return view
+    }
+
+    func updateUIView(_ uiView: RoomCaptureView, context: Context) {}
+
+    static func dismantleUIView(
+        _ uiView: RoomCaptureView,
+        coordinator: RoomPlanSessionCoordinator
+    ) {
+        // 手动“结束扫描”已 stop；这里只兜底（例如直接切走页面）。
+        if !coordinator.scanStopped {
+            if #available(iOS 17.0, *) {
+                uiView.captureSession.stop(pauseARSession: false)
+            } else {
+                uiView.captureSession.stop()
+            }
+        }
+    }
+
+    func makeCoordinator() -> RoomPlanSessionCoordinator {
+        coordinator
+    }
+}
+
+/// 常驻 ARView：整个 4C 生命周期只创建一次，不销毁不重建；扫描时被 RoomCaptureView 覆盖。
 struct ARViewContainer4C: UIViewRepresentable {
     var session: ARSession
     var onReady: (ARView) -> Void
