@@ -132,7 +132,7 @@ struct CrackSurfaceUV4CView: View {
     @State private var roomCaptureFrameTimestamp: TimeInterval?
     @State private var roomCaptureCameraPosition: SIMD3<Float>?
     @State private var meshControl: MeshControl = .baseline
-    @State private var surfaceToleranceMM: Double = 30
+    @State private var surfaceToleranceMM: Double = 20
     @State private var showParameterPanel = false
     @State private var reportLog: [String] = []
 
@@ -319,8 +319,8 @@ struct CrackSurfaceUV4CView: View {
     private var parameterPanel: some View {
         NavigationView {
             Form {
-                Section("Surface 误差") {
-                    Slider(value: $surfaceToleranceMM, in: 10...100, step: 1)
+                Section("Surface 误差（高级参数）") {
+                    Slider(value: $surfaceToleranceMM, in: 10...50, step: 1)
                     Text("\(Int(surfaceToleranceMM)) mm")
                 }
                 Section("模型参数") {
@@ -465,6 +465,7 @@ struct CrackSurfaceUV4CView: View {
     private func measure() {
         guard let arView = arViewReference, let room = capturedRoom else { return }
         isRunning = true
+        let totalStart = Date()
         statusText = "等待相机就绪…"
 
         Task { @MainActor in
@@ -479,6 +480,20 @@ struct CrackSurfaceUV4CView: View {
             // 拍照时间戳：用于 Capture→Raycast 延迟统计（专家建议指标）。
             let captureTime = Date()
             let captureFrame = arView.session.currentFrame
+            let orientation =
+                arView.window?.windowScene?.interfaceOrientation ?? .portrait
+            let captureContext = captureFrame.map { frame in
+                CaptureFrameSpatialContext(
+                    timestamp: frame.timestamp,
+                    cameraTransform: frame.camera.transform,
+                    cameraIntrinsics: frame.camera.intrinsics,
+                    imageResolution: frame.camera.imageResolution,
+                    displayTransform: frame.displayTransform(
+                        for: orientation,
+                        viewportSize: arView.bounds.size
+                    )
+                )
+            }
             arView.snapshot(saveToHDR: false) { image in
                 Task { @MainActor in
                     guard let image else {
@@ -490,7 +505,10 @@ struct CrackSurfaceUV4CView: View {
                     viewModel.centerlineResult = nil
                     viewModel.centerlineStats = ""
                     viewModel.uiImage = image
+                    let inferenceStart = Date()
                     await viewModel.runInference()
+                    let inferenceDuration =
+                        Date().timeIntervalSince(inferenceStart) * 1000
 
                     guard let samples = viewModel.centerlineResult?.samplePointsPerPolyline,
                           !samples.isEmpty else {
@@ -507,11 +525,12 @@ struct CrackSurfaceUV4CView: View {
                     }
 
                     statusText = "raycast + Surface UV 映射中…"
+                    let spatialStart = Date()
                     let raycast: Raycast4BReport
-                    if let captureFrame {
-                        raycast = CrackRaycast4B.measureFrameLocked(
+                    if let captureContext {
+                        raycast = CaptureFrameSurfaceMapper.map(
                             arView: arView,
-                            frame: captureFrame,
+                            context: captureContext,
                             room: room,
                             samplePointsPerPolyline: samples,
                             imageToViewScale: scale,
@@ -546,6 +565,18 @@ struct CrackSurfaceUV4CView: View {
                     lastReports[scenario] = surfaceReport
                     report = surfaceReport
                     appendReportLog(surfaceReport.clippedText(limit: 1000))
+                    let spatialDuration =
+                        Date().timeIntervalSince(spatialStart) * 1000
+                    let totalDuration =
+                        Date().timeIntervalSince(totalStart) * 1000
+                    appendReportLog(
+                        String(
+                            format: "性能：inference=%.0fms · spatial=%.0fms · total=%.0fms",
+                            inferenceDuration,
+                            spatialDuration,
+                            totalDuration
+                        )
+                    )
                     statusText = String(
                         format: "表面分配率 %.1f%% · UV 单位米 · 已解除静止锁定",
                         surfaceReport.assignedRatio * 100
