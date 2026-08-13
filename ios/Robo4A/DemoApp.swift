@@ -24,6 +24,10 @@ struct DemoApp: App {
                     .tabItem {
                         Label("4C Surface UV", systemImage: "square.grid.3x3")
                     }
+                RoomPlanUIAxExperimentView()
+                    .tabItem {
+                        Label("4C UI A/B", systemImage: "rectangle.3.group")
+                    }
             }
         }
     }
