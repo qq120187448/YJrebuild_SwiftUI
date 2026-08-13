@@ -88,7 +88,7 @@ enum SurfaceUV4C {
             lines.append("Surface 清单：")
             for item in surfaceInventory {
                 lines.append(
-                    "  \(categoryName(item.category)) \(item.identifier.uuidString.prefix(8)) dims=(\(Self.float3Text(item.dimensions))) transform=\(Self.transformText(item.transform))"
+                    "  \(categoryName(item.category)) \(item.identifier.uuidString.prefix(8)) dims=(\(SurfaceUV4C.float3Text(item.dimensions))) transform=\(SurfaceUV4C.transformText(item.transform))"
                 )
             }
             if let sessionDiagnosticText {
@@ -146,7 +146,7 @@ enum SurfaceUV4C {
                 lines.append("未分配诊断（全量 Surface 候选）：")
                 for (polylineIndex, pointIndex, point) in noSurfacePoints {
                     guard let world = point.world else { continue }
-                    let raycastInfo = Self.raycastInfoText(point)
+                    let raycastInfo = SurfaceUV4C.raycastInfoText(point)
                     lines.append(
                         String(
                             format: "[裂缝%d·点%d] world=(%.3f, %.3f, %.3f) %@",
@@ -256,7 +256,7 @@ enum SurfaceUV4C {
             var counts: [UUID: Int] = [:]
             var uvPoints: [(u: Double, v: Double)] = []
 
-            for (pointIndex, point) in polyline.points.enumerated() {
+            for (_, point) in polyline.points.enumerated() {
                 totalSamples += 1
                 guard let world = point.world else {
                     points.append(
@@ -367,7 +367,7 @@ enum SurfaceUV4C {
     ) -> [SurfaceCandidate] {
         let candidateSurfaces = surfaces.filter { surface in
             guard let allowedCategories else { return true }
-            guard let category = surface.category else { return false }
+            let category = surface.category
             return allowedCategories.contains(category)
         }
         return candidateSurfaces.map { surface in
