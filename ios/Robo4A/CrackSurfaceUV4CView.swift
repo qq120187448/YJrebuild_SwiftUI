@@ -9,10 +9,21 @@ import UIKit
 final class RoomPlanSessionCoordinator:
     NSObject,
     RoomCaptureSessionDelegate,
-    RoomCaptureViewDelegate
+    RoomCaptureViewDelegate,
+    NSCoding
 {
     var onDidPresent: ((CapturedRoom, Error?) -> Void)?
     var onDidFail: ((Error) -> Void)?
+
+    override init() {
+        super.init()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("Not implemented")
+    }
+
+    func encode(with coder: NSCoder) {}
 
     func captureSession(
         _ session: RoomCaptureSession,
