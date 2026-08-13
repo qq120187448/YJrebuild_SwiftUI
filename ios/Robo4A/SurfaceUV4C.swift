@@ -27,6 +27,13 @@ enum SurfaceUV4C {
         let transform: simd_float4x4
     }
 
+    struct UVLengthSegment {
+        let surfaceID: UUID
+        let category: CapturedRoom.Surface.Category?
+        let lengthM: Double
+        let pointCount: Int
+    }
+
     struct MappedPoint {
         let source: CrackPoint
         let world: SIMD3<Float>?
@@ -78,6 +85,9 @@ enum SurfaceUV4C {
         let thresholdRates: [(thresholdMm: Int, ratio: Double)]
         let raycastTargetSummary: [String: Int]
         let targetComparisonRates: [(thresholdMm: Int, estimatedRatio: Double, existingRatio: Double)]
+        let uvLengthM: Double?
+        let uvLengthSegments: [UVLengthSegment]
+        let crossSurfaceTransitionCount: Int
 
         var assignedRatio: Double {
             totalWorldHits == 0 ? 0 : Double(totalAssigned) / Double(totalWorldHits)
@@ -99,6 +109,13 @@ enum SurfaceUV4C {
             lines.append(SurfaceUV4C.raycastTargetSummaryText(raycastTargetSummary))
             lines.append(SurfaceUV4C.thresholdRatesText(thresholdRates))
             lines.append(SurfaceUV4C.targetComparisonRatesText(targetComparisonRates))
+            lines.append(
+                SurfaceUV4C.uvLengthText(
+                    uvLengthM,
+                    segments: uvLengthSegments,
+                    crossSurfaceTransitions: crossSurfaceTransitionCount
+                )
+            )
             for polyline in polylines {
                 lines.append("裂缝 \(polyline.index + 1)：")
                 lines.append(
@@ -410,6 +427,73 @@ enum SurfaceUV4C {
             )
         }
 
+        var uvLengthSegments: [UVLengthSegment] = []
+        var crossSurfaceTransitionCount = 0
+        for polyline in polylines {
+            var segmentSurfaceID: UUID?
+            var segmentCategory: CapturedRoom.Surface.Category?
+            var segmentLength = 0.0
+            var segmentPointCount = 0
+            var previousPoint: MappedPoint?
+
+            for point in polyline.points {
+                guard point.status == "assigned",
+                      let surfaceID = point.surfaceID,
+                      let u = point.u,
+                      let v = point.v else {
+                    segmentSurfaceID = nil
+                    segmentCategory = nil
+                    segmentLength = 0
+                    segmentPointCount = 0
+                    previousPoint = nil
+                    continue
+                }
+
+                if segmentSurfaceID == surfaceID {
+                    if let previous = previousPoint,
+                       let previousU = previous.u,
+                       let previousV = previous.v {
+                        segmentLength += hypot(u - previousU, v - previousV)
+                    }
+                    segmentPointCount += 1
+                } else {
+                    if let previousSurfaceID = segmentSurfaceID {
+                        if segmentPointCount >= 2 {
+                            uvLengthSegments.append(
+                                UVLengthSegment(
+                                    surfaceID: previousSurfaceID,
+                                    category: segmentCategory,
+                                    lengthM: segmentLength,
+                                    pointCount: segmentPointCount
+                                )
+                            )
+                        }
+                        crossSurfaceTransitionCount += 1
+                    }
+                    segmentSurfaceID = surfaceID
+                    segmentCategory = point.category
+                    segmentLength = 0
+                    segmentPointCount = 1
+                }
+                previousPoint = point
+            }
+
+            if let previousSurfaceID = segmentSurfaceID,
+               segmentPointCount >= 2 {
+                uvLengthSegments.append(
+                    UVLengthSegment(
+                        surfaceID: previousSurfaceID,
+                        category: segmentCategory,
+                        lengthM: segmentLength,
+                        pointCount: segmentPointCount
+                    )
+                )
+            }
+        }
+        let uvLengthM = uvLengthSegments.isEmpty
+            ? nil
+            : uvLengthSegments.reduce(0) { $0 + $1.lengthM }
+
         let thresholdRates: [(thresholdMm: Int, ratio: Double)] =
             [20, 30, 40, 50].map { thresholdMm in
                 let toleranceM = Float(thresholdMm) / 1000.0
@@ -459,7 +543,10 @@ enum SurfaceUV4C {
             sessionDiagnosticText: sessionDiagnosticText,
             thresholdRates: thresholdRates,
             raycastTargetSummary: raycastTargetSummary,
-            targetComparisonRates: targetComparisonRates
+            targetComparisonRates: targetComparisonRates,
+            uvLengthM: uvLengthM,
+            uvLengthSegments: uvLengthSegments,
+            crossSurfaceTransitionCount: crossSurfaceTransitionCount
         )
     }
 
@@ -541,6 +628,33 @@ enum SurfaceUV4C {
             )
         }.joined(separator: " · ")
         return "target A/B（Debug）：\(parts)"
+    }
+
+    private static func uvLengthText(
+        _ lengthM: Double?,
+        segments: [UVLengthSegment],
+        crossSurfaceTransitions: Int
+    ) -> String {
+        guard let lengthM, lengthM > 0 else {
+            return "4D.1 UV 长度：无法计算（缺少连续同面 assigned 点）"
+        }
+        let segmentText = segments.map {
+            String(
+                format: "%@=%.3fm",
+                String($0.surfaceID.uuidString.prefix(8)),
+                $0.lengthM
+            )
+        }.joined(separator: " · ")
+        var text = String(
+            format: "4D.1 UV 长度：%.3f m · %d 段 · %@ · measurementSource=estimatedPlane · measurementVersion=4C",
+            lengthM,
+            segments.count,
+            segmentText
+        )
+        if crossSurfaceTransitions > 0 {
+            text += " · 跨面跳变 \(crossSurfaceTransitions) 段（未混加 UV）"
+        }
+        return text
     }
 
     private static func float3Text(_ value: simd_float3) -> String {
