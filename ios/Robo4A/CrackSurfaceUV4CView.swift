@@ -384,24 +384,19 @@ struct CrackSurfaceUV4CView: View {
 
     private func finishRoomReview() {
         guard capturedRoom != nil else { return }
-        // 官方结果确认后，恢复 ARKit mesh 配置供 raycast 使用。
-        restoreMesh()
-        phase = .ready
-        statusText = "房间确认完成，可拍照映射 UV"
-        coachingText = "请对准裂缝拍照"
-    }
-
-    private func restoreMesh() {
+        // 专家确认：不得重新 run ARWorldTrackingConfiguration，保持 RoomPlan 世界原点。
         guard let arView = arViewReference else { return }
         let beforeCamera = arView.session.currentFrame?.camera.transform.position
         let beforeMesh = Self.meshAnchorCount(arView)
 
-        arView.session.run(Self.meshConfiguration())
+        phase = .ready
+        statusText = "房间确认完成，可拍照映射 UV"
+        coachingText = "请对准裂缝拍照"
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             let afterCamera = arView.session.currentFrame?.camera.transform.position
             let afterMesh = Self.meshAnchorCount(arView)
-            let log = Self.restoreMeshDiagnosticText(
+            let log = Self.finishReviewDiagnosticText(
                 beforeCamera: beforeCamera,
                 beforeMesh: beforeMesh,
                 afterCamera: afterCamera,
@@ -698,7 +693,7 @@ struct CrackSurfaceUV4CView: View {
             .count ?? 0
     }
 
-    private static func restoreMeshDiagnosticText(
+    private static func finishReviewDiagnosticText(
         beforeCamera: SIMD3<Float>?,
         beforeMesh: Int,
         afterCamera: SIMD3<Float>?,
@@ -707,7 +702,7 @@ struct CrackSurfaceUV4CView: View {
         let before = vectorText(beforeCamera)
         let after = vectorText(afterCamera)
         let delta = cameraDeltaText(from: beforeCamera, to: afterCamera)
-        return "restoreMesh 前后：camera before=\(before) mesh=\(beforeMesh) · camera after=\(after) mesh=\(afterMesh) · Δcamera=\(delta)"
+        return "finishRoomReview 前后：camera before=\(before) mesh=\(beforeMesh) · camera after=\(after) mesh=\(afterMesh) · Δcamera=\(delta)"
     }
 
     private static func vectorText(_ value: SIMD3<Float>?) -> String {
