@@ -185,6 +185,14 @@ enum SurfaceUV4C {
             }
             return lines.joined(separator: "\n")
         }
+
+        /// 单份报告截断到指定字符数以内，便于真机导出与累积保存。
+        func clippedText(limit: Int = 1000) -> String {
+            let full = text()
+            guard full.count > limit else { return full }
+            let cut = full.index(full.startIndex, offsetBy: limit)
+            return String(full[..<cut]) + "\n…（已截断至 \(limit) 字符）"
+        }
     }
 
     /// World 点 → Surface-local 坐标（直接使用 surface.transform 的逆矩阵）。

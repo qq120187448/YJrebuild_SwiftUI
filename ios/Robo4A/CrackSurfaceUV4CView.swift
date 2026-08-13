@@ -5,6 +5,8 @@ import simd
 import SwiftUI
 import UIKit
 
+private let roboscan4CReportLogKey = "Robo4C.reportLog"
+
 /// RoomPlan 会话回调桥接（RoomCaptureView/RoomCaptureSession 使用与 ARView 同一个 ARSession）。
 @objc(RoboScan4CScanCoordinator)
 final class RoomPlanSessionCoordinator: NSObject, RoomCaptureSessionDelegate, RoomCaptureViewDelegate, NSCoding {
@@ -130,6 +132,7 @@ struct CrackSurfaceUV4CView: View {
     @State private var roomCaptureFrameTimestamp: TimeInterval?
     @State private var roomCaptureCameraPosition: SIMD3<Float>?
     @State private var meshControl: MeshControl = .baseline
+    @State private var reportLog: [String] = []
 
     var body: some View {
         VStack(spacing: 8) {
@@ -220,7 +223,7 @@ struct CrackSurfaceUV4CView: View {
 
                 if let report {
                     Button("复制报告") {
-                        let full = [report.text(), comparisonText]
+                        let full = [report.clippedText(limit: 1000), comparisonText]
                             .filter { !$0.isEmpty }
                             .joined(separator: "\n")
                         UIPasteboard.general.string = full
@@ -234,6 +237,27 @@ struct CrackSurfaceUV4CView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
+
+            HStack(spacing: 8) {
+                Text("累计日志 \(reportLog.count) 条")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                Button("复制累计日志") {
+                    UIPasteboard.general.string = reportLog.joined(
+                        separator: "\n\n=====\n\n"
+                    )
+                }
+                .buttonStyle(.bordered)
+                .disabled(reportLog.isEmpty)
+
+                Button("清空日志") {
+                    clearReportLog()
+                }
+                .buttonStyle(.bordered)
+                .disabled(reportLog.isEmpty)
+            }
+            .padding(.horizontal)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
@@ -253,7 +277,7 @@ struct CrackSurfaceUV4CView: View {
                     }
 
                     if let report {
-                        Text([report.text(), comparisonText]
+                        Text([report.clippedText(limit: 1000), comparisonText]
                             .filter { !$0.isEmpty }
                             .joined(separator: "\n"))
                             .font(.system(.caption, design: .monospaced))
@@ -273,6 +297,9 @@ struct CrackSurfaceUV4CView: View {
         .navigationTitle("4C Surface UV")
         .onAppear {
             setupCoordinator()
+            reportLog = UserDefaults.standard.stringArray(
+                forKey: roboscan4CReportLogKey
+            ) ?? []
         }
     }
 
@@ -365,8 +392,22 @@ struct CrackSurfaceUV4CView: View {
     }
 
     private func restoreMesh() {
-        if let arView = arViewReference {
-            arView.session.run(Self.meshConfiguration())
+        guard let arView = arViewReference else { return }
+        let beforeCamera = arView.session.currentFrame?.camera.transform.position
+        let beforeMesh = Self.meshAnchorCount(arView)
+
+        arView.session.run(Self.meshConfiguration())
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            let afterCamera = arView.session.currentFrame?.camera.transform.position
+            let afterMesh = Self.meshAnchorCount(arView)
+            let log = Self.restoreMeshDiagnosticText(
+                beforeCamera: beforeCamera,
+                beforeMesh: beforeMesh,
+                afterCamera: afterCamera,
+                afterMesh: afterMesh
+            )
+            self.appendReportLog(log)
         }
     }
 
@@ -444,6 +485,7 @@ struct CrackSurfaceUV4CView: View {
                     comparisonText = compareWithPrevious(surfaceReport)
                     lastReports[scenario] = surfaceReport
                     report = surfaceReport
+                    appendReportLog(surfaceReport.clippedText(limit: 1000))
                     statusText = String(
                         format: "表面分配率 %.1f%% · UV 单位米 · 已解除静止锁定",
                         surfaceReport.assignedRatio * 100
@@ -579,6 +621,17 @@ struct CrackSurfaceUV4CView: View {
         worldAnchors.removeAll()
     }
 
+    private func appendReportLog(_ text: String) {
+        let clipped = String(text.prefix(1000))
+        reportLog.append(clipped)
+        UserDefaults.standard.set(reportLog, forKey: roboscan4CReportLogKey)
+    }
+
+    private func clearReportLog() {
+        reportLog.removeAll()
+        UserDefaults.standard.set(reportLog, forKey: roboscan4CReportLogKey)
+    }
+
     private static func lineEntity(
         from a: SIMD3<Float>,
         to b: SIMD3<Float>,
@@ -637,6 +690,42 @@ struct CrackSurfaceUV4CView: View {
             )
         }
         return "Session 诊断：meshAnchorCount=\(meshAnchorCount) cameraTrackingState=\(trackingState) frameTimestamp=\(timestamp) cameraCenter=\(cameraText) · \(coordinateText)"
+    }
+
+    private static func meshAnchorCount(_ arView: ARView?) -> Int {
+        arView?.session.currentFrame?.anchors
+            .compactMap { $0 as? ARMeshAnchor }
+            .count ?? 0
+    }
+
+    private static func restoreMeshDiagnosticText(
+        beforeCamera: SIMD3<Float>?,
+        beforeMesh: Int,
+        afterCamera: SIMD3<Float>?,
+        afterMesh: Int
+    ) -> String {
+        let before = vectorText(beforeCamera)
+        let after = vectorText(afterCamera)
+        let delta = cameraDeltaText(from: beforeCamera, to: afterCamera)
+        return "restoreMesh 前后：camera before=\(before) mesh=\(beforeMesh) · camera after=\(after) mesh=\(afterMesh) · Δcamera=\(delta)"
+    }
+
+    private static func vectorText(_ value: SIMD3<Float>?) -> String {
+        guard let value else { return "nil" }
+        return String(
+            format: "(%.3f, %.3f, %.3f)",
+            value.x,
+            value.y,
+            value.z
+        )
+    }
+
+    private static func cameraDeltaText(
+        from a: SIMD3<Float>?,
+        to b: SIMD3<Float>?
+    ) -> String {
+        guard let a, let b else { return "-" }
+        return String(format: "%.3fm", simd_distance(a, b))
     }
 
     private static func trackingStateText(
