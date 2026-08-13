@@ -63,66 +63,44 @@ enum CrackCenterlineOverlay {
         for value in grid where value {
             maskPixelCount += 1
         }
-        // 2. 框内自适应稀疏化采样（保连通）：间距随图像尺寸自适应
-        let spacing = max(
-            2,
-            Int(ceil(Double(max(width, height)) / 1024.0)) * 2
-        )
-        var sparse = Set<CrackPoint>()
-        for y in stride(from: 0, to: height, by: spacing) {
-            for x in stride(from: 0, to: width, by: spacing) where grid[y * width + x] {
-                sparse.insert(CrackPoint(x: x, y: y))
-            }
-        }
-
-        // 3. 骨架化：Zhang-Suen 类细化 + 端点回溯剪枝(<30px) + 保留 1~5 条(≥80px)
         var crackConfig = config
-        crackConfig.skeletonMode = "main"
-        crackConfig.minSpurLength = 30
         crackConfig.minSkeletonLength = 80
         crackConfig.topCracks = 7
-        let skeleton = CrackSkeleton.analyzeSparse(
-            points: sparse,
-            spacing: spacing,
-            width: width,
-            height: height,
-            config: crackConfig
-        )
-        // skeletonPoints 只含“剪枝后保留的主裂缝”点集
-        let groups = CrackSkeleton.componentPointsSparse(
-            skeleton.skeletonPoints,
-            spacing: spacing
-        )
 
-        // 4. 每分量 BFS 最长路径 → DP 简化 → 一条折线
+        // 2. 提取连通域，从每个实例轮廓拟合中心线，不使用骨架。
+        let components = CrackSkeleton.componentPoints(
+            grid,
+            width: width,
+            height: height
+        )
         var polylines: [[CrackPoint]] = []
         var samplesPerPolyline: [[CrackPoint]] = []
-        for group in groups {
-            let path = longestPath(in: Set(group), spacing: spacing)
-            guard path.count >= 2 else { continue }
-            let simplified = CrackSkeleton.douglasPeucker(
-                path,
-                epsilon: 1.5
+        for component in components {
+            guard component.count >= 3 else { continue }
+            let centerline = approximateCenterline(
+                from: component,
+                simplifyEpsilonPx: 1.5
             )
-            let length = polylineLength(simplified)
+            guard centerline.count >= 2 else { continue }
+            let length = polylineLength(centerline)
             guard length >= Double(crackConfig.minSkeletonLength) else {
                 continue
             }
-            polylines.append(simplified)
+            polylines.append(centerline)
             samplesPerPolyline.append(
                 CrackSamplePoints.evenlySpaced(
-                    simplified,
+                    centerline,
                     spacingPx: 24,
                     maxPoints: 64
                 )
             )
         }
 
-        // 5. 按长度降序，最多 5 条
+        // 3. 按长度降序，最多 7 条
         let indexed = polylines.indices.sorted {
             polylineLength(polylines[$0]) > polylineLength(polylines[$1])
         }
-        let keptIndices = indexed.prefix(5)
+        let keptIndices = indexed.prefix(crackConfig.topCracks)
         polylines = keptIndices.map { polylines[$0] }
         samplesPerPolyline = keptIndices.map { samplesPerPolyline[$0] }
         let widthStats = contourWidthStats(
@@ -141,13 +119,105 @@ enum CrackCenterlineOverlay {
             samplePointsPerPolyline: samplesPerPolyline,
             samplePoints: flatSamples,
             maskPixelCount: maskPixelCount,
-            sparsePointCount: sparse.count,
-            skeletonPointCount: skeleton.skeletonPoints.count,
-            componentCount: groups.count,
+            sparsePointCount: components.reduce(0) { $0 + $1.count },
+            skeletonPointCount: polylines.reduce(0) { $0 + $1.count },
+            componentCount: components.count,
             totalPixelLength: total,
             longestPixelLength: longest,
             maxWidthPx: widthStats.maxWidthPx,
             averageWidthPx: widthStats.averageWidthPx
+        )
+    }
+
+    /// 用连通域点的 PCA 主轴作为裂缝主方向，把每个横截面两侧轮廓中点连成中心线。
+    private static func approximateCenterline(
+        from points: [CrackPoint],
+        simplifyEpsilonPx: Double
+    ) -> [CrackPoint] {
+        guard points.count >= 3 else { return points }
+        let sample: [CrackPoint]
+        if points.count > 600 {
+            sample = points.enumerated().compactMap { index, point in
+                index % max(1, points.count / 600) == 0 ? point : nil
+            }
+        } else {
+            sample = points
+        }
+        guard !sample.isEmpty else { return [] }
+
+        var centroidX = 0.0
+        var centroidY = 0.0
+        for point in sample {
+            centroidX += Double(point.x)
+            centroidY += Double(point.y)
+        }
+        centroidX /= Double(sample.count)
+        centroidY /= Double(sample.count)
+
+        var xx = 0.0
+        var xy = 0.0
+        var yy = 0.0
+        for point in sample {
+            let dx = Double(point.x) - centroidX
+            let dy = Double(point.y) - centroidY
+            xx += dx * dx
+            xy += dx * dy
+            yy += dy * dy
+        }
+        let angle = 0.5 * atan2(2 * xy, xx - yy)
+        let ux = cos(angle)
+        let uy = sin(angle)
+        let nx = -uy
+        let ny = ux
+
+        var minT = Double.infinity
+        var maxT = -Double.infinity
+        for point in points {
+            let dx = Double(point.x) - centroidX
+            let dy = Double(point.y) - centroidY
+            let t = dx * ux + dy * uy
+            minT = min(minT, t)
+            maxT = max(maxT, t)
+        }
+        guard maxT > minT else { return [] }
+
+        let binCount = min(64, max(8, points.count / 8))
+        let step = (maxT - minT) / Double(binCount)
+        var bins = Array(repeating: [(t: Double, w: Double)](), count: binCount)
+        for point in points {
+            let dx = Double(point.x) - centroidX
+            let dy = Double(point.y) - centroidY
+            let t = dx * ux + dy * uy
+            let w = dx * nx + dy * ny
+            let index = min(binCount - 1, max(0, Int((t - minT) / step)))
+            bins[index].append((t, w))
+        }
+
+        var centers: [CrackPoint] = []
+        for bin in bins {
+            guard !bin.isEmpty else { continue }
+            var minW = Double.infinity
+            var maxW = -Double.infinity
+            var tSum = 0.0
+            for item in bin {
+                minW = min(minW, item.w)
+                maxW = max(maxW, item.w)
+                tSum += item.t
+            }
+            let t = tSum / Double(bin.count)
+            let w = (minW + maxW) * 0.5
+            let x = centroidX + ux * t + nx * w
+            let y = centroidY + uy * t + ny * w
+            centers.append(
+                CrackPoint(
+                    x: Int(x.rounded()),
+                    y: Int(y.rounded())
+                )
+            )
+        }
+        return CrackSkeleton.douglasPeucker(
+            centers,
+            epsilon: simplifyEpsilonPx
         )
     }
 
