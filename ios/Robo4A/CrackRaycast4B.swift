@@ -17,6 +17,9 @@ struct Raycast4BPointResult {
     let projected: CGPoint?
     let errorPx: Double?
     let missReason: String?
+    let raycastResultsCount: Int?
+    let firstRaycastDistance: Double?
+    let raycastAnchorType: String?
 }
 
 // MARK: - 单条折线结果
@@ -171,11 +174,12 @@ enum CrackRaycast4B {
                     x: CGFloat(point.x) * imageToViewScale,
                     y: CGFloat(point.y) * imageToViewScale
                 )
-                guard let result = arView.raycast(
+                let raycastResults = arView.raycast(
                     from: viewPoint,
                     allowing: .estimatedPlane,
                     alignment: .any
-                ).first else {
+                )
+                guard let result = raycastResults.first else {
                     missReasons["noRaycastResult", default: 0] += 1
                     points.append(
                         Raycast4BPointResult(
@@ -183,7 +187,10 @@ enum CrackRaycast4B {
                             world: nil,
                             projected: nil,
                             errorPx: nil,
-                            missReason: "noRaycastResult"
+                            missReason: "noRaycastResult",
+                            raycastResultsCount: 0,
+                            firstRaycastDistance: nil,
+                            raycastAnchorType: nil
                         )
                     )
                     continue
@@ -192,6 +199,11 @@ enum CrackRaycast4B {
                 hitCount += 1
                 polyHits += 1
                 let world = result.worldTransform.position
+                let cameraPosition = arView.session.currentFrame?.camera.transform.position
+                let firstDistance = cameraPosition.map {
+                    Double(simd_distance(world, $0))
+                }
+                let raycastAnchorType = Self.anchorTypeName(result.anchor)
 
                 guard let projected = arView.project(world) else {
                     missReasons["projectNil", default: 0] += 1
@@ -201,7 +213,10 @@ enum CrackRaycast4B {
                             world: world,
                             projected: nil,
                             errorPx: nil,
-                            missReason: "projectNil"
+                            missReason: "projectNil",
+                            raycastResultsCount: raycastResults.count,
+                            firstRaycastDistance: firstDistance,
+                            raycastAnchorType: raycastAnchorType
                         )
                     )
                     continue
@@ -220,7 +235,10 @@ enum CrackRaycast4B {
                         world: world,
                         projected: projected,
                         errorPx: error,
-                        missReason: nil
+                        missReason: nil,
+                        raycastResultsCount: raycastResults.count,
+                        firstRaycastDistance: firstDistance,
+                        raycastAnchorType: raycastAnchorType
                     )
                 )
             }
@@ -280,5 +298,15 @@ enum CrackRaycast4B {
                 raycastStart.timeIntervalSince($0) * 1000
             }
         )
+    }
+
+    private static func anchorTypeName(_ anchor: ARAnchor?) -> String {
+        guard let anchor else { return "nil" }
+        if anchor is ARPlaneAnchor { return "ARPlaneAnchor" }
+        if anchor is ARMeshAnchor { return "ARMeshAnchor" }
+        if anchor is ARImageAnchor { return "ARImageAnchor" }
+        if anchor is ARFaceAnchor { return "ARFaceAnchor" }
+        if anchor is ARObjectAnchor { return "ARObjectAnchor" }
+        return String(describing: type(of: anchor))
     }
 }

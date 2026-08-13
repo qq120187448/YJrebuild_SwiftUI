@@ -7,6 +7,26 @@ import simd
 /// identifier / transform / dimensions，不实现任何自研 3D 几何引擎。
 enum SurfaceUV4C {
 
+    struct SurfaceCandidate {
+        let identifier: UUID
+        let category: CapturedRoom.Surface.Category?
+        let local: SIMD3<Float>
+        let dimensions: simd_float3
+        let planeDistance: Float
+        let insideX: Bool
+        let insideY: Bool
+        let insideZ: Bool
+        let insideBounds: Bool
+        let score: Float
+    }
+
+    struct SurfaceInventoryItem {
+        let identifier: UUID
+        let category: CapturedRoom.Surface.Category?
+        let dimensions: simd_float3
+        let transform: simd_float4x4
+    }
+
     struct MappedPoint {
         let source: CrackPoint
         let world: SIMD3<Float>?
@@ -16,6 +36,10 @@ enum SurfaceUV4C {
         let v: Double?
         let localZ: Double?
         let status: String
+        let raycastResultsCount: Int?
+        let firstRaycastDistance: Double?
+        let raycastAnchorType: String?
+        let candidates: [SurfaceCandidate]
     }
 
     struct PolylineUV {
@@ -44,7 +68,8 @@ enum SurfaceUV4C {
         let totalAssigned: Int
         let totalWorldHits: Int
         let captureToRaycastDelayMs: Double?
-        let diagnostics: [String]
+        let surfaceInventory: [SurfaceInventoryItem]
+        let sessionDiagnosticText: String?
 
         var assignedRatio: Double {
             totalWorldHits == 0 ? 0 : Double(totalAssigned) / Double(totalWorldHits)
@@ -60,6 +85,15 @@ enum SurfaceUV4C {
             lines.append(
                 "表面：总数 \(surfaceTotal)（wall \(surfaceWalls) · floor \(surfaceFloors) · other \(surfaceOthers)）"
             )
+            lines.append("Surface 清单：")
+            for item in surfaceInventory {
+                lines.append(
+                    "  \(categoryName(item.category)) \(item.identifier.uuidString.prefix(8)) dims=(\(Self.float3Text(item.dimensions))) transform=\(Self.transformText(item.transform))"
+                )
+            }
+            if let sessionDiagnosticText {
+                lines.append(sessionDiagnosticText)
+            }
             for polyline in polylines {
                 lines.append("裂缝 \(polyline.index + 1)：")
                 lines.append(
@@ -103,9 +137,52 @@ enum SurfaceUV4C {
                     assignedRatio * 100
                 )
             )
-            if !diagnostics.isEmpty {
-                lines.append("未分配诊断（最近表面）：")
-                lines.append(contentsOf: diagnostics)
+            let noSurfacePoints = polylines.flatMap { polyline in
+                polyline.points.enumerated().compactMap { index, point -> (Int, Int, MappedPoint)? in
+                    point.status == "noSurface" ? (polyline.index, index, point) : nil
+                }
+            }
+            if !noSurfacePoints.isEmpty {
+                lines.append("未分配诊断（全量 Surface 候选）：")
+                for (polylineIndex, pointIndex, point) in noSurfacePoints {
+                    guard let world = point.world else { continue }
+                    let raycastInfo = Self.raycastInfoText(point)
+                    lines.append(
+                        String(
+                            format: "[裂缝%d·点%d] world=(%.3f, %.3f, %.3f) %@",
+                            polylineIndex + 1,
+                            pointIndex + 1,
+                            world.x,
+                            world.y,
+                            world.z,
+                            raycastInfo
+                        )
+                    )
+                    if point.candidates.isEmpty {
+                        lines.append("  （无候选 Surface）")
+                    }
+                    for candidate in point.candidates {
+                        lines.append(
+                            String(
+                                format: "  %@ %@ local=(%.3f, %.3f, %.3f) dims=(%.2f, %.2f, %.2f) planeDistance=%.3f insideX=%@ insideY=%@ insideZ=%@ insideBounds=%@ score=%.3f",
+                                categoryName(candidate.category),
+                                String(candidate.identifier.uuidString.prefix(8)),
+                                candidate.local.x,
+                                candidate.local.y,
+                                candidate.local.z,
+                                candidate.dimensions.x,
+                                candidate.dimensions.y,
+                                candidate.dimensions.z,
+                                candidate.planeDistance,
+                                candidate.insideX ? "true" : "false",
+                                candidate.insideY ? "true" : "false",
+                                candidate.insideZ ? "true" : "false",
+                                candidate.insideBounds ? "true" : "false",
+                                candidate.score
+                            )
+                        )
+                    }
+                }
             }
             return lines.joined(separator: "\n")
         }
@@ -154,15 +231,24 @@ enum SurfaceUV4C {
     static func buildReport(
         scenario: String,
         raycast: Raycast4BReport,
-        room: CapturedRoom
+        room: CapturedRoom,
+        diagnosticCategories: [CapturedRoom.Surface.Category] = [.wall, .floor],
+        sessionDiagnosticText: String? = nil
     ) -> Report {
         let surfaces =
             room.walls + room.floors + room.doors + room.windows + room.openings
+        let surfaceInventory = surfaces.map {
+            SurfaceInventoryItem(
+                identifier: $0.identifier,
+                category: $0.category,
+                dimensions: $0.dimensions,
+                transform: $0.transform
+            )
+        }
         var polylines: [PolylineUV] = []
         var totalSamples = 0
         var totalAssigned = 0
         var totalWorldHits = 0
-        var diagnostics: [String] = []
 
         for polyline in raycast.polylines {
             var points: [MappedPoint] = []
@@ -182,12 +268,21 @@ enum SurfaceUV4C {
                             u: nil,
                             v: nil,
                             localZ: nil,
-                            status: "miss"
+                            status: "miss",
+                            raycastResultsCount: point.raycastResultsCount,
+                            firstRaycastDistance: point.firstRaycastDistance,
+                            raycastAnchorType: point.raycastAnchorType,
+                            candidates: []
                         )
                     )
                     continue
                 }
                 totalWorldHits += 1
+                let candidates = candidateDiagnostics(
+                    world: world,
+                    surfaces: surfaces,
+                    allowedCategories: diagnosticCategories
+                )
                 if let mapped = map(world: world, surfaces: surfaces) {
                     assignedCount += 1
                     totalAssigned += 1
@@ -204,41 +299,14 @@ enum SurfaceUV4C {
                             u: u,
                             v: v,
                             localZ: Double(mapped.local.z),
-                            status: "assigned"
+                            status: "assigned",
+                            raycastResultsCount: point.raycastResultsCount,
+                            firstRaycastDistance: point.firstRaycastDistance,
+                            raycastAnchorType: point.raycastAnchorType,
+                            candidates: candidates
                         )
                     )
                 } else {
-                    if diagnostics.count < 3 {
-                        var bestSurface: CapturedRoom.Surface?
-                        var bestLocal = SIMD3<Float>(0, 0, 0)
-                        var bestZ = Float.greatestFiniteMagnitude
-                        for surface in surfaces {
-                            let local = surfaceLocal(world, surface: surface)
-                            if abs(local.z) < bestZ {
-                                bestZ = abs(local.z)
-                                bestSurface = surface
-                                bestLocal = local
-                            }
-                        }
-                        if let bestSurface {
-                            let shortID = bestSurface.identifier.uuidString.prefix(8)
-                            diagnostics.append(
-                                String(
-                                    format: "[裂缝%d·点%d] 最近 %@ %@ local=(%.3f, %.3f, %.3f) dims=(%.2f, %.2f, %.2f)",
-                                    polyline.index + 1,
-                                    pointIndex + 1,
-                                    categoryName(bestSurface.category),
-                                    String(shortID),
-                                    bestLocal.x,
-                                    bestLocal.y,
-                                    bestLocal.z,
-                                    bestSurface.dimensions.x,
-                                    bestSurface.dimensions.y,
-                                    bestSurface.dimensions.z
-                                )
-                            )
-                        }
-                    }
                     points.append(
                         MappedPoint(
                             source: point.source,
@@ -248,7 +316,11 @@ enum SurfaceUV4C {
                             u: nil,
                             v: nil,
                             localZ: nil,
-                            status: "noSurface"
+                            status: "noSurface",
+                            raycastResultsCount: point.raycastResultsCount,
+                            firstRaycastDistance: point.firstRaycastDistance,
+                            raycastAnchorType: point.raycastAnchorType,
+                            candidates: candidates
                         )
                     )
                 }
@@ -283,7 +355,76 @@ enum SurfaceUV4C {
             totalAssigned: totalAssigned,
             totalWorldHits: totalWorldHits,
             captureToRaycastDelayMs: raycast.captureToRaycastDelayMs,
-            diagnostics: diagnostics
+            surfaceInventory: surfaceInventory,
+            sessionDiagnosticText: sessionDiagnosticText
+        )
+    }
+
+    static func candidateDiagnostics(
+        world: SIMD3<Float>,
+        surfaces: [CapturedRoom.Surface],
+        allowedCategories: [CapturedRoom.Surface.Category]?
+    ) -> [SurfaceCandidate] {
+        let candidateSurfaces = surfaces.filter { surface in
+            guard let allowedCategories else { return true }
+            guard let category = surface.category else { return false }
+            return allowedCategories.contains(category)
+        }
+        return candidateSurfaces.map { surface in
+            let local = surfaceLocal(world, surface: surface)
+            let halfX = surface.dimensions.x * 0.5
+            let halfY = surface.dimensions.y * 0.5
+            let halfZ = surface.dimensions.z * 0.5
+            let insideX = abs(local.x) <= halfX
+            let insideY = abs(local.y) <= halfY
+            let insideZ = abs(local.z) <= halfZ
+            let insideBounds = insideX && insideY && insideZ
+            let planeDistance = abs(local.z)
+            return SurfaceCandidate(
+                identifier: surface.identifier,
+                category: surface.category,
+                local: local,
+                dimensions: surface.dimensions,
+                planeDistance: planeDistance,
+                insideX: insideX,
+                insideY: insideY,
+                insideZ: insideZ,
+                insideBounds: insideBounds,
+                score: planeDistance
+            )
+        }
+        .sorted { $0.planeDistance < $1.planeDistance }
+    }
+
+    private static func raycastInfoText(_ point: MappedPoint) -> String {
+        let count = point.raycastResultsCount.map(String.init) ?? "-"
+        let distance = point.firstRaycastDistance.map {
+            String(format: "%.3f m", $0)
+        } ?? "-"
+        let anchor = point.raycastAnchorType ?? "-"
+        return "raycastResults=\(count) firstDistance=\(distance) anchor=\(anchor)"
+    }
+
+    private static func float3Text(_ value: simd_float3) -> String {
+        String(
+            format: "%.2f, %.2f, %.2f",
+            value.x,
+            value.y,
+            value.z
+        )
+    }
+
+    private static func transformText(_ value: simd_float4x4) -> String {
+        let c0 = value.columns.0
+        let c1 = value.columns.1
+        let c2 = value.columns.2
+        let c3 = value.columns.3
+        return String(
+            format: "[%.3f,%.3f,%.3f,%.3f; %.3f,%.3f,%.3f,%.3f; %.3f,%.3f,%.3f,%.3f; %.3f,%.3f,%.3f,%.3f]",
+            c0.x, c0.y, c0.z, c0.w,
+            c1.x, c1.y, c1.z, c1.w,
+            c2.x, c2.y, c2.z, c2.w,
+            c3.x, c3.y, c3.z, c3.w
         )
     }
 

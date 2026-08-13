@@ -3,17 +3,16 @@ import RoomPlan
 import SwiftUI
 import UIKit
 
-/// RoomPlan 扫描 UI A/B/C/D 真机实验页。
+/// RoomPlan 扫描 UI A/B/C 真机实验页。
 ///
-/// 目的：隔离“共享 ARSession”与“预先配置 Mesh/Plane”两个变量，
+/// 目的：隔离“全新 ARSession / 共享 ARSession / 共享 ARSession + sceneReconstruction”三个变量，
 /// 确认此前集成版“透明面层”的来源。每组测完必须彻底杀掉 App 再重开。
 struct RoomPlanUIAxExperimentView: View {
 
     enum Mode: String, CaseIterable, Identifiable {
-        case a = "A 基座"
-        case b = "B 集成"
-        case c = "C 干净"
-        case d = "D 共享"
+        case a = "A 独立"
+        case b = "B 共享"
+        case c = "C 共享+Mesh"
 
         var id: String { rawValue }
 
@@ -22,12 +21,18 @@ struct RoomPlanUIAxExperimentView: View {
             case .a:
                 return "全新 ARSession（RoomCaptureView 内部）· 无预配置"
             case .b:
-                return "共享 ARSession · 先 run Mesh/Plane · 再 RoomCaptureView"
-            case .c:
-                return "全新 ARSession（RoomCaptureView 内部）· 无预配置"
-            case .d:
                 return "共享 ARSession · 不预配置 Mesh/Plane"
+            case .c:
+                return "共享 ARSession · 先 run Mesh/Plane · 再 RoomCaptureView"
             }
+        }
+
+        var usesSharedSession: Bool {
+            self == .b || self == .c
+        }
+
+        var preRunsSceneReconstruction: Bool {
+            self == .c
         }
     }
 
@@ -132,7 +137,7 @@ struct RoomPlanUIAxExperimentView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
         }
-        .navigationTitle("4C UI A/B/C/D")
+        .navigationTitle("4C UI A/B/C")
         .onAppear {
             mode = Mode(rawValue: storedMode) ?? .a
         }
@@ -148,7 +153,7 @@ struct RoomPlanUIAxExperimentView: View {
         coachingText = "—"
         diagnosticText = "组 \(mode.rawValue)：会话创建中…"
 
-        if mode == .b {
+        if mode == .c {
             // 复现 4C 集成版（c540d6e）：先跑 ARKit mesh/plane 配置。
             let configuration = ARWorldTrackingConfiguration()
             if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
@@ -160,7 +165,7 @@ struct RoomPlanUIAxExperimentView: View {
         }
 
         Task { @MainActor in
-            if mode == .b {
+            if mode == .c {
                 // 让 mesh 配置先生效，再交给 RoomCaptureView（贴近集成版时序）。
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
@@ -177,14 +182,14 @@ struct RoomPlanUIAxExperimentView: View {
     }
 }
 
-/// 运行时自检：显示当前组实际使用的会话来源，防止“四组共用同一实例”类低级错误。
+/// 运行时自检：显示当前组实际使用的会话来源，防止“多组共用同一实例”类低级错误。
 private func axDiagnosticText(
     mode: RoomPlanUIAxExperimentView.Mode,
     captureView: RoomCaptureView,
     sharedSession: ARSession
 ) -> String {
-    let usesExternal = (mode == .b || mode == .d)
-    let meshPreRun = (mode == .b)
+    let usesExternal = mode.usesSharedSession
+    let meshPreRun = mode.preRunsSceneReconstruction
     let sessionIsShared = captureView.captureSession.arSession === sharedSession
     return "组 \(mode.rawValue) · 外部会话 \(usesExternal ? "是" : "否") · Mesh预配置 \(meshPreRun ? "是" : "否") · 同一实例 \(sessionIsShared ? "是" : "否")"
 }
@@ -201,10 +206,10 @@ private struct RoomCaptureViewAx: UIViewRepresentable {
     func makeUIView(context: Context) -> RoomCaptureView {
         let view: RoomCaptureView
         switch mode {
-        case .a, .c:
+        case .a:
             // 全新 ARSession（RoomCaptureView 内部创建）。
             view = RoomCaptureView(frame: .zero)
-        case .b, .d:
+        case .b, .c:
             // 共享 ARSession。
             view = RoomCaptureView(frame: .zero, arSession: sharedSession)
         }
@@ -212,7 +217,7 @@ private struct RoomCaptureViewAx: UIViewRepresentable {
         view.delegate = context.coordinator
         context.coordinator.createdMode = mode
         context.coordinator.createdSharedSession = sharedSession
-        context.coordinator.createdMeshPreRun = (mode == .b)
+        context.coordinator.createdMeshPreRun = mode.preRunsSceneReconstruction
         let diagnostic = axDiagnosticText(
             mode: mode,
             captureView: view,

@@ -9,6 +9,7 @@ import UIKit
 @objc(RoboScan4CScanCoordinator)
 final class RoomPlanSessionCoordinator: NSObject, RoomCaptureSessionDelegate, RoomCaptureViewDelegate, NSCoding {
     var onDidEnd: ((CapturedRoomData, Error?) -> Void)?
+    var onDidPresent: ((CapturedRoom, Error?) -> Void)?
     var onDidFail: ((Error) -> Void)?
     var onInstruction: ((String) -> Void)?
     /// 手动结束扫描后置 true，避免 dismantle 重复 stop。
@@ -53,18 +54,20 @@ final class RoomPlanSessionCoordinator: NSObject, RoomCaptureSessionDelegate, Ro
         onInstruction?(Self.coachingText(for: instruction))
     }
 
-    /// 不展示框架自带的处理结果页（我们自己用 RoomBuilder 构建并自绘 UI）。
+    /// 使用框架自带处理结果页：官方 mini room 由 RoomCaptureView 展示，不自建几何渲染。
     func captureView(
         shouldPresent roomDataForProcessing: CapturedRoomData,
         error: (any Error)?
     ) -> Bool {
-        false
+        true
     }
 
     func captureView(
         didPresent processedResult: CapturedRoom,
         error: (any Error)?
-    ) {}
+    ) {
+        onDidPresent?(processedResult, error)
+    }
 
     /// Apple 官方引导指令 → 自定义中文文案。
     private static func coachingText(
@@ -96,6 +99,7 @@ struct CrackSurfaceUV4CView: View {
     private enum Phase: Equatable {
         case idle
         case scanning
+        case reviewing
         case processing
         case ready
     }
@@ -116,6 +120,8 @@ struct CrackSurfaceUV4CView: View {
     @State private var comparisonText = ""
     @State private var lastReports: [String: SurfaceUV4C.Report] = [:]
     @State private var worldAnchors: [AnchorEntity] = []
+    @State private var roomCaptureFrameTimestamp: TimeInterval?
+    @State private var roomCaptureCameraPosition: SIMD3<Float>?
 
     var body: some View {
         VStack(spacing: 8) {
@@ -125,10 +131,10 @@ struct CrackSurfaceUV4CView: View {
                 ARViewContainer4C(session: sharedSession) { arView in
                     arViewReference = arView
                 }
-                .opacity(phase == .scanning ? 0 : 1)
+                .opacity((phase == .scanning || phase == .reviewing) ? 0 : 1)
 
                 // 官方 RoomPlan 扫描视图：自带引导、进度与底部 3D 模型（isModelEnabled 默认 true）。
-                if phase == .scanning {
+                if phase == .scanning || phase == .reviewing {
                     RoomCaptureView4C(
                         session: sharedSession,
                         coordinator: coordinator
@@ -177,6 +183,11 @@ struct CrackSurfaceUV4CView: View {
                     Button("结束扫描") {
                         stopScan()
                     }
+                } else if phase == .reviewing {
+                    Button("完成房间确认") {
+                        finishRoomReview()
+                    }
+                    .disabled(capturedRoom == nil)
                 } else if phase != .processing {
                     Button("开始扫描") {
                         startScan()
@@ -259,22 +270,24 @@ struct CrackSurfaceUV4CView: View {
                 coachingText = "扫描失败"
                 return
             }
-            phase = .processing
-            statusText = "RoomPlan 处理中…"
-            coachingText = "正在生成房间模型…"
-            Task {
-                do {
-                    let room = try await RoomBuilder(options: [])
-                        .capturedRoom(from: data)
-                    capturedRoom = room
-                    phase = .ready
-                    statusText =
-                        "扫描完成：wall \(room.walls.count) · floor \(room.floors.count) · other \(room.doors.count + room.windows.count + room.openings.count)，可拍照映射"
-                } catch {
-                    statusText = "CapturedRoom 构建失败：\(error.localizedDescription)"
-                    phase = .idle
-                }
+            phase = .reviewing
+            statusText = "扫描已停止，正在展示官方 3D 房间结果…"
+            coachingText = "请查看官方 3D 结果并确认"
+            captureSessionSnapshot()
+        }
+        coordinator.onDidPresent = { room, error in
+            if let error {
+                statusText = "官方结果展示失败：\(error.localizedDescription)"
+                phase = .idle
+                coachingText = "扫描失败"
+                return
             }
+            capturedRoom = room
+            phase = .reviewing
+            statusText =
+                "官方结果已生成：wall \(room.walls.count) · floor \(room.floors.count) · other \(room.doors.count + room.windows.count + room.openings.count)，请确认后进入测量"
+            coachingText = "确认房间无误后点“完成房间确认”"
+            captureSessionSnapshot()
         }
         coordinator.onDidFail = { error in
             statusText = "RoomPlan 失败：\(error.localizedDescription)"
@@ -311,17 +324,30 @@ struct CrackSurfaceUV4CView: View {
             view.captureSession.stop(pauseARSession: false)
             coordinator.scanStopped = true
         }
-        phase = .processing
-        coachingText = "正在生成房间模型…"
-        statusText = "RoomPlan 处理中…"
-        // RoomPlan 已停止，恢复 ARKit mesh 配置，供 raycast 使用。
+        phase = .reviewing
+        coachingText = "正在展示官方 3D 房间结果…"
+        statusText = "RoomPlan 官方结果生成中，请稍候"
+    }
+
+    private func finishRoomReview() {
+        guard capturedRoom != nil else { return }
+        // 官方结果确认后，恢复 ARKit mesh 配置供 raycast 使用。
         restoreMesh()
+        phase = .ready
+        statusText = "房间确认完成，可拍照映射 UV"
+        coachingText = "请对准裂缝拍照"
     }
 
     private func restoreMesh() {
         if let arView = arViewReference {
             arView.session.run(Self.meshConfiguration())
         }
+    }
+
+    private func captureSessionSnapshot() {
+        guard let frame = arViewReference?.session.currentFrame else { return }
+        roomCaptureFrameTimestamp = frame.timestamp
+        roomCaptureCameraPosition = frame.camera.transform.position
     }
 
     // MARK: - 测量
@@ -377,10 +403,16 @@ struct CrackSurfaceUV4CView: View {
                         imageToViewScale: scale,
                         captureTime: captureTime
                     )
+                    let sessionDiagnosticText = Self.sessionDiagnosticText(
+                        arView: arView,
+                        roomCaptureFrameTimestamp: roomCaptureFrameTimestamp,
+                        roomCaptureCameraPosition: roomCaptureCameraPosition
+                    )
                     let surfaceReport = SurfaceUV4C.buildReport(
                         scenario: scenario,
                         raycast: raycast,
-                        room: room
+                        room: room,
+                        sessionDiagnosticText: sessionDiagnosticText
                     )
                     addWorldVisualization(arView: arView, report: raycast)
                     comparisonText = compareWithPrevious(surfaceReport)
@@ -420,29 +452,55 @@ struct CrackSurfaceUV4CView: View {
         for index in 0..<count {
             let a = previous.polylines[index]
             let b = report.polylines[index]
-            let idSame = a.surfaceID == b.surfaceID
-            var du = 0.0
-            var dv = 0.0
-            var pairs = 0
-            let pairCount = min(a.uvPoints.count, b.uvPoints.count)
-            for j in 0..<pairCount {
-                du += abs(a.uvPoints[j].u - b.uvPoints[j].u)
-                dv += abs(a.uvPoints[j].v - b.uvPoints[j].v)
-                pairs += 1
-            }
-            if pairs > 0 {
-                du /= Double(pairs)
-                dv /= Double(pairs)
-            }
-            lines.append(
-                String(
-                    format: "[%d] surfaceID 一致：%@ · 平均 |Δu| = %.4f m · |Δv| = %.4f m",
-                    index + 1,
-                    idSame ? "✓" : "✗",
-                    du,
-                    dv
+            let bothAssigned =
+                a.surfaceID != nil && b.surfaceID != nil
+                && !a.uvPoints.isEmpty && !b.uvPoints.isEmpty
+            if bothAssigned {
+                let idSame = a.surfaceID == b.surfaceID
+                var du = 0.0
+                var dv = 0.0
+                var pairs = 0
+                let pairCount = min(a.uvPoints.count, b.uvPoints.count)
+                for j in 0..<pairCount {
+                    du += abs(a.uvPoints[j].u - b.uvPoints[j].u)
+                    dv += abs(a.uvPoints[j].v - b.uvPoints[j].v)
+                    pairs += 1
+                }
+                if pairs > 0 {
+                    du /= Double(pairs)
+                    dv /= Double(pairs)
+                }
+                lines.append(
+                    String(
+                        format: "[%d] surfaceID 一致：%@ · 平均 |Δu| = %.4f m · |Δv| = %.4f m",
+                        index + 1,
+                        idSame ? "✓" : "✗",
+                        du,
+                        dv
+                    )
                 )
-            )
+            } else {
+                var worldDelta = 0.0
+                var worldPairs = 0
+                let pointCount = min(a.points.count, b.points.count)
+                for j in 0..<pointCount {
+                    guard let wa = a.points[j].world,
+                          let wb = b.points[j].world else { continue }
+                    worldDelta += Double(simd_distance(wa, wb))
+                    worldPairs += 1
+                }
+                let averageWorldDelta = worldPairs == 0
+                    ? 0
+                    : worldDelta / Double(worldPairs)
+                lines.append(
+                    String(
+                        format: "[%d] surfaceID 不可比（至少一侧 noSurface） · 平均 |Δworld| = %.4f m · 可比点 %d",
+                        index + 1,
+                        averageWorldDelta,
+                        worldPairs
+                    )
+                )
+            }
         }
         return lines.joined(separator: "\n")
     }
@@ -516,6 +574,59 @@ struct CrackSurfaceUV4CView: View {
             to: direction
         )
         return entity
+    }
+
+    private static func sessionDiagnosticText(
+        arView: ARView,
+        roomCaptureFrameTimestamp: TimeInterval?,
+        roomCaptureCameraPosition: SIMD3<Float>?
+    ) -> String {
+        let frame = arView.session.currentFrame
+        let meshAnchorCount = frame?.anchors
+            .compactMap { $0 as? ARMeshAnchor }
+            .count ?? 0
+        let trackingState = Self.trackingStateText(frame?.camera.trackingState)
+        let timestamp = frame?.timestamp ?? 0
+        var cameraText = "-"
+        if let cameraTransform = frame?.camera.transform {
+            let position = cameraTransform.position
+            cameraText = String(
+                format: "(%.3f, %.3f, %.3f)",
+                position.x,
+                position.y,
+                position.z
+            )
+        }
+        var coordinateText = "没有 RoomPlan 完成时快照"
+        if let captureTimestamp = roomCaptureFrameTimestamp,
+           let capturePosition = roomCaptureCameraPosition,
+           let cameraTransform = frame?.camera.transform {
+            let deltaTime = timestamp - captureTimestamp
+            let deltaPosition = cameraTransform.position - capturePosition
+            let deltaLength = simd_length(deltaPosition)
+            coordinateText = String(
+                format: "capture→measure Δt=%.3fs Δcam=%.3fm",
+                deltaTime,
+                deltaLength
+            )
+        }
+        return "Session 诊断：meshAnchorCount=\(meshAnchorCount) cameraTrackingState=\(trackingState) frameTimestamp=\(timestamp) cameraCenter=\(cameraText) · \(coordinateText)"
+    }
+
+    private static func trackingStateText(
+        _ state: ARCamera.TrackingState?
+    ) -> String {
+        guard let state else { return "nil" }
+        switch state {
+        case .normal:
+            return "normal"
+        case .limited:
+            return "limited"
+        case .notAvailable:
+            return "notAvailable"
+        @unknown default:
+            return "unknown"
+        }
     }
 
     static func meshConfiguration() -> ARWorldTrackingConfiguration {
