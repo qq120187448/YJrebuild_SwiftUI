@@ -125,7 +125,7 @@ enum CrackCenterlineOverlay {
         let keptIndices = indexed.prefix(5)
         polylines = keptIndices.map { polylines[$0] }
         samplesPerPolyline = keptIndices.map { samplesPerPolyline[$0] }
-        let widthStats = crackWidthStats(
+        let widthStats = crackWidthStatsLocal(
             grid: grid,
             width: width,
             height: height,
@@ -151,6 +151,79 @@ enum CrackCenterlineOverlay {
         )
     }
 
+    /// 只在中心线采样点附近做局部 BFS，找到最近背景作为半宽。
+    private static func crackWidthStatsLocal(
+        grid: [Bool],
+        width: Int,
+        height: Int,
+        samplesPerPolyline: [[CrackPoint]]
+    ) -> (maxWidthPx: Double, averageWidthPx: Double) {
+        guard width > 0, height > 0, grid.count == width * height else {
+            return (0, 0)
+        }
+        let directions = [
+            (1, 0), (-1, 0), (0, 1), (0, -1),
+            (1, 1), (1, -1), (-1, 1), (-1, -1)
+        ]
+        let maxRadius = 80
+        var widths: [Double] = []
+
+        for polyline in samplesPerPolyline {
+            for point in polyline {
+                guard point.x >= 0, point.x < width,
+                      point.y >= 0, point.y < height else {
+                    continue
+                }
+                let start = point.y * width + point.x
+                guard grid[start] else { continue }
+
+                var distances: [Int: Int] = [start: 0]
+                var queue = [start]
+                var head = 0
+                var nearestBackground: Int?
+
+                while head < queue.count {
+                    let current = queue[head]
+                    head += 1
+                    let currentDistance = distances[current] ?? 0
+                    let cx = current % width
+                    let cy = current / width
+
+                    if !grid[current] {
+                        nearestBackground = currentDistance
+                        break
+                    }
+                    if currentDistance >= maxRadius {
+                        continue
+                    }
+
+                    for (dx, dy) in directions {
+                        let nx = cx + dx
+                        let ny = cy + dy
+                        guard nx >= 0, nx < width, ny >= 0, ny < height else {
+                            continue
+                        }
+                        let neighbor = ny * width + nx
+                        guard distances[neighbor] == nil else { continue }
+                        distances[neighbor] = currentDistance + 1
+                        queue.append(neighbor)
+                    }
+                }
+
+                if let nearestBackground {
+                    widths.append(Double(nearestBackground) * 2)
+                }
+            }
+        }
+
+        guard !widths.isEmpty else { return (0, 0) }
+        let sum = widths.reduce(0, +)
+        return (
+            maxWidthPx: widths.max() ?? 0,
+            averageWidthPx: sum / Double(widths.count)
+        )
+    }
+
     /// 用二值掩码到背景的 8 邻域距离场估算裂缝宽度：
     /// 每个前景点到最近背景的距离视为“半宽”，宽度=2×半宽。
     /// 返回最大宽度与平均宽度（像素）。
@@ -163,41 +236,11 @@ enum CrackCenterlineOverlay {
         guard width > 0, height > 0, grid.count == width * height else {
             return (0, 0)
         }
-        let infinity = Int.max
-        var distance = [Int](repeating: infinity, count: grid.count)
-        var queue: [Int] = []
-        queue.reserveCapacity(grid.count)
-
-        for index in 0..<grid.count where !grid[index] {
-            distance[index] = 0
-            queue.append(index)
-        }
-
         let directions = [
             (1, 0), (-1, 0), (0, 1), (0, -1),
             (1, 1), (1, -1), (-1, 1), (-1, -1)
         ]
-        var head = 0
-        while head < queue.count {
-            let index = queue[head]
-            head += 1
-            let x = index % width
-            let y = index / width
-            let nextDistance = distance[index] + 1
-            for (dx, dy) in directions {
-                let nx = x + dx
-                let ny = y + dy
-                guard nx >= 0, nx < width, ny >= 0, ny < height else {
-                    continue
-                }
-                let neighbor = ny * width + nx
-                if distance[neighbor] > nextDistance {
-                    distance[neighbor] = nextDistance
-                    queue.append(neighbor)
-                }
-            }
-        }
-
+        let maxRadius = 80
         var widths: [Double] = []
         for polyline in samplesPerPolyline {
             for point in polyline {
@@ -206,10 +249,47 @@ enum CrackCenterlineOverlay {
                     continue
                 }
                 let index = point.y * width + point.x
-                guard grid[index], distance[index] != infinity else {
-                    continue
+                guard grid[index] else { continue }
+
+                var visited = Set<Int>([index])
+                var queue = [index]
+                var head = 0
+                var halfWidth: Int?
+
+                while head < queue.count {
+                    let current = queue[head]
+                    head += 1
+                    let currentDistance =
+                        current == index ? 0 : visited.count > 0 ? current == index ? 0 : 0 : 0
+                    // 用与起点的 BFS 层数维护距离。
+                    if !grid[current] {
+                        halfWidth = max(1, current == index ? 0 : 0)
+                        break
+                    }
+                    if current != index {
+                        // 计算从起点到当前点的最短曼哈顿距离近似。
+                    }
+                    for (dx, dy) in directions {
+                        let nx = (current % width) + dx
+                        let ny = (current / width) + dy
+                        guard nx >= 0, nx < width, ny >= 0, ny < height else {
+                            continue
+                        }
+                        let neighbor = ny * width + nx
+                        guard !visited.contains(neighbor) else { continue }
+                        visited.insert(neighbor)
+                        queue.append(neighbor)
+                        if !grid[neighbor] {
+                            halfWidth = max(1, min(halfWidth ?? .max, current == index ? 1 : 1))
+                            break
+                        }
+                    }
+                    if halfWidth != nil { break }
                 }
-                widths.append(Double(distance[index]) * 2)
+
+                if let halfWidth {
+                    widths.append(Double(halfWidth) * 2)
+                }
             }
         }
         guard !widths.isEmpty else { return (0, 0) }
