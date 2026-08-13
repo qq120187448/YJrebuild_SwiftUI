@@ -92,8 +92,8 @@ enum SurfaceUV4C {
             if let sessionDiagnosticText {
                 lines.append(sessionDiagnosticText)
             }
-            lines.append(Self.raycastTargetSummaryText(raycastTargetSummary))
-            lines.append(Self.thresholdRatesText(thresholdRates))
+            lines.append(SurfaceUV4C.raycastTargetSummaryText(raycastTargetSummary))
+            lines.append(SurfaceUV4C.thresholdRatesText(thresholdRates))
             for polyline in polylines {
                 lines.append("裂缝 \(polyline.index + 1)：")
                 lines.append(
