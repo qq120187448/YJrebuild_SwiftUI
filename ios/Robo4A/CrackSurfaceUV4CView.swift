@@ -97,8 +97,10 @@ struct CrackSurfaceUV4CView: View {
                         roomCaptureViewReference = view
                         view.captureSession.delegate = coordinator
                         view.delegate = coordinator
+                        var configuration = RoomCaptureSession.Configuration()
+                        configuration.isCoachingEnabled = true
                         view.captureSession.run(
-                            configuration: RoomCaptureSession.Configuration()
+                            configuration: configuration
                         )
                         statusText = "RoomPlan 扫描中…（白色引导框，缓慢绕房间扫描）"
                     }
@@ -427,7 +429,6 @@ struct RoomCaptureView4C: UIViewRepresentable {
 
     func makeUIView(context: Context) -> RoomCaptureView {
         let view = RoomCaptureView(frame: .zero, arSession: session)
-        view.isCoachingOverlayEnabled = true
         onMake(view)
         return view
     }
