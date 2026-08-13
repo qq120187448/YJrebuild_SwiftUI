@@ -182,6 +182,7 @@ private struct RoomCaptureViewAx: UIViewRepresentable {
         Coordinator(onInstruction: onInstruction)
     }
 
+    @objc(RoboScanAxRoomCaptureCoordinator)
     final class Coordinator: NSObject, RoomCaptureSessionDelegate, RoomCaptureViewDelegate, NSCoding {
         let onInstruction: (String) -> Void
 
