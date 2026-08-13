@@ -43,6 +43,8 @@ enum SurfaceUV4C {
         let totalSamples: Int
         let totalAssigned: Int
         let totalWorldHits: Int
+        let captureToRaycastDelayMs: Double?
+        let diagnostics: [String]
 
         var assignedRatio: Double {
             totalWorldHits == 0 ? 0 : Double(totalAssigned) / Double(totalWorldHits)
@@ -52,6 +54,9 @@ enum SurfaceUV4C {
             var lines: [String] = []
             lines.append("4C Surface UV 报告")
             lines.append("场景：\(scenario)")
+            if let delay = captureToRaycastDelayMs {
+                lines.append(String(format: "Capture→Raycast 延迟：%.0f ms", delay))
+            }
             lines.append(
                 "表面：总数 \(surfaceTotal)（wall \(surfaceWalls) · floor \(surfaceFloors) · other \(surfaceOthers)）"
             )
@@ -98,6 +103,10 @@ enum SurfaceUV4C {
                     assignedRatio * 100
                 )
             )
+            if !diagnostics.isEmpty {
+                lines.append("未分配诊断（最近表面）：")
+                lines.append(contentsOf: diagnostics)
+            }
             return lines.joined(separator: "\n")
         }
     }
@@ -153,6 +162,7 @@ enum SurfaceUV4C {
         var totalSamples = 0
         var totalAssigned = 0
         var totalWorldHits = 0
+        var diagnostics: [String] = []
 
         for polyline in raycast.polylines {
             var points: [MappedPoint] = []
@@ -160,7 +170,7 @@ enum SurfaceUV4C {
             var counts: [UUID: Int] = [:]
             var uvPoints: [(u: Double, v: Double)] = []
 
-            for point in polyline.points {
+            for (pointIndex, point) in polyline.points.enumerated() {
                 totalSamples += 1
                 guard let world = point.world else {
                     points.append(
@@ -198,6 +208,37 @@ enum SurfaceUV4C {
                         )
                     )
                 } else {
+                    if diagnostics.count < 3 {
+                        var bestSurface: CapturedRoom.Surface?
+                        var bestLocal = SIMD3<Float>(0, 0, 0)
+                        var bestZ = Float.greatestFiniteMagnitude
+                        for surface in surfaces {
+                            let local = surfaceLocal(world, surface: surface)
+                            if abs(local.z) < bestZ {
+                                bestZ = abs(local.z)
+                                bestSurface = surface
+                                bestLocal = local
+                            }
+                        }
+                        if let bestSurface {
+                            let shortID = bestSurface.identifier.uuidString.prefix(8)
+                            diagnostics.append(
+                                String(
+                                    format: "[裂缝%d·点%d] 最近 %@ %@ local=(%.3f, %.3f, %.3f) dims=(%.2f, %.2f, %.2f)",
+                                    polyline.index + 1,
+                                    pointIndex + 1,
+                                    categoryName(bestSurface.category),
+                                    String(shortID),
+                                    bestLocal.x,
+                                    bestLocal.y,
+                                    bestLocal.z,
+                                    bestSurface.dimensions.x,
+                                    bestSurface.dimensions.y,
+                                    bestSurface.dimensions.z
+                                )
+                            )
+                        }
+                    }
                     points.append(
                         MappedPoint(
                             source: point.source,
@@ -240,7 +281,9 @@ enum SurfaceUV4C {
             polylines: polylines,
             totalSamples: totalSamples,
             totalAssigned: totalAssigned,
-            totalWorldHits: totalWorldHits
+            totalWorldHits: totalWorldHits,
+            captureToRaycastDelayMs: raycast.captureToRaycastDelayMs,
+            diagnostics: diagnostics
         )
     }
 
