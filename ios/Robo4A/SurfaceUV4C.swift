@@ -88,6 +88,7 @@ enum SurfaceUV4C {
         let uvLengthM: Double?
         let uvLengthSegments: [UVLengthSegment]
         let crossSurfaceTransitionCount: Int
+        let averageWidthM: Double?
 
         var assignedRatio: Double {
             totalWorldHits == 0 ? 0 : Double(totalAssigned) / Double(totalWorldHits)
@@ -116,6 +117,7 @@ enum SurfaceUV4C {
                     crossSurfaceTransitions: crossSurfaceTransitionCount
                 )
             )
+            lines.append(SurfaceUV4C.uvWidthText(averageWidthM))
             for polyline in polylines {
                 lines.append("裂缝 \(polyline.index + 1)：")
                 lines.append(
@@ -277,7 +279,9 @@ enum SurfaceUV4C {
         raycast: Raycast4BReport,
         room: CapturedRoom,
         diagnosticCategories: [CapturedRoom.Surface.Category] = [.wall, .floor],
-        sessionDiagnosticText: String? = nil
+        sessionDiagnosticText: String? = nil,
+        pixelAreaPx: Int? = nil,
+        totalPixelLengthPx: Double? = nil
     ) -> Report {
         let surfaces =
             room.walls + room.floors + room.doors + room.windows + room.openings
@@ -493,6 +497,17 @@ enum SurfaceUV4C {
         let uvLengthM = uvLengthSegments.isEmpty
             ? nil
             : uvLengthSegments.reduce(0) { $0 + $1.lengthM }
+        let averageWidthM: Double?
+        if let uvLengthM,
+           let totalPixelLengthPx,
+           totalPixelLengthPx > 0,
+           let pixelAreaPx,
+           pixelAreaPx > 0 {
+            let averageWidthPx = Double(pixelAreaPx) / totalPixelLengthPx
+            averageWidthM = averageWidthPx * (uvLengthM / totalPixelLengthPx)
+        } else {
+            averageWidthM = nil
+        }
 
         let thresholdRates: [(thresholdMm: Int, ratio: Double)] =
             [20, 30, 40, 50].map { thresholdMm in
@@ -546,7 +561,8 @@ enum SurfaceUV4C {
             targetComparisonRates: targetComparisonRates,
             uvLengthM: uvLengthM,
             uvLengthSegments: uvLengthSegments,
-            crossSurfaceTransitionCount: crossSurfaceTransitionCount
+            crossSurfaceTransitionCount: crossSurfaceTransitionCount,
+            averageWidthM: averageWidthM
         )
     }
 
@@ -655,6 +671,16 @@ enum SurfaceUV4C {
             text += " · 跨面跳变 \(crossSurfaceTransitions) 段（未混加 UV）"
         }
         return text
+    }
+
+    private static func uvWidthText(_ averageWidthM: Double?) -> String {
+        guard let averageWidthM, averageWidthM > 0 else {
+            return "4D.1 裂缝宽度：无法估算"
+        }
+        return String(
+            format: "4D.1 裂缝宽度（平均，线性近似）：%.3f mm",
+            averageWidthM * 1000
+        )
     }
 
     private static func float3Text(_ value: simd_float3) -> String {
