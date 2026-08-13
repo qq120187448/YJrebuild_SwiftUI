@@ -47,6 +47,7 @@ struct Raycast4BReport {
     let polylines: [Raycast4BPolylineResult]
     let orderInversions: Int
     let orderPairs: Int
+    let captureToRaycastDelayMs: Double?
 
     var hitRate: Double {
         totalSamples == 0 ? 0 : Double(hitCount) / Double(totalSamples)
@@ -82,6 +83,9 @@ struct Raycast4BReport {
         var lines: [String] = []
         lines.append("4B 基线报告")
         lines.append("场景：\(scenario)")
+        if let delay = captureToRaycastDelayMs {
+            lines.append(String(format: "Capture→Raycast 延迟：%.0f ms", delay))
+        }
         lines.append("总采样点：\(totalSamples)")
         lines.append("Mesh 命中点：\(hitCount)")
         lines.append(String(format: "Mesh 命中率：%.1f%%（目标 ≥90%%）", hitRate * 100))
@@ -137,16 +141,16 @@ enum CrackRaycast4B {
     ]
 
     /// 4B 核心：pixel P → ARView.raycast → world W → arView.project → pixel P'。
-    /// 传入 anchorFrame（拍照瞬间的 ARFrame）时，raycast/反投影固定使用该帧相机，
-    /// 避免 4A 推理期间手机移动导致投影漂移到错误位置。
+    /// 生产路径固定使用已验证的 ARView.raycast；captureTime 仅用于统计延迟指标。
     @MainActor
     static func measure(
         arView: ARView,
         scenario: String,
         samplePointsPerPolyline: [[CrackPoint]],
         imageToViewScale: CGFloat,
-        anchorFrame: ARFrame? = nil
+        captureTime: Date? = nil
     ) -> Raycast4BReport {
+        let raycastStart = Date()
         var totalSamples = 0
         var hitCount = 0
         var validCount = 0
@@ -167,23 +171,11 @@ enum CrackRaycast4B {
                     x: CGFloat(point.x) * imageToViewScale,
                     y: CGFloat(point.y) * imageToViewScale
                 )
-                let result: ARRaycastResult?
-                if let anchorFrame {
-                    result = arView.session.raycast(
-                        anchorFrame.raycastQuery(
-                            from: viewPoint,
-                            allowing: .estimatedPlane,
-                            alignment: .any
-                        )
-                    ).first
-                } else {
-                    result = arView.raycast(
-                        from: viewPoint,
-                        allowing: .estimatedPlane,
-                        alignment: .any
-                    ).first
-                }
-                guard let result else {
+                guard let result = arView.raycast(
+                    from: viewPoint,
+                    allowing: .estimatedPlane,
+                    alignment: .any
+                ).first else {
                     missReasons["noRaycastResult", default: 0] += 1
                     points.append(
                         Raycast4BPointResult(
@@ -201,17 +193,7 @@ enum CrackRaycast4B {
                 polyHits += 1
                 let world = result.worldTransform.position
 
-                let projected: CGPoint?
-                if let anchorFrame {
-                    projected = anchorFrame.camera.projectPoint(
-                        world,
-                        orientation: .portrait,
-                        viewportSize: arView.bounds.size
-                    )
-                } else {
-                    projected = arView.project(world)
-                }
-                guard let projected else {
+                guard let projected = arView.project(world) else {
                     missReasons["projectNil", default: 0] += 1
                     points.append(
                         Raycast4BPointResult(
@@ -293,7 +275,10 @@ enum CrackRaycast4B {
             missReasons: missReasons,
             polylines: polylines,
             orderInversions: orderInversions,
-            orderPairs: orderPairs
+            orderPairs: orderPairs,
+            captureToRaycastDelayMs: captureTime.map {
+                raycastStart.timeIntervalSince($0) * 1000
+            }
         )
     }
 }

@@ -129,6 +129,19 @@ struct CrackSurfaceUV4CView: View {
                     }
                     .allowsHitTesting(false)
                 }
+
+                if isRunning {
+                    Text("正在识别…请保持手机静止")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Color.black.opacity(0.6))
+                        .clipShape(Capsule())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .padding(.top, 12)
+                        .allowsHitTesting(false)
+                }
             }
             .frame(maxHeight: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -291,7 +304,7 @@ struct CrackSurfaceUV4CView: View {
         phase = .processing
         coachingText = "正在生成房间模型…"
         statusText = "RoomPlan 处理中…"
-        // RoomPlan 已停止，恢复 ARKit mesh 配置，让白线回到 ARView。
+        // RoomPlan 已停止，恢复 ARKit mesh 配置，供 raycast 使用。
         restoreMesh()
     }
 
@@ -317,8 +330,8 @@ struct CrackSurfaceUV4CView: View {
             }
             statusText = "拍照中…"
 
-            // 拍照瞬间锁定相机帧：4A 推理期间手机移动也不影响 raycast 基准。
-            let anchorFrame = arView.session.currentFrame
+            // 拍照时间戳：用于 Capture→Raycast 延迟统计（专家建议指标）。
+            let captureTime = Date()
             arView.snapshot(saveToHDR: false) { image in
                 Task { @MainActor in
                     guard let image else {
@@ -326,7 +339,7 @@ struct CrackSurfaceUV4CView: View {
                         isRunning = false
                         return
                     }
-                    statusText = "4A 识别裂缝中…"
+                    statusText = "正在识别裂缝，请保持手机静止…"
                     viewModel.centerlineResult = nil
                     viewModel.centerlineStats = ""
                     viewModel.uiImage = image
@@ -352,7 +365,7 @@ struct CrackSurfaceUV4CView: View {
                         scenario: scenario,
                         samplePointsPerPolyline: samples,
                         imageToViewScale: scale,
-                        anchorFrame: anchorFrame
+                        captureTime: captureTime
                     )
                     let surfaceReport = SurfaceUV4C.buildReport(
                         scenario: scenario,
@@ -364,7 +377,7 @@ struct CrackSurfaceUV4CView: View {
                     lastReports[scenario] = surfaceReport
                     report = surfaceReport
                     statusText = String(
-                        format: "表面分配率 %.1f%% · UV 单位米 · 照片与 AR 已叠加",
+                        format: "表面分配率 %.1f%% · UV 单位米 · 已解除静止锁定",
                         surfaceReport.assignedRatio * 100
                     )
                     isRunning = false
