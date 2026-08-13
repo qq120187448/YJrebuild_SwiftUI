@@ -135,6 +135,7 @@ struct CrackSurfaceUV4CView: View {
     @State private var surfaceToleranceMM: Double = 20
     @State private var showParameterPanel = false
     @State private var reportLog: [String] = []
+    @State private var performanceText = ""
 
     var body: some View {
         VStack(spacing: 8) {
@@ -144,6 +145,7 @@ struct CrackSurfaceUV4CView: View {
                 ARViewContainer4C(session: sharedSession) { arView in
                     arViewReference = arView
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .opacity((phase == .scanning || phase == .reviewing) ? 0 : 1)
 
                 // 官方 RoomPlan 扫描视图：自带引导、进度与底部 3D 模型（isModelEnabled 默认 true）。
@@ -157,6 +159,7 @@ struct CrackSurfaceUV4CView: View {
                         configuration.isCoachingEnabled = true
                         view.captureSession.run(configuration: configuration)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
 
                 if isRunning {
@@ -203,6 +206,11 @@ struct CrackSurfaceUV4CView: View {
             Text(statusText)
                 .font(.caption)
                 .foregroundStyle(.orange)
+            if !performanceText.isEmpty {
+                Text(performanceText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
             Text("照片红线/蓝点 = 4A 折线与采样点；AR 红点/红线 = raycast 世界点；扫描时 = 官方 RoomPlan 引导 + 底部 3D 模型")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -466,6 +474,7 @@ struct CrackSurfaceUV4CView: View {
         guard let arView = arViewReference, let room = capturedRoom else { return }
         isRunning = true
         let totalStart = Date()
+        performanceText = ""
         statusText = "等待相机就绪…"
 
         Task { @MainActor in
@@ -569,14 +578,14 @@ struct CrackSurfaceUV4CView: View {
                         Date().timeIntervalSince(spatialStart) * 1000
                     let totalDuration =
                         Date().timeIntervalSince(totalStart) * 1000
-                    appendReportLog(
-                        String(
-                            format: "性能：inference=%.0fms · spatial=%.0fms · total=%.0fms",
-                            inferenceDuration,
-                            spatialDuration,
-                            totalDuration
-                        )
+                    let performance = String(
+                        format: "性能：inference=%.0fms · spatial=%.0fms · total=%.0fms",
+                        inferenceDuration,
+                        spatialDuration,
+                        totalDuration
                     )
+                    performanceText = performance
+                    appendReportLog(performance)
                     statusText = String(
                         format: "表面分配率 %.1f%% · UV 单位米 · 已解除静止锁定",
                         surfaceReport.assignedRatio * 100
