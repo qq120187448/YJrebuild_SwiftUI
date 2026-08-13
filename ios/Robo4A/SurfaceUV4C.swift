@@ -243,7 +243,10 @@ enum SurfaceUV4C {
             if let uvLengthM, uvLengthM > 0 {
                 lines.append(String(format: "裂缝总长：%.3f m", uvLengthM))
             } else {
-                lines.append("裂缝总长：无法计算")
+                let assigned = polylines.reduce(0) { $0 + $1.assignedCount }
+                lines.append(
+                    "裂缝总长：无法计算（world 命中 \(totalWorldHits) · 分配 \(assigned)）"
+                )
             }
             if let averageWidthM, averageWidthM > 0,
                let maxWidthM, maxWidthM > 0 {
