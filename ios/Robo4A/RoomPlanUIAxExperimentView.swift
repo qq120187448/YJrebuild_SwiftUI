@@ -32,12 +32,14 @@ struct RoomPlanUIAxExperimentView: View {
     }
 
     @State private var mode: Mode = .a
+    @AppStorage("RoomPlanAx.mode") private var storedMode = Mode.a.rawValue
     @State private var isScanning = false
     @State private var sharedSession = ARSession()
     @State private var scanID = UUID()
     @State private var statusText =
         "选组后点“开始扫描”；每组测完彻底杀 App 再重开，再测下一组"
     @State private var coachingText = "—"
+    @State private var diagnosticText = "未扫描：尚无会话自检数据"
 
     var body: some View {
         VStack(spacing: 8) {
@@ -64,6 +66,9 @@ struct RoomPlanUIAxExperimentView: View {
                         scanID: scanID,
                         onInstruction: { text in
                             coachingText = text
+                        },
+                        onDiagnostic: { text in
+                            diagnosticText = text
                         }
                     ) { view in
                         var configuration = RoomCaptureSession.Configuration()
@@ -74,6 +79,13 @@ struct RoomPlanUIAxExperimentView: View {
 
                     VStack {
                         Spacer()
+                        Text(diagnosticText)
+                            .font(.caption2)
+                            .foregroundStyle(.yellow)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.black.opacity(0.7))
+                            .clipShape(Capsule())
                         Text("coaching：\(coachingText)")
                             .font(.caption)
                             .foregroundStyle(.white)
@@ -105,7 +117,7 @@ struct RoomPlanUIAxExperimentView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
 
-            Button(isScanning ? "结束扫描" : "开始扫描") {
+            Button(isScanning ? "结束扫描" : "开始扫描（\(mode.rawValue)）") {
                 if isScanning {
                     stopScan()
                 } else {
@@ -121,6 +133,12 @@ struct RoomPlanUIAxExperimentView: View {
                 .padding(.horizontal)
         }
         .navigationTitle("4C UI A/B/C/D")
+        .onAppear {
+            mode = Mode(rawValue: storedMode) ?? .a
+        }
+        .onChange(of: mode) { _, newValue in
+            storedMode = newValue.rawValue
+        }
     }
 
     private func startScan() {
@@ -128,6 +146,7 @@ struct RoomPlanUIAxExperimentView: View {
         let freshSession = ARSession()
         sharedSession = freshSession
         coachingText = "—"
+        diagnosticText = "组 \(mode.rawValue)：会话创建中…"
 
         if mode == .b {
             // 复现 4C 集成版（c540d6e）：先跑 ARKit mesh/plane 配置。
@@ -153,8 +172,21 @@ struct RoomPlanUIAxExperimentView: View {
 
     private func stopScan() {
         isScanning = false
+        diagnosticText = "已停止：请杀 App 后重开测下一组"
         statusText = "组 \(mode.rawValue) 已停止。记录本组结果，然后彻底杀掉 App 再测下一组"
     }
+}
+
+/// 运行时自检：显示当前组实际使用的会话来源，防止“四组共用同一实例”类低级错误。
+private func axDiagnosticText(
+    mode: RoomPlanUIAxExperimentView.Mode,
+    captureView: RoomCaptureView,
+    sharedSession: ARSession
+) -> String {
+    let usesExternal = (mode == .b || mode == .d)
+    let meshPreRun = (mode == .b)
+    let sessionIsShared = captureView.captureSession.arSession === sharedSession
+    return "组 \(mode.rawValue) · 外部会话 \(usesExternal ? "是" : "否") · Mesh预配置 \(meshPreRun ? "是" : "否") · 同一实例 \(sessionIsShared ? "是" : "否")"
 }
 
 /// RoomCaptureView 的 SwiftUI 包装：按组别决定使用内部会话还是共享会话。
@@ -163,6 +195,7 @@ private struct RoomCaptureViewAx: UIViewRepresentable {
     let sharedSession: ARSession
     let scanID: UUID
     let onInstruction: (String) -> Void
+    let onDiagnostic: (String) -> Void
     let onStart: (RoomCaptureView) -> Void
 
     func makeUIView(context: Context) -> RoomCaptureView {
@@ -177,26 +210,61 @@ private struct RoomCaptureViewAx: UIViewRepresentable {
         }
         view.captureSession.delegate = context.coordinator
         view.delegate = context.coordinator
+        context.coordinator.createdMode = mode
+        context.coordinator.createdSharedSession = sharedSession
+        context.coordinator.createdMeshPreRun = (mode == .b)
+        let diagnostic = axDiagnosticText(
+            mode: mode,
+            captureView: view,
+            sharedSession: sharedSession
+        )
+        print("[UI-AX] makeUIView \(diagnostic)")
+        onDiagnostic(diagnostic)
         onStart(view)
         return view
     }
 
-    func updateUIView(_ uiView: RoomCaptureView, context: Context) {}
+    func updateUIView(_ uiView: RoomCaptureView, context: Context) {
+        let diagnostic = axDiagnosticText(
+            mode: mode,
+            captureView: uiView,
+            sharedSession: sharedSession
+        )
+        if context.coordinator.createdMode != mode {
+            let warning = "!!! 实例复用：创建于 \(context.coordinator.createdMode?.rawValue ?? "?")，当前 \(mode.rawValue)（\(diagnostic)）"
+            print("[UI-AX] \(warning)")
+            onDiagnostic(warning)
+        } else {
+            print("[UI-AX] update \(diagnostic)")
+            onDiagnostic(diagnostic)
+        }
+    }
 
     static func dismantleUIView(_ uiView: RoomCaptureView, coordinator: Coordinator) {
         uiView.captureSession.stop()
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onInstruction: onInstruction)
+        Coordinator(
+            onInstruction: onInstruction,
+            onDiagnostic: onDiagnostic
+        )
     }
 
     @objc(RoboScanAxRoomCaptureCoordinator)
     final class Coordinator: NSObject, RoomCaptureSessionDelegate, RoomCaptureViewDelegate, NSCoding {
         let onInstruction: (String) -> Void
+        let onDiagnostic: (String) -> Void
+        var createdMode: RoomPlanUIAxExperimentView.Mode?
+        var createdSharedSession: ARSession?
+        var createdMeshPreRun = false
 
-        init(onInstruction: @escaping (String) -> Void) {
+        init(
+            onInstruction: @escaping (String) -> Void,
+            onDiagnostic: @escaping (String) -> Void
+        ) {
             self.onInstruction = onInstruction
+            self.onDiagnostic = onDiagnostic
             super.init()
         }
 
