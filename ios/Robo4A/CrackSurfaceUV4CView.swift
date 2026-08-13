@@ -132,6 +132,7 @@ struct CrackSurfaceUV4CView: View {
     @State private var roomCaptureFrameTimestamp: TimeInterval?
     @State private var roomCaptureCameraPosition: SIMD3<Float>?
     @State private var meshControl: MeshControl = .baseline
+    @State private var surfaceToleranceMM: Double = 30
     @State private var reportLog: [String] = []
 
     var body: some View {
@@ -188,6 +189,40 @@ struct CrackSurfaceUV4CView: View {
                 }
             }
             .pickerStyle(.segmented)
+            .padding(.horizontal)
+
+            VStack(spacing: 4) {
+                Slider(value: $surfaceToleranceMM, in: 10...100, step: 1)
+                Text("Surface 误差：\(Int(surfaceToleranceMM)) mm")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal)
+
+            VStack(spacing: 4) {
+                Slider(value: $viewModel.confidenceThreshold, in: 0...1)
+                Text(
+                    String(
+                        format: "Conf：%.2f",
+                        viewModel.confidenceThreshold
+                    )
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal)
+
+            VStack(spacing: 4) {
+                Slider(value: $viewModel.iouThreshold, in: 0...1)
+                Text(
+                    String(
+                        format: "IoU：%.2f",
+                        viewModel.iouThreshold
+                    )
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
             .padding(.horizontal)
 
             Text(statusText)
@@ -475,6 +510,7 @@ struct CrackSurfaceUV4CView: View {
                         raycast: raycast,
                         room: room,
                         sessionDiagnosticText: sessionDiagnosticText,
+                        toleranceM: surfaceToleranceMM / 1000.0,
                         totalPixelLengthPx: viewModel.centerlineResult?.totalPixelLength,
                         maxWidthPx: viewModel.centerlineResult?.maxWidthPx,
                         averageWidthPx: viewModel.centerlineResult?.averageWidthPx

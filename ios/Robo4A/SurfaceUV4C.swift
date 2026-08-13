@@ -310,6 +310,7 @@ enum SurfaceUV4C {
         room: CapturedRoom,
         diagnosticCategories: [CapturedRoom.Surface.Category] = [.wall, .floor],
         sessionDiagnosticText: String? = nil,
+        toleranceM: Double = 0.03,
         totalPixelLengthPx: Double? = nil,
         maxWidthPx: Double? = nil,
         averageWidthPx: Double? = nil
@@ -391,7 +392,11 @@ enum SurfaceUV4C {
                         allowedCategories: diagnosticCategories
                     ).first
                 }
-                if let mapped = map(world: world, surfaces: surfaces) {
+                if let mapped = map(
+                    world: world,
+                    surfaces: surfaces,
+                    toleranceM: Float(toleranceM)
+                ) {
                     assignedCount += 1
                     totalAssigned += 1
                     counts[mapped.surface.identifier, default: 0] += 1
