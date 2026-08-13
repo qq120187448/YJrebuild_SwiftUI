@@ -20,6 +20,8 @@ struct Raycast4BPointResult {
     let raycastResultsCount: Int?
     let firstRaycastDistance: Double?
     let raycastAnchorType: String?
+    let raycastTarget: String?
+    let raycastTargetAlignment: String?
 }
 
 // MARK: - 单条折线结果
@@ -190,7 +192,9 @@ enum CrackRaycast4B {
                             missReason: "noRaycastResult",
                             raycastResultsCount: 0,
                             firstRaycastDistance: nil,
-                            raycastAnchorType: nil
+                            raycastAnchorType: nil,
+                            raycastTarget: nil,
+                            raycastTargetAlignment: nil
                         )
                     )
                     continue
@@ -204,6 +208,8 @@ enum CrackRaycast4B {
                     Double(simd_distance(world, $0))
                 }
                 let raycastAnchorType = Self.anchorTypeName(result.anchor)
+                let raycastTarget = Self.targetName(result.target)
+                let raycastTargetAlignment = Self.alignmentName(result.targetAlignment)
 
                 guard let projected = arView.project(world) else {
                     missReasons["projectNil", default: 0] += 1
@@ -216,7 +222,9 @@ enum CrackRaycast4B {
                             missReason: "projectNil",
                             raycastResultsCount: raycastResults.count,
                             firstRaycastDistance: firstDistance,
-                            raycastAnchorType: raycastAnchorType
+                            raycastAnchorType: raycastAnchorType,
+                            raycastTarget: raycastTarget,
+                            raycastTargetAlignment: raycastTargetAlignment
                         )
                     )
                     continue
@@ -238,7 +246,9 @@ enum CrackRaycast4B {
                         missReason: nil,
                         raycastResultsCount: raycastResults.count,
                         firstRaycastDistance: firstDistance,
-                        raycastAnchorType: raycastAnchorType
+                        raycastAnchorType: raycastAnchorType,
+                        raycastTarget: raycastTarget,
+                        raycastTargetAlignment: raycastTargetAlignment
                     )
                 )
             }
@@ -308,5 +318,33 @@ enum CrackRaycast4B {
         if anchor is ARFaceAnchor { return "ARFaceAnchor" }
         if anchor is ARObjectAnchor { return "ARObjectAnchor" }
         return String(describing: type(of: anchor))
+    }
+
+    private static func targetName(_ target: ARRaycastQuery.Target) -> String {
+        switch target {
+        case .estimatedPlane:
+            return "estimatedPlane"
+        case .existingPlaneGeometry:
+            return "existingPlaneGeometry"
+        case .existingPlaneInfinite:
+            return "existingPlaneInfinite"
+        @unknown default:
+            return "unknown"
+        }
+    }
+
+    private static func alignmentName(
+        _ alignment: ARRaycastQuery.TargetAlignment
+    ) -> String {
+        switch alignment {
+        case .any:
+            return "any"
+        case .horizontal:
+            return "horizontal"
+        case .vertical:
+            return "vertical"
+        @unknown default:
+            return "unknown"
+        }
     }
 }

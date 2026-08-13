@@ -39,6 +39,8 @@ enum SurfaceUV4C {
         let raycastResultsCount: Int?
         let firstRaycastDistance: Double?
         let raycastAnchorType: String?
+        let raycastTarget: String?
+        let raycastTargetAlignment: String?
         let candidates: [SurfaceCandidate]
     }
 
@@ -70,6 +72,8 @@ enum SurfaceUV4C {
         let captureToRaycastDelayMs: Double?
         let surfaceInventory: [SurfaceInventoryItem]
         let sessionDiagnosticText: String?
+        let thresholdRates: [(thresholdMm: Int, ratio: Double)]
+        let raycastTargetSummary: [String: Int]
 
         var assignedRatio: Double {
             totalWorldHits == 0 ? 0 : Double(totalAssigned) / Double(totalWorldHits)
@@ -85,15 +89,11 @@ enum SurfaceUV4C {
             lines.append(
                 "表面：总数 \(surfaceTotal)（wall \(surfaceWalls) · floor \(surfaceFloors) · other \(surfaceOthers)）"
             )
-            lines.append("Surface 清单：")
-            for item in surfaceInventory {
-                lines.append(
-                    "  \(categoryName(item.category)) \(item.identifier.uuidString.prefix(8)) dims=(\(SurfaceUV4C.float3Text(item.dimensions))) transform=\(SurfaceUV4C.transformText(item.transform))"
-                )
-            }
             if let sessionDiagnosticText {
                 lines.append(sessionDiagnosticText)
             }
+            lines.append(Self.raycastTargetSummaryText(raycastTargetSummary))
+            lines.append(Self.thresholdRatesText(thresholdRates))
             for polyline in polylines {
                 lines.append("裂缝 \(polyline.index + 1)：")
                 lines.append(
@@ -143,7 +143,7 @@ enum SurfaceUV4C {
                 }
             }
             if !noSurfacePoints.isEmpty {
-                lines.append("未分配诊断（全量 Surface 候选）：")
+                lines.append("未分配诊断（仅列最近 2 个候选）：")
                 for (polylineIndex, pointIndex, point) in noSurfacePoints {
                     guard let world = point.world else { continue }
                     let raycastInfo = SurfaceUV4C.raycastInfoText(point)
@@ -161,26 +161,25 @@ enum SurfaceUV4C {
                     if point.candidates.isEmpty {
                         lines.append("  （无候选 Surface）")
                     }
-                    for candidate in point.candidates {
+                    for candidate in point.candidates.prefix(2) {
                         lines.append(
                             String(
-                                format: "  %@ %@ local=(%.3f, %.3f, %.3f) dims=(%.2f, %.2f, %.2f) planeDistance=%.3f insideX=%@ insideY=%@ insideZ=%@ insideBounds=%@ score=%.3f",
+                                format: "  %@ %@ local=(%.3f, %.3f, %.3f) planeDistance=%.3f insideX=%@ insideY=%@ insideZ=%@ insideBounds=%@",
                                 categoryName(candidate.category),
                                 String(candidate.identifier.uuidString.prefix(8)),
                                 candidate.local.x,
                                 candidate.local.y,
                                 candidate.local.z,
-                                candidate.dimensions.x,
-                                candidate.dimensions.y,
-                                candidate.dimensions.z,
                                 candidate.planeDistance,
                                 candidate.insideX ? "true" : "false",
                                 candidate.insideY ? "true" : "false",
                                 candidate.insideZ ? "true" : "false",
-                                candidate.insideBounds ? "true" : "false",
-                                candidate.score
+                                candidate.insideBounds ? "true" : "false"
                             )
                         )
+                    }
+                    if point.candidates.count > 2 {
+                        lines.append("  …其余 \(point.candidates.count - 2) 个候选略")
                     }
                 }
             }
@@ -249,6 +248,8 @@ enum SurfaceUV4C {
         var totalSamples = 0
         var totalAssigned = 0
         var totalWorldHits = 0
+        var worldPoints: [SIMD3<Float>] = []
+        var raycastTargetSummary: [String: Int] = [:]
 
         for polyline in raycast.polylines {
             var points: [MappedPoint] = []
@@ -272,12 +273,18 @@ enum SurfaceUV4C {
                             raycastResultsCount: point.raycastResultsCount,
                             firstRaycastDistance: point.firstRaycastDistance,
                             raycastAnchorType: point.raycastAnchorType,
+                            raycastTarget: point.raycastTarget,
+                            raycastTargetAlignment: point.raycastTargetAlignment,
                             candidates: []
                         )
                     )
                     continue
                 }
                 totalWorldHits += 1
+                worldPoints.append(world)
+                if let target = point.raycastTarget {
+                    raycastTargetSummary[target, default: 0] += 1
+                }
                 let candidates = candidateDiagnostics(
                     world: world,
                     surfaces: surfaces,
@@ -303,6 +310,8 @@ enum SurfaceUV4C {
                             raycastResultsCount: point.raycastResultsCount,
                             firstRaycastDistance: point.firstRaycastDistance,
                             raycastAnchorType: point.raycastAnchorType,
+                            raycastTarget: point.raycastTarget,
+                            raycastTargetAlignment: point.raycastTargetAlignment,
                             candidates: candidates
                         )
                     )
@@ -320,6 +329,8 @@ enum SurfaceUV4C {
                             raycastResultsCount: point.raycastResultsCount,
                             firstRaycastDistance: point.firstRaycastDistance,
                             raycastAnchorType: point.raycastAnchorType,
+                            raycastTarget: point.raycastTarget,
+                            raycastTargetAlignment: point.raycastTargetAlignment,
                             candidates: candidates
                         )
                     )
@@ -344,6 +355,19 @@ enum SurfaceUV4C {
             )
         }
 
+        let thresholdRates: [(thresholdMm: Int, ratio: Double)] =
+            [20, 30, 40, 50].map { thresholdMm in
+                let toleranceM = Float(thresholdMm) / 1000.0
+                let assigned = worldPoints.filter {
+                    map(world: $0, surfaces: surfaces, toleranceM: toleranceM)
+                        != nil
+                }.count
+                let ratio = worldPoints.isEmpty
+                    ? 0
+                    : Double(assigned) / Double(worldPoints.count)
+                return (thresholdMm: thresholdMm, ratio: ratio)
+            }
+
         return Report(
             scenario: scenario,
             surfaceTotal: surfaces.count,
@@ -356,7 +380,9 @@ enum SurfaceUV4C {
             totalWorldHits: totalWorldHits,
             captureToRaycastDelayMs: raycast.captureToRaycastDelayMs,
             surfaceInventory: surfaceInventory,
-            sessionDiagnosticText: sessionDiagnosticText
+            sessionDiagnosticText: sessionDiagnosticText,
+            thresholdRates: thresholdRates,
+            raycastTargetSummary: raycastTargetSummary
         )
     }
 
@@ -398,11 +424,32 @@ enum SurfaceUV4C {
 
     private static func raycastInfoText(_ point: MappedPoint) -> String {
         let count = point.raycastResultsCount.map(String.init) ?? "-"
+        let target = point.raycastTarget ?? "-"
+        let alignment = point.raycastTargetAlignment ?? "-"
         let distance = point.firstRaycastDistance.map {
             String(format: "%.3f m", $0)
         } ?? "-"
         let anchor = point.raycastAnchorType ?? "-"
-        return "raycastResults=\(count) firstDistance=\(distance) anchor=\(anchor)"
+        return "raycastResults=\(count) target=\(target) alignment=\(alignment) anchor=\(anchor) firstDistance=\(distance)"
+    }
+
+    private static func raycastTargetSummaryText(
+        _ summary: [String: Int]
+    ) -> String {
+        if summary.isEmpty { return "Raycast target 统计：无" }
+        let parts = summary.sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: " · ")
+        return "Raycast target 统计：\(parts)"
+    }
+
+    private static func thresholdRatesText(
+        _ rates: [(thresholdMm: Int, ratio: Double)]
+    ) -> String {
+        let parts = rates.map { threshold, ratio in
+            String(format: "%dmm=%.1f%%", threshold, ratio * 100)
+        }.joined(separator: " · ")
+        return "阈值敏感性（Debug）：\(parts)"
     }
 
     private static func float3Text(_ value: simd_float3) -> String {
