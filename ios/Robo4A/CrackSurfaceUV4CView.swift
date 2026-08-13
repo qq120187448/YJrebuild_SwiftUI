@@ -133,6 +133,7 @@ struct CrackSurfaceUV4CView: View {
     @State private var roomCaptureCameraPosition: SIMD3<Float>?
     @State private var meshControl: MeshControl = .baseline
     @State private var surfaceToleranceMM: Double = 30
+    @State private var showParameterPanel = false
     @State private var reportLog: [String] = []
 
     var body: some View {
@@ -191,38 +192,12 @@ struct CrackSurfaceUV4CView: View {
             .pickerStyle(.segmented)
             .padding(.horizontal)
 
-            VStack(spacing: 4) {
-                Slider(value: $surfaceToleranceMM, in: 10...100, step: 1)
-                Text("Surface 误差：\(Int(surfaceToleranceMM)) mm")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            Button {
+                showParameterPanel = true
+            } label: {
+                Label("参数", systemImage: "slider.horizontal.3")
             }
-            .padding(.horizontal)
-
-            VStack(spacing: 4) {
-                Slider(value: $viewModel.confidenceThreshold, in: 0...1)
-                Text(
-                    String(
-                        format: "Conf：%.2f",
-                        viewModel.confidenceThreshold
-                    )
-                )
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal)
-
-            VStack(spacing: 4) {
-                Slider(value: $viewModel.iouThreshold, in: 0...1)
-                Text(
-                    String(
-                        format: "IoU：%.2f",
-                        viewModel.iouThreshold
-                    )
-                )
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            }
+            .buttonStyle(.bordered)
             .padding(.horizontal)
 
             Text(statusText)
@@ -335,6 +310,44 @@ struct CrackSurfaceUV4CView: View {
             reportLog = UserDefaults.standard.stringArray(
                 forKey: roboscan4CReportLogKey
             ) ?? []
+        }
+        .sheet(isPresented: $showParameterPanel) {
+            parameterPanel
+        }
+    }
+
+    private var parameterPanel: some View {
+        NavigationView {
+            Form {
+                Section("Surface 误差") {
+                    Slider(value: $surfaceToleranceMM, in: 10...100, step: 1)
+                    Text("\(Int(surfaceToleranceMM)) mm")
+                }
+                Section("模型参数") {
+                    Slider(value: $viewModel.confidenceThreshold, in: 0...1)
+                    Text(
+                        String(
+                            format: "Conf：%.2f",
+                            viewModel.confidenceThreshold
+                        )
+                    )
+                    Slider(value: $viewModel.iouThreshold, in: 0...1)
+                    Text(
+                        String(
+                            format: "IoU：%.2f",
+                            viewModel.iouThreshold
+                        )
+                    )
+                }
+            }
+            .navigationTitle("参数")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") {
+                        showParameterPanel = false
+                    }
+                }
+            }
         }
     }
 
@@ -465,15 +478,9 @@ struct CrackSurfaceUV4CView: View {
 
             // 拍照时间戳：用于 Capture→Raycast 延迟统计（专家建议指标）。
             let captureTime = Date()
-            let resumeConfiguration = arView.session.configuration
-            arView.session.pause()
+            let captureFrame = arView.session.currentFrame
             arView.snapshot(saveToHDR: false) { image in
                 Task { @MainActor in
-                    defer {
-                        if let resumeConfiguration {
-                            arView.session.run(resumeConfiguration)
-                        }
-                    }
                     guard let image else {
                         statusText = "拍照失败"
                         isRunning = false
@@ -500,13 +507,25 @@ struct CrackSurfaceUV4CView: View {
                     }
 
                     statusText = "raycast + Surface UV 映射中…"
-                    let raycast = CrackRaycast4B.measure(
-                        arView: arView,
-                        scenario: scenario,
-                        samplePointsPerPolyline: samples,
-                        imageToViewScale: scale,
-                        captureTime: captureTime
-                    )
+                    let raycast: Raycast4BReport
+                    if let captureFrame {
+                        raycast = CrackRaycast4B.measureFrameLocked(
+                            arView: arView,
+                            frame: captureFrame,
+                            room: room,
+                            samplePointsPerPolyline: samples,
+                            imageToViewScale: scale,
+                            captureTime: captureTime
+                        )
+                    } else {
+                        raycast = CrackRaycast4B.measure(
+                            arView: arView,
+                            scenario: scenario,
+                            samplePointsPerPolyline: samples,
+                            imageToViewScale: scale,
+                            captureTime: captureTime
+                        )
+                    }
                     let sessionDiagnosticText = Self.sessionDiagnosticText(
                         arView: arView,
                         roomCaptureFrameTimestamp: roomCaptureFrameTimestamp,
