@@ -228,10 +228,36 @@ enum SurfaceUV4C {
 
         /// 单份报告截断到指定字符数以内，便于真机导出与累积保存。
         func clippedText(limit: Int = 1000) -> String {
-            let full = text()
+            let full = compactText()
             guard full.count > limit else { return full }
             let cut = full.index(full.startIndex, offsetBy: limit)
             return String(full[..<cut]) + "\n…（已截断至 \(limit) 字符）"
+        }
+
+        /// 当前 4D.1 阶段精简日志：只保留裂缝总长、平均宽度、最大宽度。
+        func compactText() -> String {
+            var lines = [
+                "4C Surface UV",
+                "场景：\(scenario)"
+            ]
+            if let uvLengthM, uvLengthM > 0 {
+                lines.append(String(format: "裂缝总长：%.3f m", uvLengthM))
+            } else {
+                lines.append("裂缝总长：无法计算")
+            }
+            if let averageWidthM, averageWidthM > 0,
+               let maxWidthM, maxWidthM > 0 {
+                lines.append(
+                    String(
+                        format: "裂缝宽度：平均 %.3f mm · 最大 %.3f mm",
+                        averageWidthM * 1000,
+                        maxWidthM * 1000
+                    )
+                )
+            } else {
+                lines.append("裂缝宽度：无法估算")
+            }
+            return lines.joined(separator: "\n")
         }
     }
 

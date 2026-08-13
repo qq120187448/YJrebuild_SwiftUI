@@ -63,12 +63,6 @@ enum CrackCenterlineOverlay {
         for value in grid where value {
             maskPixelCount += 1
         }
-        let widthStats = crackWidthStats(
-            grid: grid,
-            width: width,
-            height: height
-        )
-
         // 2. 框内自适应稀疏化采样（保连通）：间距随图像尺寸自适应
         let spacing = max(
             2,
@@ -131,6 +125,12 @@ enum CrackCenterlineOverlay {
         let keptIndices = indexed.prefix(5)
         polylines = keptIndices.map { polylines[$0] }
         samplesPerPolyline = keptIndices.map { samplesPerPolyline[$0] }
+        let widthStats = crackWidthStats(
+            grid: grid,
+            width: width,
+            height: height,
+            samplesPerPolyline: samplesPerPolyline
+        )
 
         let total = polylines.reduce(0.0) { $0 + polylineLength($1) }
         let longest = polylines.map(polylineLength).max() ?? 0
@@ -157,7 +157,8 @@ enum CrackCenterlineOverlay {
     private static func crackWidthStats(
         grid: [Bool],
         width: Int,
-        height: Int
+        height: Int,
+        samplesPerPolyline: [[CrackPoint]]
     ) -> (maxWidthPx: Double, averageWidthPx: Double) {
         guard width > 0, height > 0, grid.count == width * height else {
             return (0, 0)
@@ -197,22 +198,27 @@ enum CrackCenterlineOverlay {
             }
         }
 
-        var sum = 0.0
-        var count = 0
-        var maxDistance = 0
-        for index in 0..<grid.count where grid[index] {
-            let value = distance[index]
-            guard value != infinity else { continue }
-            sum += Double(value)
-            count += 1
-            if value > maxDistance {
-                maxDistance = value
+        var widths: [Double] = []
+        for polyline in samplesPerPolyline {
+            for point in polyline {
+                guard point.x >= 0, point.x < width,
+                      point.y >= 0, point.y < height else {
+                    continue
+                }
+                let index = point.y * width + point.x
+                guard grid[index], distance[index] != infinity else {
+                    continue
+                }
+                widths.append(Double(distance[index]) * 2)
             }
         }
-        guard count > 0 else { return (0, 0) }
+        guard !widths.isEmpty else { return (0, 0) }
+        let sum = widths.reduce(0, +)
+        let count = widths.count
+        let maxWidth = widths.max() ?? 0
         return (
-            maxWidthPx: Double(maxDistance) * 2,
-            averageWidthPx: (sum / Double(count)) * 2
+            maxWidthPx: maxWidth,
+            averageWidthPx: sum / Double(count)
         )
     }
 
