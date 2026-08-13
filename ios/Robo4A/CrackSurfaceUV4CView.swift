@@ -912,7 +912,9 @@ struct ARViewContainer4C: UIViewRepresentable {
             automaticallyConfigureSession: false
         )
         arView.session = session
-        session.run(CrackSurfaceUV4CView.meshConfiguration())
+        if session.configuration == nil {
+            session.run(CrackSurfaceUV4CView.meshConfiguration())
+        }
         onReady(arView)
         return arView
     }
