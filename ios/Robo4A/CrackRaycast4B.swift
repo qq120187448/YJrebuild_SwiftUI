@@ -169,13 +169,13 @@ enum CrackRaycast4B {
                 )
                 let result: ARRaycastResult?
                 if let anchorFrame {
-                    result = anchorFrame
-                        .raycastQuery(
+                    result = arView.session.raycast(
+                        anchorFrame.raycastQuery(
                             from: viewPoint,
                             allowing: .estimatedPlane,
                             alignment: .any
                         )
-                        .flatMap { arView.session.raycast($0).first }
+                    ).first
                 } else {
                     result = arView.raycast(
                         from: viewPoint,
