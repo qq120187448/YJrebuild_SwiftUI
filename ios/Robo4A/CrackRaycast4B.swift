@@ -137,12 +137,15 @@ enum CrackRaycast4B {
     ]
 
     /// 4B 核心：pixel P → ARView.raycast → world W → arView.project → pixel P'。
+    /// 传入 anchorFrame（拍照瞬间的 ARFrame）时，raycast/反投影固定使用该帧相机，
+    /// 避免 4A 推理期间手机移动导致投影漂移到错误位置。
     @MainActor
     static func measure(
         arView: ARView,
         scenario: String,
         samplePointsPerPolyline: [[CrackPoint]],
-        imageToViewScale: CGFloat
+        imageToViewScale: CGFloat,
+        anchorFrame: ARFrame? = nil
     ) -> Raycast4BReport {
         var totalSamples = 0
         var hitCount = 0
@@ -164,11 +167,23 @@ enum CrackRaycast4B {
                     x: CGFloat(point.x) * imageToViewScale,
                     y: CGFloat(point.y) * imageToViewScale
                 )
-                guard let result = arView.raycast(
-                    from: viewPoint,
-                    allowing: .estimatedPlane,
-                    alignment: .any
-                ).first else {
+                let result: ARRaycastResult?
+                if let anchorFrame {
+                    result = anchorFrame
+                        .raycastQuery(
+                            from: viewPoint,
+                            allowing: .estimatedPlane,
+                            alignment: .any
+                        )
+                        .flatMap { arView.session.raycast($0).first }
+                } else {
+                    result = arView.raycast(
+                        from: viewPoint,
+                        allowing: .estimatedPlane,
+                        alignment: .any
+                    ).first
+                }
+                guard let result else {
                     missReasons["noRaycastResult", default: 0] += 1
                     points.append(
                         Raycast4BPointResult(
@@ -186,7 +201,17 @@ enum CrackRaycast4B {
                 polyHits += 1
                 let world = result.worldTransform.position
 
-                guard let projected = arView.project(world) else {
+                let projected: CGPoint?
+                if let anchorFrame {
+                    projected = anchorFrame.camera.projectPoint(
+                        world,
+                        orientation: .portrait,
+                        viewportSize: arView.bounds.size
+                    )
+                } else {
+                    projected = arView.project(world)
+                }
+                guard let projected else {
                     missReasons["projectNil", default: 0] += 1
                     points.append(
                         Raycast4BPointResult(

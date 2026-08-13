@@ -109,10 +109,13 @@ struct CrackSurfaceUV4CView: View {
                     arViewReference = arView
                 }
 
-                // 自定义引导文案：由 Apple 的 didProvide(instruction) 驱动。
+                // 自定义引导：白色扫描框（RoomPlanExampleApp 官方示例风格）+ Apple 指令文案。
                 if phase == .scanning || phase == .processing {
                     VStack {
                         Spacer()
+                        RoundedRectangle(cornerRadius: 20)
+                            .stroke(Color.white, lineWidth: 3)
+                            .frame(width: 260, height: 340)
                         Text(coachingText)
                             .font(.headline)
                             .multilineTextAlignment(.center)
@@ -121,7 +124,8 @@ struct CrackSurfaceUV4CView: View {
                             .padding(.vertical, 8)
                             .background(Color.black.opacity(0.55))
                             .clipShape(Capsule())
-                        Spacer().frame(height: 70)
+                            .padding(.top, 12)
+                        Spacer().frame(height: 24)
                     }
                     .allowsHitTesting(false)
                 }
@@ -141,7 +145,7 @@ struct CrackSurfaceUV4CView: View {
             Text(statusText)
                 .font(.caption)
                 .foregroundStyle(.orange)
-            Text("照片红线/蓝点 = 4A 折线与采样点；AR 红点/红线 = raycast 世界点；白线 = mesh")
+            Text("照片红线/蓝点 = 4A 折线与采样点；AR 红点/红线 = raycast 世界点；白框 = 扫描引导")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
@@ -313,6 +317,8 @@ struct CrackSurfaceUV4CView: View {
             }
             statusText = "拍照中…"
 
+            // 拍照瞬间锁定相机帧：4A 推理期间手机移动也不影响 raycast 基准。
+            let anchorFrame = arView.session.currentFrame
             arView.snapshot(saveToHDR: false) { image in
                 Task { @MainActor in
                     guard let image else {
@@ -345,7 +351,8 @@ struct CrackSurfaceUV4CView: View {
                         arView: arView,
                         scenario: scenario,
                         samplePointsPerPolyline: samples,
-                        imageToViewScale: scale
+                        imageToViewScale: scale,
+                        anchorFrame: anchorFrame
                     )
                     let surfaceReport = SurfaceUV4C.buildReport(
                         scenario: scenario,
@@ -499,7 +506,7 @@ struct CrackSurfaceUV4CView: View {
     }
 }
 
-/// 常驻 ARView：整个 4C 生命周期只创建一次，显示白线 mesh（showSceneUnderstanding）。
+/// 常驻 ARView：整个 4C 生命周期只创建一次，扫描白框/引导由 SwiftUI 叠加层绘制。
 struct ARViewContainer4C: UIViewRepresentable {
     var session: ARSession
     var onReady: (ARView) -> Void
@@ -511,7 +518,6 @@ struct ARViewContainer4C: UIViewRepresentable {
             automaticallyConfigureSession: false
         )
         arView.session = session
-        arView.debugOptions.insert(.showSceneUnderstanding)
         session.run(CrackSurfaceUV4CView.meshConfiguration())
         onReady(arView)
         return arView
