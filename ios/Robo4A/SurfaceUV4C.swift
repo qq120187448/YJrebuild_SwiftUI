@@ -89,6 +89,7 @@ enum SurfaceUV4C {
         let uvLengthSegments: [UVLengthSegment]
         let crossSurfaceTransitionCount: Int
         let averageWidthM: Double?
+        let maxWidthM: Double?
 
         var assignedRatio: Double {
             totalWorldHits == 0 ? 0 : Double(totalAssigned) / Double(totalWorldHits)
@@ -117,7 +118,7 @@ enum SurfaceUV4C {
                     crossSurfaceTransitions: crossSurfaceTransitionCount
                 )
             )
-            lines.append(SurfaceUV4C.uvWidthText(averageWidthM))
+            lines.append(SurfaceUV4C.uvWidthText(averageWidthM, maxWidthM: maxWidthM))
             for polyline in polylines {
                 lines.append("裂缝 \(polyline.index + 1)：")
                 lines.append(
@@ -280,8 +281,9 @@ enum SurfaceUV4C {
         room: CapturedRoom,
         diagnosticCategories: [CapturedRoom.Surface.Category] = [.wall, .floor],
         sessionDiagnosticText: String? = nil,
-        pixelAreaPx: Int? = nil,
-        totalPixelLengthPx: Double? = nil
+        totalPixelLengthPx: Double? = nil,
+        maxWidthPx: Double? = nil,
+        averageWidthPx: Double? = nil
     ) -> Report {
         let surfaces =
             room.walls + room.floors + room.doors + room.windows + room.openings
@@ -498,15 +500,17 @@ enum SurfaceUV4C {
             ? nil
             : uvLengthSegments.reduce(0) { $0 + $1.lengthM }
         let averageWidthM: Double?
+        let maxWidthM: Double?
         if let uvLengthM,
-           let totalPixelLengthPx,
-           totalPixelLengthPx > 0,
-           let pixelAreaPx,
-           pixelAreaPx > 0 {
-            let averageWidthPx = Double(pixelAreaPx) / totalPixelLengthPx
-            averageWidthM = averageWidthPx * (uvLengthM / totalPixelLengthPx)
+           let totalPixelLengthPx, totalPixelLengthPx > 0,
+           let averageWidthPx, averageWidthPx > 0,
+           let maxWidthPx, maxWidthPx > 0 {
+            let scale = uvLengthM / totalPixelLengthPx
+            averageWidthM = averageWidthPx * scale
+            maxWidthM = maxWidthPx * scale
         } else {
             averageWidthM = nil
+            maxWidthM = nil
         }
 
         let thresholdRates: [(thresholdMm: Int, ratio: Double)] =
@@ -562,7 +566,8 @@ enum SurfaceUV4C {
             uvLengthM: uvLengthM,
             uvLengthSegments: uvLengthSegments,
             crossSurfaceTransitionCount: crossSurfaceTransitionCount,
-            averageWidthM: averageWidthM
+            averageWidthM: averageWidthM,
+            maxWidthM: maxWidthM
         )
     }
 
@@ -673,13 +678,18 @@ enum SurfaceUV4C {
         return text
     }
 
-    private static func uvWidthText(_ averageWidthM: Double?) -> String {
-        guard let averageWidthM, averageWidthM > 0 else {
+    private static func uvWidthText(
+        _ averageWidthM: Double?,
+        maxWidthM: Double?
+    ) -> String {
+        guard let averageWidthM, averageWidthM > 0,
+              let maxWidthM, maxWidthM > 0 else {
             return "4D.1 裂缝宽度：无法估算"
         }
         return String(
-            format: "4D.1 裂缝宽度（平均，线性近似）：%.3f mm",
-            averageWidthM * 1000
+            format: "4D.1 裂缝宽度（线性近似）：平均 %.3f mm · 最大 %.3f mm",
+            averageWidthM * 1000,
+            maxWidthM * 1000
         )
     }
 

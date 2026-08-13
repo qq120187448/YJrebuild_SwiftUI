@@ -475,8 +475,9 @@ struct CrackSurfaceUV4CView: View {
                         raycast: raycast,
                         room: room,
                         sessionDiagnosticText: sessionDiagnosticText,
-                        pixelAreaPx: viewModel.centerlineResult?.maskPixelCount,
-                        totalPixelLengthPx: viewModel.centerlineResult?.totalPixelLength
+                        totalPixelLengthPx: viewModel.centerlineResult?.totalPixelLength,
+                        maxWidthPx: viewModel.centerlineResult?.maxWidthPx,
+                        averageWidthPx: viewModel.centerlineResult?.averageWidthPx
                     )
                     addWorldVisualization(arView: arView, report: raycast)
                     comparisonText = compareWithPrevious(surfaceReport)

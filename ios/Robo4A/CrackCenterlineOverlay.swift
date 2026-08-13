@@ -21,6 +21,8 @@ enum CrackCenterlineOverlay {
         var componentCount: Int
         var totalPixelLength: Double
         var longestPixelLength: Double
+        var maxWidthPx: Double
+        var averageWidthPx: Double
     }
 
     static func compute(
@@ -61,6 +63,11 @@ enum CrackCenterlineOverlay {
         for value in grid where value {
             maskPixelCount += 1
         }
+        let widthStats = crackWidthStats(
+            grid: grid,
+            width: width,
+            height: height
+        )
 
         // 2. 框内自适应稀疏化采样（保连通）：间距随图像尺寸自适应
         let spacing = max(
@@ -138,7 +145,74 @@ enum CrackCenterlineOverlay {
             skeletonPointCount: skeleton.skeletonPoints.count,
             componentCount: groups.count,
             totalPixelLength: total,
-            longestPixelLength: longest
+            longestPixelLength: longest,
+            maxWidthPx: widthStats.maxWidthPx,
+            averageWidthPx: widthStats.averageWidthPx
+        )
+    }
+
+    /// 用二值掩码到背景的 8 邻域距离场估算裂缝宽度：
+    /// 每个前景点到最近背景的距离视为“半宽”，宽度=2×半宽。
+    /// 返回最大宽度与平均宽度（像素）。
+    private static func crackWidthStats(
+        grid: [Bool],
+        width: Int,
+        height: Int
+    ) -> (maxWidthPx: Double, averageWidthPx: Double) {
+        guard width > 0, height > 0, grid.count == width * height else {
+            return (0, 0)
+        }
+        let infinity = Int.max
+        var distance = [Int](repeating: infinity, count: grid.count)
+        var queue: [Int] = []
+        queue.reserveCapacity(grid.count)
+
+        for index in 0..<grid.count where !grid[index] {
+            distance[index] = 0
+            queue.append(index)
+        }
+
+        let directions = [
+            (1, 0), (-1, 0), (0, 1), (0, -1),
+            (1, 1), (1, -1), (-1, 1), (-1, -1)
+        ]
+        var head = 0
+        while head < queue.count {
+            let index = queue[head]
+            head += 1
+            let x = index % width
+            let y = index / width
+            let nextDistance = distance[index] + 1
+            for (dx, dy) in directions {
+                let nx = x + dx
+                let ny = y + dy
+                guard nx >= 0, nx < width, ny >= 0, ny < height else {
+                    continue
+                }
+                let neighbor = ny * width + nx
+                if distance[neighbor] > nextDistance {
+                    distance[neighbor] = nextDistance
+                    queue.append(neighbor)
+                }
+            }
+        }
+
+        var sum = 0.0
+        var count = 0
+        var maxDistance = 0
+        for index in 0..<grid.count where grid[index] {
+            let value = distance[index]
+            guard value != infinity else { continue }
+            sum += Double(value)
+            count += 1
+            if value > maxDistance {
+                maxDistance = value
+            }
+        }
+        guard count > 0 else { return (0, 0) }
+        return (
+            maxWidthPx: Double(maxDistance) * 2,
+            averageWidthPx: (sum / Double(count)) * 2
         )
     }
 
@@ -205,6 +279,6 @@ enum CrackCenterlineOverlay {
     }
 
     static func statsText(detectionCount: Int, result: Result) -> String {
-        "主裂缝 \(result.polylines.count) 条 · mask 像素 \(result.maskPixelCount) · 稀疏点 \(result.sparsePointCount) · 骨架点 \(result.skeletonPointCount) · 总长 \(String(format: "%.1f", result.totalPixelLength)) px · 最长 \(String(format: "%.1f", result.longestPixelLength)) px · 采样点 \(result.samplePoints.count) 个"
+        "主裂缝 \(result.polylines.count) 条 · mask 像素 \(result.maskPixelCount) · 平均宽 \(String(format: "%.1f", result.averageWidthPx)) px · 最大宽 \(String(format: "%.1f", result.maxWidthPx)) px · 总长 \(String(format: "%.1f", result.totalPixelLength)) px · 最长 \(String(format: "%.1f", result.longestPixelLength)) px · 采样点 \(result.samplePoints.count) 个"
     }
 }
