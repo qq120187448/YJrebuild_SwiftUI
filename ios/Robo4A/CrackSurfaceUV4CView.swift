@@ -1,20 +1,24 @@
 import ARKit
 import RealityKit
 import RoomPlan
+import simd
 import SwiftUI
 import UIKit
 
-/// RoomPlan 会话回调桥接（RoomCaptureSession 使用与 ARView 同一个 ARSession）。
-final class RoomPlanSessionCoordinator: NSObject, RoomCaptureSessionDelegate {
-    var onDidStart: (() -> Void)?
-    var onDidEnd: ((CapturedRoomData, Error?) -> Void)?
+/// RoomPlan 官方扫描视图回调桥接（RoomCaptureView + 共享 ARSession）。
+final class RoomPlanSessionCoordinator:
+    NSObject,
+    RoomCaptureSessionDelegate,
+    RoomCaptureViewDelegate
+{
+    var onDidPresent: ((CapturedRoom, Error?) -> Void)?
     var onDidFail: ((Error) -> Void)?
 
     func captureSession(
         _ session: RoomCaptureSession,
         didStartWith configuration: RoomCaptureSession.Configuration
     ) {
-        onDidStart?()
+        // 官方 RoomCaptureView 自带引导与进度，无需额外处理。
     }
 
     func captureSession(
@@ -22,7 +26,7 @@ final class RoomPlanSessionCoordinator: NSObject, RoomCaptureSessionDelegate {
         didEndWith data: CapturedRoomData,
         error: Error?
     ) {
-        onDidEnd?(data, error)
+        // 最终结果由 captureView(didPresent:) 提供。
     }
 
     func captureSession(
@@ -31,28 +35,67 @@ final class RoomPlanSessionCoordinator: NSObject, RoomCaptureSessionDelegate {
     ) {
         onDidFail?(error)
     }
+
+    func captureView(
+        shouldPresent roomDataForProcessing: CapturedRoomData,
+        error: (any Error)?
+    ) -> Bool {
+        true
+    }
+
+    func captureView(
+        didPresent processedResult: CapturedRoom,
+        error: (any Error)?
+    ) {
+        onDidPresent?(processedResult, error)
+    }
 }
 
-/// 4C：RoomPlan 扫描 + 4B world 点 → Surface UV（米）。
+/// 4C：官方 RoomCaptureView 扫描（自带引导/进度）+ 4B world 点 → Surface UV（米）。
+/// 照片叠加 4A 折线/采样点，AR 画面叠加 4B 世界点/连线，便于逐条裂缝对照。
 struct CrackSurfaceUV4CView: View {
+
+    private enum Phase: Equatable {
+        case idle
+        case scanning
+        case processing
+        case ready
+    }
 
     @StateObject private var viewModel = ContentViewModel()
     @State private var coordinator = RoomPlanSessionCoordinator()
+    @State private var sharedSession = ARSession()
+    @State private var phase: Phase = .idle
     @State private var scenario = CrackRaycast4B.scenarios[0]
-    @State private var statusText = "先“开始扫描”墙面（RoomPlan），再拍照映射 UV"
+    @State private var statusText =
+        "先“开始扫描”墙面（RoomPlan 官方引导界面），结束扫描后再拍照映射 UV"
     @State private var isRunning = false
-    @State private var isScanning = false
     @State private var arViewReference: ARView?
-    @State private var roomCaptureSession: RoomCaptureSession?
+    @State private var roomCaptureViewReference: RoomCaptureView?
     @State private var capturedRoom: CapturedRoom?
     @State private var report: SurfaceUV4C.Report?
     @State private var comparisonText = ""
     @State private var lastReports: [String: SurfaceUV4C.Report] = [:]
+    @State private var worldAnchors: [AnchorEntity] = []
 
     var body: some View {
         VStack(spacing: 8) {
-            ARViewContainer4C { arView in
-                arViewReference = arView
+            ZStack {
+                if phase == .scanning || phase == .processing {
+                    RoomCaptureView4C(session: sharedSession) { view in
+                        roomCaptureViewReference = view
+                        view.captureSession.delegate = coordinator
+                        view.delegate = coordinator
+                        view.captureSession.run(
+                            configuration: RoomCaptureSession.Configuration()
+                        )
+                        statusText = "RoomPlan 扫描中…（白色引导框，缓慢绕房间扫描）"
+                    }
+                } else {
+                    ARViewContainer4C(session: sharedSession) { arView in
+                        arViewReference = arView
+                    }
+                }
             }
             .frame(maxHeight: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -69,27 +112,28 @@ struct CrackSurfaceUV4CView: View {
             Text(statusText)
                 .font(.caption)
                 .foregroundStyle(.orange)
+            Text("照片红线/蓝点 = 4A 折线与采样点；AR 红点/红线 = raycast 世界点")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
 
             HStack {
-                if isScanning {
+                if phase == .scanning {
                     Button("结束扫描") {
-                        roomCaptureSession?.stop(pauseARSession: false)
-                        isScanning = false
-                        if let arView = arViewReference {
-                            arView.session.run(Self.meshConfiguration())
-                        }
-                        statusText = "RoomPlan 处理中…"
+                        stopScan()
                     }
-                } else {
+                } else if phase != .processing {
                     Button("开始扫描") {
-                        startRoomPlanScan()
+                        startScan()
                     }
                 }
 
                 Button("拍照并映射 UV") {
                     measure()
                 }
-                .disabled(isRunning || capturedRoom == nil || arViewReference == nil)
+                .disabled(
+                    isRunning || capturedRoom == nil
+                        || arViewReference == nil || phase != .ready
+                )
 
                 if let report {
                     Button("复制报告") {
@@ -99,25 +143,48 @@ struct CrackSurfaceUV4CView: View {
                         UIPasteboard.general.string = full
                     }
                 }
+
+                if !worldAnchors.isEmpty {
+                    Button("清除投影") {
+                        clearWorldVisualization()
+                    }
+                }
             }
             .buttonStyle(.borderedProminent)
 
             ScrollView {
-                if let report {
-                    Text([report.text(), comparisonText]
-                        .filter { !$0.isEmpty }
-                        .joined(separator: "\n"))
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    Text("扫描并测量后此处显示 4C 报告（区域固定，取景框比例不变）")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 8) {
+                    if let uiImage = viewModel.uiImage {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(height: 150)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(
+                                CenterlineOverlayView(
+                                    result: viewModel.centerlineResult,
+                                    imageSize: uiImage.size
+                                )
+                            )
+                            .frame(maxWidth: .infinity)
+                    }
+
+                    if let report {
+                        Text([report.text(), comparisonText]
+                            .filter { !$0.isEmpty }
+                            .joined(separator: "\n"))
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Text("扫描并测量后此处显示：裂缝照片叠加、4C 报告（区域固定，取景框比例不变）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
-            .frame(height: 190)
+            .frame(height: 210)
             .padding(.horizontal)
         }
         .navigationTitle("4C Surface UV")
@@ -126,47 +193,43 @@ struct CrackSurfaceUV4CView: View {
         }
     }
 
-    // MARK: - RoomPlan
+    // MARK: - RoomPlan 官方扫描
 
     private func setupCoordinator() {
-        coordinator.onDidStart = {
-            self.isScanning = true
-            self.statusText = "RoomPlan 扫描中…（结束扫描后恢复 mesh）"
-        }
-        coordinator.onDidEnd = { data, error in
-            self.isScanning = false
+        coordinator.onDidPresent = { room, error in
             if let error {
-                self.statusText = "扫描出错：\(error.localizedDescription)"
+                statusText = "扫描出错：\(error.localizedDescription)"
+                phase = .idle
                 return
             }
-            Task {
-                do {
-                    let room = try await RoomBuilder(options: [])
-                        .capturedRoom(from: data)
-                    self.capturedRoom = room
-                    self.statusText =
-                        "扫描完成：wall \(room.walls.count) · floor \(room.floors.count) · other \(room.doors.count + room.windows.count + room.openings.count)，可拍照映射"
-                } catch {
-                    self.statusText = "CapturedRoom 构建失败：\(error.localizedDescription)"
-                }
-            }
+            capturedRoom = room
+            phase = .ready
+            statusText =
+                "扫描完成：wall \(room.walls.count) · floor \(room.floors.count) · other \(room.doors.count + room.windows.count + room.openings.count)，可拍照映射"
         }
         coordinator.onDidFail = { error in
-            self.isScanning = false
-            self.statusText = "RoomPlan 失败：\(error.localizedDescription)"
+            statusText = "RoomPlan 失败：\(error.localizedDescription)"
+            phase = .idle
         }
     }
 
-    private func startRoomPlanScan() {
-        guard let arView = arViewReference else { return }
-        let session = RoomCaptureSession(arSession: arView.session)
-        session.delegate = coordinator
-        roomCaptureSession = session
+    private func startScan() {
         capturedRoom = nil
         report = nil
         comparisonText = ""
-        session.run(configuration: RoomCaptureSession.Configuration())
-        statusText = "正在启动 RoomPlan…"
+        lastReports = [:]
+        clearWorldVisualization()
+        viewModel.centerlineResult = nil
+        viewModel.centerlineStats = ""
+        phase = .scanning
+        statusText = "正在启动 RoomPlan 官方扫描…"
+    }
+
+    private func stopScan() {
+        guard let view = roomCaptureViewReference else { return }
+        view.captureSession.stop(pauseARSession: false)
+        phase = .processing
+        statusText = "RoomPlan 处理中…（官方处理页）"
     }
 
     // MARK: - 测量
@@ -215,11 +278,12 @@ struct CrackSurfaceUV4CView: View {
                     raycast: raycast,
                     room: room
                 )
+                addWorldVisualization(arView: arView, report: raycast)
                 comparisonText = compareWithPrevious(surfaceReport)
                 lastReports[scenario] = surfaceReport
                 report = surfaceReport
                 statusText = String(
-                    format: "表面分配率 %.1f%% · UV 单位米",
+                    format: "表面分配率 %.1f%% · UV 单位米 · 照片与 AR 已叠加",
                     surfaceReport.assignedRatio * 100
                 )
                 isRunning = false
@@ -263,6 +327,77 @@ struct CrackSurfaceUV4CView: View {
         return lines.joined(separator: "\n")
     }
 
+    // MARK: - AR 世界点可视化（复用 4B 已验证逻辑：红球 + 相邻点连线）
+
+    private func addWorldVisualization(
+        arView: ARView,
+        report: Raycast4BReport
+    ) {
+        clearWorldVisualization()
+        for polyline in report.polylines {
+            var previousWorld: SIMD3<Float>?
+            for point in polyline.points {
+                guard let world = point.world else {
+                    previousWorld = nil
+                    continue
+                }
+                let anchor = AnchorEntity(world: world)
+                let sphere = ModelEntity(
+                    mesh: .generateSphere(radius: 0.004),
+                    materials: [SimpleMaterial(color: .red, isMetallic: false)]
+                )
+                anchor.addChild(sphere)
+                arView.scene.addAnchor(anchor)
+                worldAnchors.append(anchor)
+
+                if let previous = previousWorld {
+                    if let line = Self.lineEntity(
+                        from: previous,
+                        to: world,
+                        color: .red
+                    ) {
+                        let midpoint = (previous + world) * 0.5
+                        let lineAnchor = AnchorEntity(world: midpoint)
+                        lineAnchor.addChild(line)
+                        arView.scene.addAnchor(lineAnchor)
+                        worldAnchors.append(lineAnchor)
+                    }
+                }
+                previousWorld = world
+            }
+        }
+    }
+
+    private func clearWorldVisualization() {
+        for anchor in worldAnchors {
+            anchor.removeFromParent()
+        }
+        worldAnchors.removeAll()
+    }
+
+    private static func lineEntity(
+        from a: SIMD3<Float>,
+        to b: SIMD3<Float>,
+        color: UIColor
+    ) -> ModelEntity? {
+        let delta = b - a
+        let length = simd_length(delta)
+        guard length > 0.001 else { return nil }
+        let direction = delta / length
+        let entity = ModelEntity(
+            mesh: .generateBox(
+                size: SIMD3<Float>(0.003, 0.003, length),
+                cornerRadius: 0.0015
+            ),
+            materials: [SimpleMaterial(color: color, isMetallic: false)]
+        )
+        entity.orientation = simd_quatf(
+            from: SIMD3<Float>(0, 0, 1),
+            to: direction
+        )
+        return entity
+    }
+
     static func meshConfiguration() -> ARWorldTrackingConfiguration {
         let configuration = ARWorldTrackingConfiguration()
         if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
@@ -274,7 +409,23 @@ struct CrackSurfaceUV4CView: View {
     }
 }
 
+/// 官方 RoomPlan 扫描视图（自带引导、进度与处理页），与 ARView 共享 ARSession。
+struct RoomCaptureView4C: UIViewRepresentable {
+    let session: ARSession
+    var onMake: (RoomCaptureView) -> Void
+
+    func makeUIView(context: Context) -> RoomCaptureView {
+        let view = RoomCaptureView(frame: .zero, arSession: session)
+        view.isCoachingOverlayEnabled = true
+        onMake(view)
+        return view
+    }
+
+    func updateUIView(_ uiView: RoomCaptureView, context: Context) {}
+}
+
 struct ARViewContainer4C: UIViewRepresentable {
+    var session: ARSession
     var onReady: (ARView) -> Void
 
     func makeUIView(context: Context) -> ARView {
@@ -283,7 +434,6 @@ struct ARViewContainer4C: UIViewRepresentable {
             cameraMode: .ar,
             automaticallyConfigureSession: false
         )
-        let session = ARSession()
         arView.session = session
         session.run(CrackSurfaceUV4CView.meshConfiguration())
         onReady(arView)
