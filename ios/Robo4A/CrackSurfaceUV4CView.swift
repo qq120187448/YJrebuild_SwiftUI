@@ -539,7 +539,6 @@ struct RoomCaptureView4C: UIViewRepresentable {
         let view = RoomCaptureView(frame: .zero, arSession: session)
         view.captureSession.delegate = coordinator
         view.delegate = coordinator
-        view.isCoachingOverlayEnabled = true
         onMake(view)
         return view
     }
