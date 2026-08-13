@@ -80,7 +80,7 @@ enum CrackCenterlineOverlay {
         crackConfig.skeletonMode = "main"
         crackConfig.minSpurLength = 30
         crackConfig.minSkeletonLength = 80
-        crackConfig.topCracks = 5
+        crackConfig.topCracks = 7
         let skeleton = CrackSkeleton.analyzeSparse(
             points: sparse,
             spacing: spacing,
@@ -125,10 +125,10 @@ enum CrackCenterlineOverlay {
         let keptIndices = indexed.prefix(5)
         polylines = keptIndices.map { polylines[$0] }
         samplesPerPolyline = keptIndices.map { samplesPerPolyline[$0] }
-        let widthStats = crackWidthStatsLocal(
-            grid: grid,
-            width: width,
-            height: height,
+        let widthStats = contourWidthStats(
+            masks: masks,
+            imageWidth: width,
+            imageHeight: height,
             samplesPerPolyline: samplesPerPolyline
         )
 
@@ -148,6 +148,115 @@ enum CrackCenterlineOverlay {
             longestPixelLength: longest,
             maxWidthPx: widthStats.maxWidthPx,
             averageWidthPx: widthStats.averageWidthPx
+        )
+    }
+
+    /// 从每个实例 mask 提取闭合轮廓边界点，沿中心线法向两侧找最近边界点，
+    /// 以两点欧氏距离作为局部像素宽度，返回平均/最大宽度。
+    private static func contourWidthStats(
+        masks: [MaskPrediction],
+        imageWidth: Int,
+        imageHeight: Int,
+        samplesPerPolyline: [[CrackPoint]]
+    ) -> (maxWidthPx: Double, averageWidthPx: Double) {
+        var contour = Set<CrackPoint>()
+        for prediction in masks {
+            let maskWidth = prediction.maskSize.width
+            let maskHeight = prediction.maskSize.height
+            guard maskWidth > 0, maskHeight > 0,
+                  prediction.mask.count >= maskWidth * maskHeight else {
+                continue
+            }
+            let scaleX = CGFloat(imageWidth) / CGFloat(maskWidth)
+            let scaleY = CGFloat(imageHeight) / CGFloat(maskHeight)
+            for y in 0..<maskHeight {
+                for x in 0..<maskWidth
+                    where prediction.mask[y * maskWidth + x] > 0 {
+                    var isBoundary = false
+                    for dy in -1...1 where !isBoundary {
+                        for dx in -1...1 where !isBoundary {
+                            let nx = x + dx
+                            let ny = y + dy
+                            if nx >= 0, nx < maskWidth,
+                               ny >= 0, ny < maskHeight,
+                               prediction.mask[ny * maskWidth + nx] == 0 {
+                                isBoundary = true
+                            }
+                        }
+                    }
+                    if isBoundary {
+                        let px = Int((CGFloat(x) + 0.5) * scaleX)
+                        let py = Int((CGFloat(y) + 0.5) * scaleY)
+                        contour.insert(CrackPoint(x: px, y: py))
+                    }
+                }
+            }
+        }
+        guard !contour.isEmpty else { return (0, 0) }
+
+        var widths: [Double] = []
+        for polyline in samplesPerPolyline {
+            guard polyline.count >= 2 else { continue }
+            for index in 0..<polyline.count {
+                let point = polyline[index]
+                let previous = index > 0
+                    ? polyline[index - 1]
+                    : nil
+                let next = index < polyline.count - 1
+                    ? polyline[index + 1]
+                    : nil
+                let dx: Int
+                let dy: Int
+                if let previous, let next {
+                    dx = next.x - previous.x
+                    dy = next.y - previous.y
+                } else if let next {
+                    dx = next.x - point.x
+                    dy = next.y - point.y
+                } else if let previous {
+                    dx = point.x - previous.x
+                    dy = point.y - previous.y
+                } else {
+                    continue
+                }
+                let nx = -dy
+                let ny = dx
+
+                var positivePoint: CrackPoint?
+                var positiveDistance = Double.infinity
+                var negativePoint: CrackPoint?
+                var negativeDistance = Double.infinity
+                for contourPoint in contour {
+                    let vx = contourPoint.x - point.x
+                    let vy = contourPoint.y - point.y
+                    let side = vx * nx + vy * ny
+                    let distance = hypot(Double(vx), Double(vy))
+                    if side > 0 {
+                        if distance < positiveDistance {
+                            positiveDistance = distance
+                            positivePoint = contourPoint
+                        }
+                    } else if side < 0 {
+                        if distance < negativeDistance {
+                            negativeDistance = distance
+                            negativePoint = contourPoint
+                        }
+                    }
+                }
+                if let positivePoint, let negativePoint {
+                    widths.append(
+                        hypot(
+                            Double(positivePoint.x - negativePoint.x),
+                            Double(positivePoint.y - negativePoint.y)
+                        )
+                    )
+                }
+            }
+        }
+        guard !widths.isEmpty else { return (0, 0) }
+        return (
+            maxWidthPx: widths.max() ?? 0,
+            averageWidthPx: widths.reduce(0, +) / Double(widths.count)
         )
     }
 
