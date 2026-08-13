@@ -62,9 +62,9 @@ def main() -> int:
 
     for path, stem in paths.items():
         if stem == "crack_seg_n":
-            export_one(path, 640, "crack_seg_n")
+            export_one(path, args.imgsz, "crack_seg_n")
         else:
-            export_one(path, 640, stem)
+            export_one(path, args.imgsz, stem)
 
     print("Done. Add the .mlpackage files to the Xcode project resources.")
     return 0

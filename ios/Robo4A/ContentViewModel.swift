@@ -64,6 +64,7 @@ class ContentViewModel: ObservableObject {
     @Published var modelNote: String = ""
     @Published var centerlineResult: CrackCenterlineOverlay.Result?
     @Published var centerlineStats: String = ""
+    @Published var inferenceHardware = ""
 
     private static let modelCacheLock = NSLock()
     private static var cachedModelName: String?
@@ -251,6 +252,22 @@ extension ContentViewModel {
         var handleTask: Task<Void, Never>?
         do {
             let config = MLModelConfiguration()
+            let computeText: String
+            switch config.computeUnits {
+            case .all:
+                computeText = "CoreML 自动调度 CPU/GPU/Neural Engine"
+            case .cpuAndGPU:
+                computeText = "CoreML CPU+GPU"
+            case .cpuOnly:
+                computeText = "CoreML CPU"
+            case .cpuAndNeuralEngine:
+                computeText = "CoreML CPU+Neural Engine"
+            @unknown default:
+                computeText = "CoreML 未知计算单元"
+            }
+            await MainActor.run { [weak self] in
+                self?.inferenceHardware = computeText
+            }
             
             let requestedName = modelSize == "s" ? "crack_seg_s" : "crack_seg_n"
             var modelName = requestedName

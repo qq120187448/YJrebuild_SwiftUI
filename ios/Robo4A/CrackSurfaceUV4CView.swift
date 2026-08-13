@@ -563,7 +563,7 @@ struct CrackSurfaceUV4CView: View {
                         inferenceDuration,
                         spatialDuration,
                         totalDuration
-                    )
+                    ) + " · \(viewModel.inferenceHardware)"
                     performanceText = performance
                     appendReportLog(performance)
                     statusText = String(

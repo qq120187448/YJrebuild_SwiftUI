@@ -42,6 +42,7 @@ jobs:
           python -m pip install --quiet "ultralytics>=8.2" "coremltools>=8,<9"
           python tools/coreml_export/export_yolo_seg.py \
             --input crack-recognition/models/crack_seg_n.pt \
+            --imgsz 1024 \
             --output ios/Robo/Resources/Models
           mkdir -p ios/Robo/Resources/Models/compiled
           xcrun coremlcompiler compile \
