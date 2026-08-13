@@ -64,6 +64,10 @@ class ContentViewModel: ObservableObject {
     @Published var modelNote: String = ""
     @Published var centerlineResult: CrackCenterlineOverlay.Result?
     @Published var centerlineStats: String = ""
+
+    private var cachedModelName: String?
+    private var cachedMLModel: MLModel?
+    private var cachedVisionModel: VNCoreMLModel?
     
     @MainActor @Published var status: Status? = nil
     
@@ -249,6 +253,35 @@ extension ContentViewModel {
             
             let requestedName = modelSize == "s" ? "crack_seg_s" : "crack_seg_n"
             var modelName = requestedName
+            if cachedModelName == modelName,
+               let cachedMLModel = cachedMLModel,
+               let cachedVisionModel = cachedVisionModel {
+                let inputDesc = cachedMLModel.modelDescription.inputDescriptionsByName
+                guard let imgInputDesc = inputDesc["image"],
+                      let imgsz = imgInputDesc.imageConstraint else {
+                    return
+                }
+                let segmentationRequest = VNCoreMLRequest(
+                    model: cachedVisionModel,
+                    completionHandler: { (request, error) in
+                        if let error = error {
+                            print("VNCoreMLRequest complete with error: \(error)")
+                        }
+                        if let results = request.results {
+                            handleTask = Task {
+                                await self.setStatus(to: .postProcessing)
+                                await handleResults(
+                                    results,
+                                    inputSize: imgsz,
+                                    originalImgSize: uiImage.size
+                                )
+                            }
+                        }
+                    })
+                segmentationRequest.preferBackgroundProcessing = false
+                segmentationRequest.imageCropAndScaleOption = .scaleFill
+                requests = [segmentationRequest]
+            } else {
             var modelURL = Bundle.main.url(
                 forResource: modelName,
                 withExtension: "mlmodelc",
@@ -275,6 +308,9 @@ extension ContentViewModel {
                 print("failed to init crack model: \(modelName)")
                 return
             }
+            cachedModelName = modelName
+            cachedMLModel = mlModel
+            cachedVisionModel = visionModel
             
             let inputDesc = mlModel.modelDescription.inputDescriptionsByName
             guard let imgInputDesc = inputDesc["image"],
@@ -299,6 +335,7 @@ extension ContentViewModel {
             segmentationRequest.imageCropAndScaleOption = .scaleFill
             
             requests = [segmentationRequest]
+            }
         } catch let error as NSError {
             print("Model loading went wrong: \(error)")
         }

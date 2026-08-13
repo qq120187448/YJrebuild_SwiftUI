@@ -465,8 +465,15 @@ struct CrackSurfaceUV4CView: View {
 
             // 拍照时间戳：用于 Capture→Raycast 延迟统计（专家建议指标）。
             let captureTime = Date()
+            let resumeConfiguration = arView.session.configuration
+            arView.session.pause()
             arView.snapshot(saveToHDR: false) { image in
                 Task { @MainActor in
+                    defer {
+                        if let resumeConfiguration {
+                            arView.session.run(resumeConfiguration)
+                        }
+                    }
                     guard let image else {
                         statusText = "拍照失败"
                         isRunning = false
