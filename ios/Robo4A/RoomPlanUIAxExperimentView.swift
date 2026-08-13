@@ -57,21 +57,21 @@ struct RoomPlanUIAxExperimentView: View {
                 .padding(.horizontal)
 
             ZStack {
-                RoomCaptureViewAx(
-                    mode: mode,
-                    sharedSession: sharedSession,
-                    scanID: scanID,
-                    onInstruction: { text in
-                        coachingText = text
-                    }
-                ) { view in
-                    var configuration = RoomCaptureSession.Configuration()
-                    configuration.isCoachingEnabled = true
-                    view.captureSession.run(configuration: configuration)
-                }
-                .id(scanID)
-
                 if isScanning {
+                    RoomCaptureViewAx(
+                        mode: mode,
+                        sharedSession: sharedSession,
+                        scanID: scanID,
+                        onInstruction: { text in
+                            coachingText = text
+                        }
+                    ) { view in
+                        var configuration = RoomCaptureSession.Configuration()
+                        configuration.isCoachingEnabled = true
+                        view.captureSession.run(configuration: configuration)
+                    }
+                    .id(scanID)
+
                     VStack {
                         Spacer()
                         Text("coaching：\(coachingText)")
@@ -84,6 +84,15 @@ struct RoomPlanUIAxExperimentView: View {
                             .padding(.bottom, 16)
                     }
                     .allowsHitTesting(false)
+                } else {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.black.opacity(0.85))
+                        .overlay(
+                            Text("选择组别后点“开始扫描”\nRoomCaptureView 仅在本组开始时创建")
+                                .font(.headline)
+                                .foregroundStyle(.white)
+                                .multilineTextAlignment(.center)
+                        )
                 }
             }
             .frame(maxHeight: .infinity)
