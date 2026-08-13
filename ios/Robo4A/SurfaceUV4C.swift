@@ -41,6 +41,9 @@ enum SurfaceUV4C {
         let raycastAnchorType: String?
         let raycastTarget: String?
         let raycastTargetAlignment: String?
+        let existingWorld: SIMD3<Float>?
+        let existingLocalZ: Double?
+        let existingPlaneDistance: Double?
         let candidates: [SurfaceCandidate]
     }
 
@@ -74,6 +77,7 @@ enum SurfaceUV4C {
         let sessionDiagnosticText: String?
         let thresholdRates: [(thresholdMm: Int, ratio: Double)]
         let raycastTargetSummary: [String: Int]
+        let targetComparisonRates: [(thresholdMm: Int, estimatedRatio: Double, existingRatio: Double)]
 
         var assignedRatio: Double {
             totalWorldHits == 0 ? 0 : Double(totalAssigned) / Double(totalWorldHits)
@@ -94,6 +98,7 @@ enum SurfaceUV4C {
             }
             lines.append(SurfaceUV4C.raycastTargetSummaryText(raycastTargetSummary))
             lines.append(SurfaceUV4C.thresholdRatesText(thresholdRates))
+            lines.append(SurfaceUV4C.targetComparisonRatesText(targetComparisonRates))
             for polyline in polylines {
                 lines.append("裂缝 \(polyline.index + 1)：")
                 lines.append(
@@ -158,6 +163,21 @@ enum SurfaceUV4C {
                             raycastInfo
                         )
                     )
+                    if let existingLocalZ = point.existingLocalZ,
+                       let existingPlaneDistance = point.existingPlaneDistance {
+                        let estimatedLocalZ = point.candidates.first?.local.z
+                        let estimatedZText = estimatedLocalZ.map {
+                            String(format: "%.3f", $0)
+                        } ?? "-"
+                        lines.append(
+                            String(
+                                format: "  目标对照：estimated z=%@ · existing z=%.3f · existing |z|=%.3f",
+                                estimatedZText,
+                                existingLocalZ,
+                                existingPlaneDistance
+                            )
+                        )
+                    }
                     if point.candidates.isEmpty {
                         lines.append("  （无候选 Surface）")
                     }
@@ -257,6 +277,7 @@ enum SurfaceUV4C {
         var totalAssigned = 0
         var totalWorldHits = 0
         var worldPoints: [SIMD3<Float>] = []
+        var existingWorldPoints: [SIMD3<Float>] = []
         var raycastTargetSummary: [String: Int] = [:]
 
         for polyline in raycast.polylines {
@@ -268,6 +289,13 @@ enum SurfaceUV4C {
             for (_, point) in polyline.points.enumerated() {
                 totalSamples += 1
                 guard let world = point.world else {
+                    let existingCandidate = point.existingWorld.flatMap {
+                        candidateDiagnostics(
+                            world: $0,
+                            surfaces: surfaces,
+                            allowedCategories: diagnosticCategories
+                        ).first
+                    }
                     points.append(
                         MappedPoint(
                             source: point.source,
@@ -283,6 +311,9 @@ enum SurfaceUV4C {
                             raycastAnchorType: point.raycastAnchorType,
                             raycastTarget: point.raycastTarget,
                             raycastTargetAlignment: point.raycastTargetAlignment,
+                            existingWorld: point.existingWorld,
+                            existingLocalZ: existingCandidate.map { Double($0.local.z) },
+                            existingPlaneDistance: existingCandidate.map { Double($0.planeDistance) },
                             candidates: []
                         )
                     )
@@ -290,6 +321,9 @@ enum SurfaceUV4C {
                 }
                 totalWorldHits += 1
                 worldPoints.append(world)
+                if let existingWorld = point.existingWorld {
+                    existingWorldPoints.append(existingWorld)
+                }
                 if let target = point.raycastTarget {
                     raycastTargetSummary[target, default: 0] += 1
                 }
@@ -298,6 +332,13 @@ enum SurfaceUV4C {
                     surfaces: surfaces,
                     allowedCategories: diagnosticCategories
                 )
+                let existingCandidate = point.existingWorld.flatMap {
+                    candidateDiagnostics(
+                        world: $0,
+                        surfaces: surfaces,
+                        allowedCategories: diagnosticCategories
+                    ).first
+                }
                 if let mapped = map(world: world, surfaces: surfaces) {
                     assignedCount += 1
                     totalAssigned += 1
@@ -320,6 +361,9 @@ enum SurfaceUV4C {
                             raycastAnchorType: point.raycastAnchorType,
                             raycastTarget: point.raycastTarget,
                             raycastTargetAlignment: point.raycastTargetAlignment,
+                            existingWorld: point.existingWorld,
+                            existingLocalZ: existingCandidate.map { Double($0.local.z) },
+                            existingPlaneDistance: existingCandidate.map { Double($0.planeDistance) },
                             candidates: candidates
                         )
                     )
@@ -339,6 +383,9 @@ enum SurfaceUV4C {
                             raycastAnchorType: point.raycastAnchorType,
                             raycastTarget: point.raycastTarget,
                             raycastTargetAlignment: point.raycastTargetAlignment,
+                            existingWorld: point.existingWorld,
+                            existingLocalZ: existingCandidate.map { Double($0.local.z) },
+                            existingPlaneDistance: existingCandidate.map { Double($0.planeDistance) },
                             candidates: candidates
                         )
                     )
@@ -376,6 +423,27 @@ enum SurfaceUV4C {
                 return (thresholdMm: thresholdMm, ratio: ratio)
             }
 
+        let targetComparisonRates: [
+            (thresholdMm: Int, estimatedRatio: Double, existingRatio: Double)
+        ] = [20, 30, 40, 50].map { thresholdMm in
+            let toleranceM = Float(thresholdMm) / 1000.0
+            let estimatedAssigned = worldPoints.filter {
+                map(world: $0, surfaces: surfaces, toleranceM: toleranceM) != nil
+            }.count
+            let existingAssigned = existingWorldPoints.filter {
+                map(world: $0, surfaces: surfaces, toleranceM: toleranceM) != nil
+            }.count
+            return (
+                thresholdMm: thresholdMm,
+                estimatedRatio: worldPoints.isEmpty
+                    ? 0
+                    : Double(estimatedAssigned) / Double(worldPoints.count),
+                existingRatio: existingWorldPoints.isEmpty
+                    ? 0
+                    : Double(existingAssigned) / Double(existingWorldPoints.count)
+            )
+        }
+
         return Report(
             scenario: scenario,
             surfaceTotal: surfaces.count,
@@ -390,7 +458,8 @@ enum SurfaceUV4C {
             surfaceInventory: surfaceInventory,
             sessionDiagnosticText: sessionDiagnosticText,
             thresholdRates: thresholdRates,
-            raycastTargetSummary: raycastTargetSummary
+            raycastTargetSummary: raycastTargetSummary,
+            targetComparisonRates: targetComparisonRates
         )
     }
 
@@ -458,6 +527,20 @@ enum SurfaceUV4C {
             String(format: "%dmm=%.1f%%", threshold, ratio * 100)
         }.joined(separator: " · ")
         return "阈值敏感性（Debug）：\(parts)"
+    }
+
+    private static func targetComparisonRatesText(
+        _ rates: [(thresholdMm: Int, estimatedRatio: Double, existingRatio: Double)]
+    ) -> String {
+        let parts = rates.map { threshold, estimated, existing in
+            String(
+                format: "%dmm est=%.1f%% exist=%.1f%%",
+                threshold,
+                estimated * 100,
+                existing * 100
+            )
+        }.joined(separator: " · ")
+        return "target A/B（Debug）：\(parts)"
     }
 
     private static func float3Text(_ value: simd_float3) -> String {

@@ -22,6 +22,10 @@ struct Raycast4BPointResult {
     let raycastAnchorType: String?
     let raycastTarget: String?
     let raycastTargetAlignment: String?
+    let existingWorld: SIMD3<Float>?
+    let existingFirstRaycastDistance: Double?
+    let existingRaycastAnchorType: String?
+    let existingRaycastResultsCount: Int?
 }
 
 // MARK: - 单条折线结果
@@ -176,12 +180,27 @@ enum CrackRaycast4B {
                     x: CGFloat(point.x) * imageToViewScale,
                     y: CGFloat(point.y) * imageToViewScale
                 )
-                let raycastResults = arView.raycast(
+                let estimatedResults = arView.raycast(
                     from: viewPoint,
                     allowing: .estimatedPlane,
                     alignment: .any
                 )
-                guard let result = raycastResults.first else {
+                let existingResults = arView.raycast(
+                    from: viewPoint,
+                    allowing: .existingPlaneGeometry,
+                    alignment: .any
+                )
+                let cameraPosition = arView.session.currentFrame?.camera.transform.position
+                let existingWorld = existingResults.first?.worldTransform.position
+                let existingFirstRaycastDistance: Double? = {
+                    guard let existingWorld, let cameraPosition else { return nil }
+                    return Double(simd_distance(existingWorld, cameraPosition))
+                }()
+                let existingRaycastAnchorType = existingResults.first.map {
+                    Self.anchorTypeName($0.anchor)
+                }
+
+                guard let result = estimatedResults.first else {
                     missReasons["noRaycastResult", default: 0] += 1
                     points.append(
                         Raycast4BPointResult(
@@ -194,7 +213,11 @@ enum CrackRaycast4B {
                             firstRaycastDistance: nil,
                             raycastAnchorType: nil,
                             raycastTarget: nil,
-                            raycastTargetAlignment: nil
+                            raycastTargetAlignment: nil,
+                            existingWorld: existingWorld,
+                            existingFirstRaycastDistance: existingFirstRaycastDistance,
+                            existingRaycastAnchorType: existingRaycastAnchorType,
+                            existingRaycastResultsCount: existingResults.count
                         )
                     )
                     continue
@@ -203,7 +226,6 @@ enum CrackRaycast4B {
                 hitCount += 1
                 polyHits += 1
                 let world = result.worldTransform.position
-                let cameraPosition = arView.session.currentFrame?.camera.transform.position
                 let firstDistance = cameraPosition.map {
                     Double(simd_distance(world, $0))
                 }
@@ -220,11 +242,15 @@ enum CrackRaycast4B {
                             projected: nil,
                             errorPx: nil,
                             missReason: "projectNil",
-                            raycastResultsCount: raycastResults.count,
+                            raycastResultsCount: estimatedResults.count,
                             firstRaycastDistance: firstDistance,
                             raycastAnchorType: raycastAnchorType,
                             raycastTarget: raycastTarget,
-                            raycastTargetAlignment: raycastTargetAlignment
+                            raycastTargetAlignment: raycastTargetAlignment,
+                            existingWorld: existingWorld,
+                            existingFirstRaycastDistance: existingFirstRaycastDistance,
+                            existingRaycastAnchorType: existingRaycastAnchorType,
+                            existingRaycastResultsCount: existingResults.count
                         )
                     )
                     continue
@@ -244,11 +270,15 @@ enum CrackRaycast4B {
                         projected: projected,
                         errorPx: error,
                         missReason: nil,
-                        raycastResultsCount: raycastResults.count,
+                        raycastResultsCount: estimatedResults.count,
                         firstRaycastDistance: firstDistance,
                         raycastAnchorType: raycastAnchorType,
                         raycastTarget: raycastTarget,
-                        raycastTargetAlignment: raycastTargetAlignment
+                        raycastTargetAlignment: raycastTargetAlignment,
+                        existingWorld: existingWorld,
+                        existingFirstRaycastDistance: existingFirstRaycastDistance,
+                        existingRaycastAnchorType: existingRaycastAnchorType,
+                        existingRaycastResultsCount: existingResults.count
                     )
                 )
             }
