@@ -113,10 +113,11 @@ enum SurfaceUV4C {
     }
 
     /// 在 surface 集合中查找包含该 world 点的表面（含容差），取最贴近表面平面的那个。
+    /// 注意：2cm 只是“哪个 Surface 接收该点”的关联分类阈值，不代表 UV 测量精度。
     static func map(
         world: SIMD3<Float>,
         surfaces: [CapturedRoom.Surface],
-        toleranceM: Float = 0.03
+        toleranceM: Float = 0.02
     ) -> (surface: CapturedRoom.Surface, local: SIMD3<Float>)? {
         var bestSurface: CapturedRoom.Surface?
         var bestLocal: SIMD3<Float>?
