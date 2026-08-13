@@ -65,9 +65,10 @@ class ContentViewModel: ObservableObject {
     @Published var centerlineResult: CrackCenterlineOverlay.Result?
     @Published var centerlineStats: String = ""
 
-    private var cachedModelName: String?
-    private var cachedMLModel: MLModel?
-    private var cachedVisionModel: VNCoreMLModel?
+    private static let modelCacheLock = NSLock()
+    private static var cachedModelName: String?
+    private static var cachedMLModel: MLModel?
+    private static var cachedVisionModel: VNCoreMLModel?
     
     @MainActor @Published var status: Status? = nil
     
@@ -253,9 +254,20 @@ extension ContentViewModel {
             
             let requestedName = modelSize == "s" ? "crack_seg_s" : "crack_seg_n"
             var modelName = requestedName
-            if cachedModelName == modelName,
-               let cachedMLModel = cachedMLModel,
-               let cachedVisionModel = cachedVisionModel {
+            Self.modelCacheLock.lock()
+            let cacheHit: (MLModel, VNCoreMLModel)?
+            if Self.cachedModelName == modelName,
+               let cachedML = Self.cachedMLModel,
+               let cachedVision = Self.cachedVisionModel {
+                cacheHit = (cachedML, cachedVision)
+            } else {
+                cacheHit = nil
+            }
+            Self.modelCacheLock.unlock()
+
+            if let cacheHit {
+                let cachedMLModel = cacheHit.0
+                let cachedVisionModel = cacheHit.1
                 let inputDesc = cachedMLModel.modelDescription.inputDescriptionsByName
                 guard let imgInputDesc = inputDesc["image"],
                       let imgsz = imgInputDesc.imageConstraint else {
@@ -308,9 +320,11 @@ extension ContentViewModel {
                 print("failed to init crack model: \(modelName)")
                 return
             }
-            cachedModelName = modelName
-            cachedMLModel = mlModel
-            cachedVisionModel = visionModel
+            Self.modelCacheLock.lock()
+            Self.cachedModelName = modelName
+            Self.cachedMLModel = mlModel
+            Self.cachedVisionModel = visionModel
+            Self.modelCacheLock.unlock()
             
             let inputDesc = mlModel.modelDescription.inputDescriptionsByName
             guard let imgInputDesc = inputDesc["image"],
