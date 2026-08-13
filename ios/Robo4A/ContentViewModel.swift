@@ -240,7 +240,7 @@ extension ContentViewModel {
                         result: result
                     )
                     self.stageTimings["maskDecode"] = maskDecodeDuration
-                    self.stageTimings["skeletonPolyline"] = skeletonDuration
+                    self.stageTimings["centerline"] = skeletonDuration
                 }
             }
             await setStatus(to: nil)

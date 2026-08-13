@@ -491,6 +491,21 @@ struct CrackSurfaceUV4CView: View {
 
             // 拍照时间戳：用于 Capture→Raycast 延迟统计（专家建议指标）。
             let captureTime = Date()
+            let captureFrame = arView.session.currentFrame
+            let orientation =
+                arView.window?.windowScene?.interfaceOrientation ?? .portrait
+            let captureContext = captureFrame.map { frame in
+                CaptureFrameSpatialContext(
+                    timestamp: frame.timestamp,
+                    cameraTransform: frame.camera.transform,
+                    cameraIntrinsics: frame.camera.intrinsics,
+                    imageResolution: frame.camera.imageResolution,
+                    displayTransform: frame.displayTransform(
+                        for: orientation,
+                        viewportSize: arView.bounds.size
+                    )
+                )
+            }
             arView.snapshot(saveToHDR: false) { image in
                 Task { @MainActor in
                     guard let image else {
@@ -527,13 +542,25 @@ struct CrackSurfaceUV4CView: View {
 
                     statusText = "raycast + Surface UV 映射中…"
                     let spatialStart = Date()
-                    let raycast = CrackRaycast4B.measure(
-                        arView: arView,
-                        scenario: scenario,
-                        samplePointsPerPolyline: samples,
-                        imageToViewScale: scale,
-                        captureTime: captureTime
-                    )
+                    let raycast: Raycast4BReport
+                    if let captureContext {
+                        raycast = CaptureFrameSurfaceMapper.map(
+                            arView: arView,
+                            context: captureContext,
+                            room: room,
+                            samplePointsPerPolyline: samples,
+                            imageToViewScale: scale,
+                            captureTime: captureTime
+                        )
+                    } else {
+                        raycast = CrackRaycast4B.measure(
+                            arView: arView,
+                            scenario: scenario,
+                            samplePointsPerPolyline: samples,
+                            imageToViewScale: scale,
+                            captureTime: captureTime
+                        )
+                    }
                     let sessionDiagnosticText = Self.sessionDiagnosticText(
                         arView: arView,
                         roomCaptureFrameTimestamp: roomCaptureFrameTimestamp,
@@ -563,7 +590,7 @@ struct CrackSurfaceUV4CView: View {
                         String(format: "requestSetup=%.0fms", timing["requestSetup"] ?? 0),
                         String(format: "coreML=%.0fms", timing["coreML"] ?? 0),
                         String(format: "maskDecode=%.0fms", timing["maskDecode"] ?? 0),
-                        String(format: "skeleton=%.0fms", timing["skeletonPolyline"] ?? 0),
+                        String(format: "centerline=%.0fms", timing["centerline"] ?? 0),
                         String(format: "spatial=%.0fms", spatialDuration),
                         String(format: "total=%.0fms", totalDuration),
                         viewModel.inferenceHardware
