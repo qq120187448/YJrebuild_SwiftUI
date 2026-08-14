@@ -10,7 +10,10 @@ import RoomPlan
 /// → recovery → relocalizing → normal+alignment good → MEASUREMENT_READY；超时 → NEED_USER_RELOCALIZATION。
 enum SpatialHealthState {
     case notReady
-    case measurementReady
+    /// 正常：tracking normal + 全局对齐达标（可全通道精密测量）。
+    case measurementAligned
+    /// recovery 后 ARKit 已 normal，但全局对齐未达标（Isect 降级或空间 unsafe）。
+    case relocalized
     case spaceWarning
     case relocalizationRequired
     case relocalizing
@@ -20,8 +23,10 @@ enum SpatialHealthState {
         switch self {
         case .notReady:
             return "未建立空间基准"
-        case .measurementReady:
-            return "空间就绪，可测量"
+        case .measurementAligned:
+            return "空间对齐，可精密测量"
+        case .relocalized:
+            return "空间已恢复但未对齐（降级模式）"
         case .spaceWarning:
             return "空间定位调整中…（暂不做高精度测量）"
         case .relocalizationRequired:
@@ -31,6 +36,30 @@ enum SpatialHealthState {
         case .needUserRelocalization:
             return "重定位超时，请回到刚才扫描过的区域"
         }
+    }
+}
+
+/// 全局表面校验结果（固定测试射线集合，专家 C 项）。
+struct GlobalSurfaceValidation {
+    let totalRays: Int
+    let hitRays: Int
+    let coverageRatio: Double      // ≤20mm 距离占比
+    let p50MM: Double
+    let p90MM: Double
+    let p95MM: Double
+    let maxMM: Double
+
+    var text: String {
+        String(
+            format: "全局校验 %d/%d 命中 · 覆盖 %.1f%% · 距离 P50=%.1f P90=%.1f P95=%.1f max=%.1f mm",
+            hitRays,
+            totalRays,
+            coverageRatio * 100,
+            p50MM,
+            p90MM,
+            p95MM,
+            maxMM
+        )
     }
 }
 
@@ -104,7 +133,7 @@ final class SpatialRecoveryManager {
                     }
                     worldMap = map
                     setState(
-                        .measurementReady,
+                        .measurementAligned,
                         text: "WorldMap 已保存（\(map.anchors.count) 锚点，mapped）"
                     )
                     return true
@@ -161,7 +190,7 @@ final class SpatialRecoveryManager {
         }
         if snapDistanceMM <= 20 {
             setState(
-                .measurementReady,
+                .measurementAligned,
                 text: String(
                     format: "空间健康 GOOD（snap %.1fmm ≤20）",
                     snapDistanceMM
@@ -270,50 +299,114 @@ final class SpatialRecoveryManager {
             )
             return
         }
-        // normal 后校验 Surface alignment。
-        // WorldMap 恢复的锚点 identifier 不保证保留：用 RoomPlan surfaces 重新放置校验锚点。
-        if verifyAnchors.isEmpty {
-            placeVerifyAnchors(surfaces: surfaces, session: arView.session)
-        }
-        let snapMM = verifySnapDistance(
+        // normal 后全局校验（专家 C 项：固定测试射线集合，不用单锚点）。
+        let validation = globalSurfaceValidation(
             arView: arView,
             surfaces: surfaces
         )
-        if let snapMM, snapMM <= 20 {
+        if validation.coverageRatio >= 0.8, validation.p95MM <= 20 {
             verifyFailCount = 0
             setState(
-                .measurementReady,
-                text: String(
-                    format: "recovery 成功：normal + Surface alignment %.1fmm ≤20",
-                    snapMM
-                )
+                .measurementAligned,
+                text: "MEASUREMENT_ALIGNED：normal + \(validation.text)"
+            )
+        } else if validation.maxMM > 50 {
+            verifyFailCount += 1
+            setState(
+                .relocalized,
+                text: "RELOCALIZED（normal）· \(validation.text) · RECOVERY_SPATIAL_UNSAFE：不输出精密长度"
             )
         } else {
             verifyFailCount += 1
-            if verifyFailCount >= maxVerifyFails {
-                setState(
-                    .needUserRelocalization,
-                    text: snapMM.map {
-                        String(
-                            format: "recovery 后 alignment 仍差（%.1fmm），请回到已扫描区域",
-                            $0
-                        )
-                    } ?? "recovery 后持续无表面观测（mesh 未恢复），请回到已扫描区域"
+            setState(
+                .relocalized,
+                text: "RELOCALIZED（normal）· \(validation.text) · RECOVERY_MEASUREMENT（Isect 降级）"
+            )
+        }
+    }
+
+    /// 全局校验：屏幕固定网格射线 → 每个命中点最近表面法向距离 → 覆盖/分布。
+    @MainActor
+    private func globalSurfaceValidation(
+        arView: ARView,
+        surfaces: [CapturedRoom.Surface]
+    ) -> GlobalSurfaceValidation {
+        let xs: [CGFloat] = [0.1, 0.3, 0.5, 0.7, 0.9]
+        let ys: [CGFloat] = [0.15, 0.4, 0.65, 0.85]
+        let viewport = arView.bounds
+        var hitCount = 0
+        var distances: [Double] = []
+
+        for ny in ys {
+            for nx in xs {
+                let viewPoint = CGPoint(
+                    x: viewport.width * nx,
+                    y: viewport.height * ny
                 )
-            } else {
-                setState(
-                    .relocalizing,
-                    text: snapMM.map {
-                        String(
-                            format: "normal 已恢复，等待表面校验（%.1fmm，第 %d/%d 次）…",
-                            $0,
-                            verifyFailCount,
-                            maxVerifyFails
-                        )
-                    } ?? "normal 已恢复，等待表面观测（mesh 重建中，第 \(verifyFailCount)/\(maxVerifyFails) 次）…"
+                let results = arView.raycast(
+                    from: viewPoint,
+                    allowing: .estimatedPlane,
+                    alignment: .any
                 )
+                guard let hit = results.first else { continue }
+                let world = hit.worldTransform.position
+                var minAbsZ = Float.greatestFiniteMagnitude
+                for surface in surfaces {
+                    let local = SurfaceUV4C.surfaceLocal(
+                        world,
+                        surface: surface
+                    )
+                    let halfX = surface.dimensions.x * 0.5 + 0.02
+                    let halfY = surface.dimensions.y * 0.5 + 0.02
+                    guard abs(local.x) <= halfX,
+                          abs(local.y) <= halfY else {
+                        continue
+                    }
+                    minAbsZ = min(minAbsZ, abs(local.z))
+                }
+                guard minAbsZ < .greatestFiniteMagnitude else { continue }
+                hitCount += 1
+                distances.append(Double(minAbsZ) * 1000)
             }
         }
+
+        let total = xs.count * ys.count
+        guard !distances.isEmpty else {
+            return GlobalSurfaceValidation(
+                totalRays: total,
+                hitRays: 0,
+                coverageRatio: 0,
+                p50MM: 0,
+                p90MM: 0,
+                p95MM: 0,
+                maxMM: 0
+            )
+        }
+        let sorted = distances.sorted()
+        let covered = distances.filter { $0 <= 20 }.count
+        return GlobalSurfaceValidation(
+            totalRays: total,
+            hitRays: hitCount,
+            coverageRatio: Double(covered) / Double(distances.count),
+            p50MM: percentile(sorted, 50),
+            p90MM: percentile(sorted, 90),
+            p95MM: percentile(sorted, 95),
+            maxMM: sorted.last ?? 0
+        )
+    }
+
+    private func percentile(
+        _ sorted: [Double],
+        _ p: Double
+    ) -> Double {
+        guard !sorted.isEmpty else { return 0 }
+        guard sorted.count > 1 else { return sorted[0] }
+        let rank = Double(sorted.count - 1) * p / 100.0
+        let lower = Int(floor(rank))
+        let upper = min(sorted.count - 1, Int(ceil(rank)))
+        let fraction = rank - Double(lower)
+        if lower == upper { return sorted[lower] }
+        return sorted[lower] * (1 - fraction) + sorted[upper] * fraction
     }
 
     /// 校验：对校验锚点 raycast → 最近表面法向距离（snapDistance）。
@@ -407,9 +500,28 @@ final class SpatialRecoveryManager {
         removeVerifyAnchors(session: session)
     }
 
-    /// 是否允许测量（normal + alignment good）。
+    /// 是否允许拍照/测量（relocalizing/needUser/required 禁用；降级模式允许拍照）。
     var isMeasurementAllowed: Bool {
-        state == .measurementReady
+        switch state {
+        case .measurementAligned, .relocalized, .spaceWarning:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// 当前测量模式："normal" / "recovery"（Isect 降级）。
+    var measurementMode: String {
+        state == .relocalized ? "recovery" : "normal"
+    }
+
+    /// recovery 降级下是否允许输出精密长度（RECOVERY_MEASUREMENT 允许，UNSAFE 不允许）。
+    var isLengthAllowed: Bool {
+        if state == .relocalized,
+           lastHealthText.contains("RECOVERY_SPATIAL_UNSAFE") {
+            return false
+        }
+        return true
     }
 
     // MARK: - 状态设置（变化时写日志，去重）

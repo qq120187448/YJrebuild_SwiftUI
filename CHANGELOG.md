@@ -4,6 +4,14 @@
 
 ## 未发布 · 当前分支 codex/defect-mesh-uv-polyline
 
+### 2026-08-14 · 4C-L 专家批复执行：状态拆分 + 全局校验 + 降级模式 + 跨面长度
+
+- 状态拆分：RECOVERY 成功不再直接=测量就绪——`MEASUREMENT_ALIGNED`（tracking normal + 全局对齐达标）vs `RELOCALIZED`（normal 但未对齐，降级模式）；
+- 全局校验（专家 C 项）：固定屏幕网格射线（5×4）→ 每个命中点最近表面法向距离 → 覆盖率 + P50/P90/P95/max 分布，替代单锚点校验；
+- 降级模式（专家 A 项）：RELOCALIZED 时仅 Isect 通道，输出标注 `measurementMode=recovery`；`RECOVERY_SPATIAL_UNSAFE`（max>50mm）不输出精密长度；
+- 跨面长度（专家 D 项）：Isect 增加跨面总长 = 各表面段 UV + 跨面 3D transition（L_A + distance(boundaryA,B) + L_B），不简单相加；
+- B 精配准、E 多 WorldMap 暂缓；纯 ARKit A/B 列为下一步（待确认实施方式）。
+
 ### 2026-08-14 · 4C-L：ARWorldMap recovery 提升为长期空间恢复主方案（专家更新意见）
 
 - 专家更新：不再自研 T_currentToRoom 修正，改用 Apple 官方 ARWorldMap + initialWorldMap + relocalization 作为长期空间恢复主方案；Anchor 退化为空间健康监测/触发/质量信号；

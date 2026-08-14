@@ -26,6 +26,8 @@ enum AStarDiagnostics {
         let uvLengthRawM: Double?
         let uvLengthSnapM: Double?
         let uvLengthIsectM: Double?
+        /// Isect 跨面总长：各表面段 UV + 跨面 3D transition（专家 D 项）。
+        let uvLengthIsectTotalM: Double?
         let trackingState: String
         let anchorConsistencyMM: Double?
 
@@ -50,10 +52,11 @@ enum AStarDiagnostics {
             )
             lines.append(
                 String(
-                    format: "UV length(m): Raw %@ · Snap %@ · Isect %@ · |Snap-Isect|/Isect %@",
+                    format: "UV length(m): Raw %@ · Snap %@ · Isect %@ · Isect跨面 %@ · |Snap-Isect|/Isect %@",
                     AStarDiagnostics.mText(uvLengthRawM),
                     AStarDiagnostics.mText(uvLengthSnapM),
                     AStarDiagnostics.mText(uvLengthIsectM),
+                    AStarDiagnostics.mText(uvLengthIsectTotalM),
                     AStarDiagnostics.diffText(uvLengthSnapM, uvLengthIsectM)
                 )
             )
@@ -88,6 +91,7 @@ enum AStarDiagnostics {
         var uvRaw: [(id: UUID?, u: Double?, v: Double?)] = []
         var uvSnap: [(id: UUID?, u: Double?, v: Double?)] = []
         var uvIsect: [(id: UUID?, u: Double?, v: Double?)] = []
+        var uvIsectWorld: [(id: UUID?, u: Double?, v: Double?, world: SIMD3<Float>?)] = []
 
         for polyline in raycast.polylines {
             for point in polyline.points {
@@ -100,6 +104,7 @@ enum AStarDiagnostics {
                     uvRaw.append((nil, nil, nil))
                     uvSnap.append((nil, nil, nil))
                     uvIsect.append((nil, nil, nil))
+                    uvIsectWorld.append((nil, nil, nil, nil))
                     continue
                 }
 
@@ -210,8 +215,17 @@ enum AStarDiagnostics {
                             Double(isectMapped.local.y)
                         )
                     )
+                    uvIsectWorld.append(
+                        (
+                            isectMapped.surface.identifier,
+                            Double(isectMapped.local.x),
+                            Double(isectMapped.local.y),
+                            worldIsect
+                        )
+                    )
                 } else {
                     uvIsect.append((nil, nil, nil))
+                    uvIsectWorld.append((nil, nil, nil, nil))
                 }
 
                 // 重投影闭环：World → Camera Projection → 与原像素误差
@@ -265,6 +279,7 @@ enum AStarDiagnostics {
             uvLengthRawM: uvLength(uvRaw),
             uvLengthSnapM: uvLength(uvSnap),
             uvLengthIsectM: uvLength(uvIsect),
+            uvLengthIsectTotalM: uvLengthWithTransitions(uvIsectWorld),
             trackingState: trackingState,
             anchorConsistencyMM: anchorConsistencyMM
         )
@@ -349,6 +364,63 @@ enum AStarDiagnostics {
             segments.append(segmentLength)
         }
         return segments.isEmpty ? nil : segments.reduce(0, +)
+    }
+
+    /// 跨面总长（专家 D 项）：各表面段 UV 长度 + 跨面过渡用两端 world 3D 距离连接。
+    /// total = ΣL_segment + Σdistance(boundaryA, boundaryB)。
+    private static func uvLengthWithTransitions(
+        _ points: [(id: UUID?, u: Double?, v: Double?, world: SIMD3<Float>?)]
+    ) -> Double? {
+        var segments: [Double] = []
+        var transitions: [Double] = []
+        var segmentLength = 0.0
+        var segmentPoints = 0
+        var prevID: UUID?
+        var prevU: Double?
+        var prevV: Double?
+        var prevWorld: SIMD3<Float>?
+
+        for point in points {
+            guard let u = point.u,
+                  let v = point.v,
+                  let id = point.id else {
+                if segmentPoints >= 2 {
+                    segments.append(segmentLength)
+                }
+                segmentLength = 0
+                segmentPoints = 0
+                prevID = nil
+                prevU = nil
+                prevV = nil
+                prevWorld = nil
+                continue
+            }
+            if prevID == id, let pu = prevU, let pv = prevV {
+                segmentLength += hypot(u - pu, v - pv)
+                segmentPoints += 1
+            } else {
+                if segmentPoints >= 2 {
+                    segments.append(segmentLength)
+                }
+                // 跨面 transition：上一段末点 world 与当前点 world 的 3D 距离
+                if let prevWorld, let currentWorld = point.world {
+                    transitions.append(
+                        Double(simd_distance(prevWorld, currentWorld))
+                    )
+                }
+                segmentLength = 0
+                segmentPoints = 1
+            }
+            prevID = id
+            prevU = u
+            prevV = v
+            prevWorld = point.world
+        }
+        if segmentPoints >= 2 {
+            segments.append(segmentLength)
+        }
+        let total = segments.reduce(0, +) + transitions.reduce(0, +)
+        return total > 0 ? total : nil
     }
 
     private static func percentileText(_ values: [Double]) -> String {

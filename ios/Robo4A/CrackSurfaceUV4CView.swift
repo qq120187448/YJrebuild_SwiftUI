@@ -750,6 +750,30 @@ struct CrackSurfaceUV4CView: View {
                     if needRecovery {
                         _ = recoveryManager.startRecovery(arView: arView)
                     }
+                    // 4C-L 降级模式（专家 A 项）：recovery 时仅 Isect 通道，标注 measurementMode。
+                    if recoveryManager.measurementMode == "recovery" {
+                        if recoveryManager.isLengthAllowed {
+                            if let total = aStar.uvLengthIsectTotalM {
+                                appendReportLog(
+                                    String(
+                                        format: "空间恢复模式（Isect 降级）：裂缝总长 %.3f m · measurementMode=recovery",
+                                        total
+                                    )
+                                )
+                            } else if let len = aStar.uvLengthIsectM {
+                                appendReportLog(
+                                    String(
+                                        format: "空间恢复模式（Isect 降级）：裂缝总长 %.3f m · measurementMode=recovery",
+                                        len
+                                    )
+                                )
+                            }
+                        } else {
+                            appendReportLog(
+                                "空间恢复模式：RECOVERY_SPATIAL_UNSAFE，不输出精密长度"
+                            )
+                        }
+                    }
                     statusText = String(
                         format: "表面分配率 %.1f%% · UV 单位米 · 已解除静止锁定",
                         surfaceReport.assignedRatio * 100
