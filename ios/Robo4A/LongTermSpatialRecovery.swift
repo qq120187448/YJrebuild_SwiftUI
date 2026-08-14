@@ -45,6 +45,9 @@ final class SpatialRecoveryManager {
     private(set) var lastHealthText = ""
     private var recoveryStart: Date?
     private var recoveryTimeout: TimeInterval = 30
+    /// 最近一次 recovery 尝试时间（needUser 自动重试用）。
+    private var lastRecoveryAttempt: Date?
+    private var autoRetryInterval: TimeInterval = 5
     /// 去重：仅在状态或文本变化时记录一次。
     private var lastReportedText = ""
 
@@ -197,6 +200,7 @@ final class SpatialRecoveryManager {
         )
         setState(.relocalizing, text: "ARWorldMap recovery 已触发（relocalizing…）")
         recoveryStart = Date()
+        lastRecoveryAttempt = Date()
         return true
     }
 
@@ -206,6 +210,19 @@ final class SpatialRecoveryManager {
         arView: ARView,
         surfaces: [CapturedRoom.Surface]
     ) {
+        // needUserRelocalization：用户走回已扫描区域后自动重试 recovery（每 5s）。
+        if state == .needUserRelocalization {
+            if let last = lastRecoveryAttempt,
+               Date().timeIntervalSince(last) < autoRetryInterval {
+                return
+            }
+            setState(
+                .relocalizationRequired,
+                text: "自动重试 ARWorldMap recovery…"
+            )
+            _ = startRecovery(arView: arView)
+            return
+        }
         guard state == .relocalizing else { return }
         guard let recoveryStart else {
             setState(.relocalizationRequired, text: "recovery 状态异常，重新触发")
@@ -259,10 +276,16 @@ final class SpatialRecoveryManager {
         surfaces: [CapturedRoom.Surface]
     ) -> Double? {
         guard !verifyAnchors.isEmpty else { return nil }
+        guard let frame = arView.session.currentFrame else { return nil }
+        // recovery 后锚点由 ARKit 从 WorldMap 重建为新实例：按 identifier 取当前 transform。
+        let liveAnchors = frame.anchors
         var distances: [Double] = []
         let viewport = arView.bounds
         for item in verifyAnchors {
-            let worldPos = item.anchor.transform.position
+            guard let live = liveAnchors.first(where: {
+                $0.identifier == item.anchor.identifier
+            }) else { continue }
+            let worldPos = live.transform.position
             guard let screen = arView.project(worldPos) else { continue }
             guard screen.x >= 0, screen.x <= viewport.width,
                   screen.y >= 0, screen.y <= viewport.height else {
