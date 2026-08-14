@@ -1,4 +1,6 @@
-# RoboScan 工程量扫描（v0.2.3）
+# RoboScan 工程量扫描
+
+> 版本说明：[CHANGELOG.md](CHANGELOG.md)（每次版本更新同步更新，已提交 GitHub）
 
 基于 Robo 精简改造的 iOS LiDAR 房间扫描应用，只保留房间扫描、历史记录和工程量清单导出，不连接任何后端。
 
