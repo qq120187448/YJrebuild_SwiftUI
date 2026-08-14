@@ -565,7 +565,9 @@ extension ContentViewModel {
             let widthScale = Int(originalImgSize.width) / maskSize.width
             let heightScale = Int(originalImgSize.height) / maskSize.height
             let maxPossibleScale = max(widthScale, heightScale)
-            let clampedScale = max(min(maxPossibleScale, 6), 1)
+            // 性能优化（0.74D）：上采样上限 6→4（960²→640²），
+            // maskDecode 与后续 grid/宽度统计提速约 2 倍；完整 ROI 上采样为独立提交。
+            let clampedScale = max(min(maxPossibleScale, 4), 1)
 
             let targetSize = (
                 width: maskSize.width * clampedScale,
