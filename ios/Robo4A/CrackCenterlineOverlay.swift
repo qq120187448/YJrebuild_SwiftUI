@@ -74,7 +74,8 @@ enum CrackCenterlineOverlay {
     static func compute(
         masks: [MaskPrediction],
         imageSize: CGSize,
-        config: CrackRecognitionConfig = .defaultConfig
+        config: CrackRecognitionConfig = .defaultConfig,
+        includeWidthStats: Bool = true
     ) -> Result {
         let width = max(1, Int(imageSize.width.rounded()))
         let height = max(1, Int(imageSize.height.rounded()))
@@ -159,12 +160,15 @@ enum CrackCenterlineOverlay {
         let keptIndices = indexed.prefix(crackConfig.topCracks)
         polylines = keptIndices.map { polylines[$0] }
         samplesPerPolyline = keptIndices.map { samplesPerPolyline[$0] }
-        let widthStats = contourWidthStats(
-            masks: masks,
-            imageWidth: width,
-            imageHeight: height,
-            samplesPerPolyline: samplesPerPolyline
-        )
+        // 0.742B 性能：宽度统计可延迟（先出长度），由调用方异步补充。
+        let widthStats = includeWidthStats
+            ? contourWidthStats(
+                masks: masks,
+                imageWidth: width,
+                imageHeight: height,
+                samplesPerPolyline: samplesPerPolyline
+            )
+            : CrackWidthStats()
 
         let total = polylines.reduce(0.0) { $0 + polylineLength($1) }
         let longest = polylines.map(polylineLength).max() ?? 0
@@ -343,6 +347,20 @@ enum CrackCenterlineOverlay {
 
     /// 从每个实例 mask 提取闭合轮廓边界点，沿中心线法向两侧找最近边界点，
     /// 以两点欧氏距离作为局部像素宽度，返回 min/avg/max、P10/P50/P90、10 段剖面与质量分级。
+    /// 0.742B：延迟宽度统计的异步入口（4B 测量先出长度，宽度后台补）。
+    static func computeWidthStats(
+        masks: [MaskPrediction],
+        imageSize: CGSize,
+        samplesPerPolyline: [[CrackPoint]]
+    ) -> CrackWidthStats {
+        contourWidthStats(
+            masks: masks,
+            imageWidth: max(1, Int(imageSize.width.rounded())),
+            imageHeight: max(1, Int(imageSize.height.rounded())),
+            samplesPerPolyline: samplesPerPolyline
+        )
+    }
+
     private static func contourWidthStats(
         masks: [MaskPrediction],
         imageWidth: Int,
@@ -362,12 +380,14 @@ enum CrackCenterlineOverlay {
             // 0.742B ROI：bboxOrigin 为全图像素，边界点映射回全图坐标。
             let originX = CGFloat(prediction.bboxOrigin?.x ?? 0)
             let originY = CGFloat(prediction.bboxOrigin?.y ?? 0)
-            for y in 0..<maskHeight {
-                for x in 0..<maskWidth
+            // 性能（0.742B）：边界检测 stride=2 降采样，计算量降约 4 倍。
+            let samplingStep = 2
+            for y in stride(from: 0, to: maskHeight, by: samplingStep) {
+                for x in stride(from: 0, to: maskWidth, by: samplingStep)
                     where prediction.mask[y * maskWidth + x] > 0 {
                     var isBoundary = false
-                    for dy in -1...1 where !isBoundary {
-                        for dx in -1...1 where !isBoundary {
+                    for dy in -samplingStep...samplingStep where !isBoundary {
+                        for dx in -samplingStep...samplingStep where !isBoundary {
                             let nx = x + dx
                             let ny = y + dy
                             if nx >= 0, nx < maskWidth,
@@ -379,10 +399,14 @@ enum CrackCenterlineOverlay {
                     }
                     if isBoundary {
                         let px = min(imageWidth - 1, max(0, Int(
-                            originX + (CGFloat(x) + 0.5) * scaleX
+                            originX
+                                + (CGFloat(x) + CGFloat(samplingStep) * 0.5)
+                                * scaleX
                         )))
                         let py = min(imageHeight - 1, max(0, Int(
-                            originY + (CGFloat(y) + 0.5) * scaleY
+                            originY
+                                + (CGFloat(y) + CGFloat(samplingStep) * 0.5)
+                                * scaleY
                         )))
                         contour.insert(CrackPoint(x: px, y: py))
                     }

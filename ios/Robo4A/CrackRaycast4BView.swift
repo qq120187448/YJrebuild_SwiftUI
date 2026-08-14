@@ -133,6 +133,8 @@ struct CrackRaycast4BView: View {
             reportLog = UserDefaults.standard.stringArray(
                 forKey: Self.reportLogKey
             ) ?? []
+            // 0.742B：4B 延迟宽度统计（先出长度，宽度后台异步补）。
+            viewModel.deferWidthStats = true
         }
     }
 
@@ -202,27 +204,8 @@ struct CrackRaycast4BView: View {
                         previousWorld = world
                     }
                 }
-                let widthStats = viewModel.centerlineResult?.widthStats
                 let totalPx =
                     viewModel.centerlineResult?.totalPixelLength ?? 0
-                let mmPerPx = totalPx > 0 && length3D > 0
-                    ? length3D * 1000 / totalPx
-                    : nil
-                let widthText = widthStats.map { stats in
-                    if let mmPerPx {
-                        String(
-                            format: "宽度 平均 %.1f · 最大 %.1f mm",
-                            stats.averagePx * mmPerPx,
-                            stats.maxPx * mmPerPx
-                        )
-                    } else {
-                        String(
-                            format: "宽度 平均 %.1f · 最大 %.1f px",
-                            stats.averagePx,
-                            stats.maxPx
-                        )
-                    }
-                } ?? "宽度 无"
                 let spatialDuration =
                     Date().timeIntervalSince(spatialStart) * 1000
                 let totalDuration =
@@ -249,14 +232,53 @@ struct CrackRaycast4BView: View {
                     String(format: "total=%.0fms", totalDuration),
                     viewModel.inferenceHardware
                 ].joined(separator: " · ")
+                // 0.742B：长度先出，宽度后台异步补（不阻塞拍照→出数）。
                 measurementSummary = String(
-                    format: "长度(3D) %.3f m · %@\n%@",
+                    format: "长度(3D) %.3f m · 宽度 计算中…\n%@",
                     length3D,
-                    widthText,
                     performance
                 )
                 appendReportLog(measurementSummary)
                 appendReportLog(measured.text())
+                let widthMasks = viewModel.maskPredictions ?? []
+                let widthSamples = samples
+                let widthImageSize = analysisImage.size
+                let widthLength = length3D
+                let widthTotalPx = totalPx
+                Task.detached {
+                    let stats = CrackCenterlineOverlay.computeWidthStats(
+                        masks: widthMasks,
+                        imageSize: widthImageSize,
+                        samplesPerPolyline: widthSamples
+                    )
+                    let mmPerPx = widthTotalPx > 0 && widthLength > 0
+                        ? widthLength * 1000 / widthTotalPx
+                        : nil
+                    let summary: String
+                    if let mmPerPx {
+                        summary = String(
+                            format: "长度(3D) %.3f m · 宽度 平均 %.1f · 最大 %.1f mm\n%@",
+                            widthLength,
+                            stats.averagePx * mmPerPx,
+                            stats.maxPx * mmPerPx,
+                            performance
+                        )
+                    } else {
+                        summary = String(
+                            format: "长度(3D) %.3f m · 宽度 平均 %.1f · 最大 %.1f px\n%@",
+                            widthLength,
+                            stats.averagePx,
+                            stats.maxPx,
+                            performance
+                        )
+                    }
+                    await MainActor.run {
+                        measurementSummary = summary
+                        appendReportLog(
+                            "宽度(异步)：平均 \(String(format: "%.1f", stats.averagePx)) · 最大 \(String(format: "%.1f", stats.maxPx)) px"
+                        )
+                    }
+                }
                 statusText = String(
                     format: "命中率 %.1f%% · 平均重投影 %.2f px · P95 %.2f px",
                     measured.hitRate * 100,
