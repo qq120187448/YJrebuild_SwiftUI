@@ -742,6 +742,10 @@ struct CrackSurfaceUV4CView: View {
                         ? Double(aStar.assignmentRaw)
                             / Double(aStar.total)
                         : nil
+                    // 降级标注依据：evaluate 会改变状态，先记录测量前是否 recovery 模式。
+                    let wasRecovery =
+                        recoveryManager.measurementMode == "recovery"
+                    let wasLengthAllowed = recoveryManager.isLengthAllowed
                     let needRecovery = recoveryManager.evaluate(
                         snapDistanceMM: snapP95,
                         assignmentRatio: assignmentRatio,
@@ -751,8 +755,8 @@ struct CrackSurfaceUV4CView: View {
                         _ = recoveryManager.startRecovery(arView: arView)
                     }
                     // 4C-L 降级模式（专家 A 项）：recovery 时仅 Isect 通道，标注 measurementMode。
-                    if recoveryManager.measurementMode == "recovery" {
-                        if recoveryManager.isLengthAllowed {
+                    if wasRecovery {
+                        if wasLengthAllowed {
                             if let total = aStar.uvLengthIsectTotalM {
                                 appendReportLog(
                                     String(
