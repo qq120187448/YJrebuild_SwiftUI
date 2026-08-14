@@ -136,6 +136,14 @@ struct CrackSurfaceUV4CView: View {
     @State private var showParameterPanel = false
     @State private var reportLog: [String] = []
     @State private var performanceText = ""
+    /// P4C-Drift 第一阶段（专家批准）：只检测/诊断，不改测量。
+    @State private var driftTracker = AnchorDriftTracker()
+    @State private var driftText = ""
+    @State private var driftPulse = Timer.publish(
+        every: 0.5,
+        on: .main,
+        in: .common
+    ).autoconnect()
 
     var body: some View {
         GeometryReader { geo in
@@ -211,6 +219,13 @@ struct CrackSurfaceUV4CView: View {
                 Text(performanceText)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+            }
+            if !driftText.isEmpty {
+                Text(driftText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 12)
             }
             Text("照片红线/蓝点 = 4A 折线与采样点；AR 红点/红线 = raycast 世界点；扫描时 = 官方 RoomPlan 引导 + 底部 3D 模型")
                 .font(.caption2)
@@ -325,6 +340,14 @@ struct CrackSurfaceUV4CView: View {
         .sheet(isPresented: $showParameterPanel) {
             parameterPanel
         }
+        .onReceive(driftPulse) { _ in
+            sampleDrift()
+        }
+        .onDisappear {
+            if let arView = arViewReference {
+                driftTracker.removeAll(session: arView.session)
+            }
+        }
     }
 
     private var parameterPanel: some View {
@@ -402,7 +425,9 @@ struct CrackSurfaceUV4CView: View {
     }
 
     private func startScan() {
-        guard arViewReference != nil else { return }
+        guard let arView = arViewReference else { return }
+        driftTracker.removeAll(session: arView.session)
+        driftText = ""
         capturedRoom = nil
         report = nil
         comparisonText = ""
@@ -416,7 +441,7 @@ struct CrackSurfaceUV4CView: View {
         coordinator.scanStopped = false
         roomCaptureViewReference = nil
 
-        if meshControl == .clear, let arView = arViewReference {
+        if meshControl == .clear {
             arView.session.run(
                 Self.noMeshConfiguration(),
                 options: [.resetTracking, .removeExistingAnchors]
@@ -461,6 +486,21 @@ struct CrackSurfaceUV4CView: View {
         statusText = "房间确认完成，可拍照映射 UV"
         coachingText = "请对准裂缝拍照"
 
+        // P4C-Drift 第一阶段（专家批准）：扫描完成时放置墙A/墙B/地面锚点，
+        // 只检测漂移，不改测量。
+        if let room = capturedRoom {
+            let surfaces =
+                room.walls + room.floors + room.doors
+                + room.windows + room.openings
+            let placed = driftTracker.place(
+                surfaces: surfaces,
+                session: arView.session
+            )
+            driftText = placed > 0
+                ? "锚点已放置 \(placed) 个（墙A/墙B/地面），漂移诊断中…"
+                : "无可用表面，未放置锚点"
+        }
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             let afterCamera = arView.session.currentFrame?.camera.transform.position
             let afterMesh = Self.meshAnchorCount(arView)
@@ -478,6 +518,14 @@ struct CrackSurfaceUV4CView: View {
         guard let frame = arViewReference?.session.currentFrame else { return }
         roomCaptureFrameTimestamp = frame.timestamp
         roomCaptureCameraPosition = frame.camera.transform.position
+    }
+
+    /// 漂移诊断采样：仅 ready 且有锚点时更新漂移文本（不改测量）。
+    private func sampleDrift() {
+        guard phase == .ready, let arView = arViewReference else { return }
+        if let sample = driftTracker.sample(session: arView.session) {
+            driftText = sample.text
+        }
     }
 
     // MARK: - 测量
@@ -603,6 +651,9 @@ struct CrackSurfaceUV4CView: View {
                         NSLog("4D.1 %@ | %@", widthDiag, lengthDiag)
                         appendReportLog(widthDiag)
                         appendReportLog(lengthDiag)
+                    }
+                    if let sample = driftTracker.sample(session: arView.session) {
+                        appendReportLog("漂移诊断：" + sample.text)
                     }
                     statusText = String(
                         format: "表面分配率 %.1f%% · UV 单位米 · 已解除静止锁定",

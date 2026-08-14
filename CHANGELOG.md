@@ -4,6 +4,14 @@
 
 ## 未发布 · 当前分支 codex/defect-mesh-uv-polyline
 
+### 2026-08-14 · P4C-Drift 第一阶段：锚点漂移检测/诊断接入（专家批准，只检测不改测量）
+
+- 恢复 AnchorDriftTracker（f3151bc 保留文件）：finishRoomReview 时在墙A（最大墙）/墙B（离A最远）/地面放置 ARAnchor（transform=surface.transform），记录初始位姿；
+- 0.5s 轮询 currentFrame.anchors，输出各锚点漂移（平移 mm / 旋转°）、锚点间一致性（Δmax-min）、trackingState；
+- 测量完成后在累计日志追加"漂移诊断"行；UI 显示实时漂移文本；
+- 本次定位背景：0.74C 出现"world 命中但分配率 0"——未分配点最近 wall local.z=3.7~5cm（超出 2cm 容差），确认 ARKit 实时估计平面与 RoomPlan 表面存在逐实例不同的法向偏差；漂移诊断用于量化该偏差是否随时间/移动变化；
+- 测量路径不变（系统 raycast + restoreMesh），无测量行为改动。
+
 ### 2026-08-14 · 0.74C 累计日志补全 4C 完整诊断
 
 - 累计日志与"复制报告"由精简版（仅长度/宽度）改为完整版：含表面总数（wall/floor/other）、每条裂缝采样点/world 命中/分配率、未分配候选 local/planeDistance/insideX/Y/Z、20/30/40/50mm 阈值分配率、estimated vs existing raycast 对比；
