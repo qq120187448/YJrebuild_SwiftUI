@@ -28,6 +28,11 @@ import Metal
 import MetalPerformanceShaders
 
 extension Array where Element == Float {
+    private enum BatchOutput {
+        case texture(MTLTexture, width: Int, height: Int)
+        case direct([UInt8])
+    }
+
     /// 0.742B：批量双线性上采样——多个实例一次 commandBuffer 提交、一次 waitUntilCompleted，
     /// 替代逐实例同步等待。返回每个实例的阈值化掩码。
     static func upsampleBatch(
@@ -49,10 +54,6 @@ extension Array where Element == Float {
             }
         }
 
-        enum BatchOutput {
-            case texture(MTLTexture, width: Int, height: Int)
-            case direct([UInt8])
-        }
         var outputs: [BatchOutput] = []
 
         for item in items {
@@ -94,7 +95,13 @@ extension Array where Element == Float {
                 sourceTexture: inputTexture,
                 destinationTexture: outputTexture
             )
-            outputs.append(.texture(outputTexture, newWidth, newHeight))
+            outputs.append(
+                .texture(
+                    outputTexture,
+                    width: newWidth,
+                    height: newHeight
+                )
+            )
         }
 
         commandBuffer.commit()
