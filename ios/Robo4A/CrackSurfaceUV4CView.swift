@@ -1,5 +1,4 @@
 import ARKit
-import Combine
 import RealityKit
 import RoomPlan
 import simd
@@ -137,123 +136,57 @@ struct CrackSurfaceUV4CView: View {
     @State private var showParameterPanel = false
     @State private var reportLog: [String] = []
     @State private var performanceText = ""
-    @State private var driftTracker = AnchorDriftTracker()
-    @State private var driftText = ""
-    @State private var driftPulse = Timer.publish(
-        every: 0.5,
-        on: .main,
-        in: .common
-    ).autoconnect()
 
     var body: some View {
         GeometryReader { geo in
-            VStack(spacing: 0) {
-                cameraSquare(width: geo.size.width)
-                lowerPanel
-            }
-            .frame(width: geo.size.width, height: geo.size.height)
-        }
-        .navigationTitle("4C Surface UV")
-        .onAppear {
-            setupCoordinator()
-            reportLog = UserDefaults.standard.stringArray(
-                forKey: roboscan4CReportLogKey
-            ) ?? []
-        }
-        .onReceive(driftPulse) { _ in
-            sampleDrift()
-        }
-        .onDisappear {
-            if let arView = arViewReference {
-                driftTracker.removeAll(session: arView.session)
-            }
-        }
-        .sheet(isPresented: $showParameterPanel) {
-            parameterPanel
-        }
-    }
-
-    /// 取景：严格正方形、全宽、贴安全区顶部（灵动岛下缘），左右无空隙。
-    private func cameraSquare(width: CGFloat) -> some View {
-        ZStack {
-            ARViewContainer4C(session: sharedSession) { arView in
-                arViewReference = arView
-            }
-            .frame(width: width, height: width)
-            .opacity((phase == .scanning || phase == .reviewing) ? 0 : 1)
-
-            if phase == .scanning || phase == .reviewing {
-                RoomCaptureView4C(
-                    session: sharedSession,
-                    coordinator: coordinator
-                ) { view in
-                    roomCaptureViewReference = view
-                    var configuration = RoomCaptureSession.Configuration()
-                    configuration.isCoachingEnabled = true
-                    view.captureSession.run(configuration: configuration)
+            VStack(spacing: 8) {
+            ZStack {
+                // 常驻 ARView：整个 4C 生命周期只创建一次，不销毁不重建；
+                // 扫描期间透明度为 0（保持实例存活），结束后恢复显示用于拍照测量。
+                ARViewContainer4C(session: sharedSession) { arView in
+                    arViewReference = arView
                 }
-                .frame(width: width, height: width)
-            }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity((phase == .scanning || phase == .reviewing) ? 0 : 1)
 
-            if isRunning {
-                Text("正在分析本次照片…")
-                    .font(.headline)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Color.black.opacity(0.6))
-                    .clipShape(Capsule())
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .padding(.top, 10)
-                    .allowsHitTesting(false)
-            }
-        }
-        .frame(width: width, height: width)
-        .clipped()
-    }
-
-    /// 下半部分：状态/漂移/性能 + 紧凑控制 + 操作 + 报告区 + 日志。
-    private var lowerPanel: some View {
-        VStack(spacing: 8) {
-            Text(statusText)
-                .font(.caption)
-                .foregroundStyle(.orange)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 12)
-
-            if !driftText.isEmpty {
-                Text(driftText)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 12)
-            }
-
-            if !performanceText.isEmpty {
-                Text(performanceText)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 12)
-            }
-
-            HStack(spacing: 8) {
-                Picker("场景", selection: $scenario) {
-                    ForEach(CrackRaycast4B.scenarios, id: \.self) { name in
-                        Text(name).tag(name)
+                // 官方 RoomPlan 扫描视图：自带引导、进度与底部 3D 模型（isModelEnabled 默认 true）。
+                if phase == .scanning || phase == .reviewing {
+                    RoomCaptureView4C(
+                        session: sharedSession,
+                        coordinator: coordinator
+                    ) { view in
+                        roomCaptureViewReference = view
+                        var configuration = RoomCaptureSession.Configuration()
+                        configuration.isCoachingEnabled = true
+                        view.captureSession.run(configuration: configuration)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .pickerStyle(.menu)
-                .frame(maxWidth: .infinity)
 
-                Button {
-                    showParameterPanel = true
-                } label: {
-                    Label("参数", systemImage: "slider.horizontal.3")
+                if isRunning {
+                    Text("正在分析本次照片…")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Color.black.opacity(0.6))
+                        .clipShape(Capsule())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .padding(.top, 12)
+                        .allowsHitTesting(false)
                 }
-                .buttonStyle(.bordered)
             }
-            .padding(.horizontal, 12)
+            .frame(height: max(geo.size.height * 0.55, 320))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal)
+
+            Picker("场景", selection: $scenario) {
+                ForEach(CrackRaycast4B.scenarios, id: \.self) { name in
+                    Text(name).tag(name)
+                }
+            }
+            .pickerStyle(.menu)
+            .padding(.horizontal)
 
             Picker("Mesh 对照", selection: $meshControl) {
                 ForEach(MeshControl.allCases) { control in
@@ -261,9 +194,29 @@ struct CrackSurfaceUV4CView: View {
                 }
             }
             .pickerStyle(.segmented)
-            .padding(.horizontal, 12)
+            .padding(.horizontal)
 
-            HStack(spacing: 8) {
+            Button {
+                showParameterPanel = true
+            } label: {
+                Label("参数", systemImage: "slider.horizontal.3")
+            }
+            .buttonStyle(.bordered)
+            .padding(.horizontal)
+
+            Text(statusText)
+                .font(.caption)
+                .foregroundStyle(.orange)
+            if !performanceText.isEmpty {
+                Text(performanceText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Text("照片红线/蓝点 = 4A 折线与采样点；AR 红点/红线 = raycast 世界点；扫描时 = 官方 RoomPlan 引导 + 底部 3D 模型")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            HStack {
                 if phase == .scanning {
                     Button("结束扫描") {
                         stopScan()
@@ -287,6 +240,15 @@ struct CrackSurfaceUV4CView: View {
                         || arViewReference == nil || phase != .ready
                 )
 
+                if let report {
+                    Button("复制报告") {
+                        let full = [report.clippedText(limit: 1000), comparisonText]
+                            .filter { !$0.isEmpty }
+                            .joined(separator: "\n")
+                        UIPasteboard.general.string = full
+                    }
+                }
+
                 if !worldAnchors.isEmpty {
                     Button("清除投影") {
                         clearWorldVisualization()
@@ -294,7 +256,27 @@ struct CrackSurfaceUV4CView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
-            .padding(.horizontal, 12)
+
+            HStack(spacing: 8) {
+                Text("累计日志 \(reportLog.count) 条")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                Button("复制累计日志") {
+                    UIPasteboard.general.string = reportLog.joined(
+                        separator: "\n\n=====\n\n"
+                    )
+                }
+                .buttonStyle(.bordered)
+                .disabled(reportLog.isEmpty)
+
+                Button("清空日志") {
+                    clearReportLog()
+                }
+                .buttonStyle(.bordered)
+                .disabled(reportLog.isEmpty)
+            }
+            .padding(.horizontal)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
@@ -302,7 +284,7 @@ struct CrackSurfaceUV4CView: View {
                         Image(uiImage: uiImage)
                             .resizable()
                             .scaledToFit()
-                            .frame(height: 130)
+                            .frame(height: 150)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                             .overlay(
                                 CenterlineOverlayView(
@@ -321,57 +303,27 @@ struct CrackSurfaceUV4CView: View {
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     } else {
-                        Text("扫描并测量后此处显示：裂缝照片叠加、4C 报告")
+                        Text("扫描并测量后此处显示：裂缝照片叠加、4C 报告（区域固定，取景框比例不变）")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .padding(.horizontal, 12)
-
-            HStack(spacing: 8) {
-                Text("日志 \(reportLog.count) 条")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-
-                if let report {
-                    Button("复制报告") {
-                        let full = [report.clippedText(limit: 1000), comparisonText]
-                            .filter { !$0.isEmpty }
-                            .joined(separator: "\n")
-                        UIPasteboard.general.string = full
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                Button("复制日志") {
-                    UIPasteboard.general.string = reportLog.joined(
-                        separator: "\n\n=====\n\n"
-                    )
-                }
-                .buttonStyle(.bordered)
-                .disabled(reportLog.isEmpty)
-
-                Button("清空") {
-                    clearReportLog()
-                }
-                .buttonStyle(.bordered)
-                .disabled(reportLog.isEmpty)
+            .frame(height: 210)
+            .padding(.horizontal)
             }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 8)
+            .frame(width: geo.size.width, height: geo.size.height)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .padding(.top, 8)
-    }
-
-    /// 漂移诊断采样：仅 ready 且有锚点时更新漂移文本（不改测量）。
-    private func sampleDrift() {
-        guard phase == .ready, let arView = arViewReference else { return }
-        if let sample = driftTracker.sample(session: arView.session) {
-            driftText = sample.text
+        .navigationTitle("4C Surface UV")
+        .onAppear {
+            setupCoordinator()
+            reportLog = UserDefaults.standard.stringArray(
+                forKey: roboscan4CReportLogKey
+            ) ?? []
+        }
+        .sheet(isPresented: $showParameterPanel) {
+            parameterPanel
         }
     }
 
@@ -450,9 +402,7 @@ struct CrackSurfaceUV4CView: View {
     }
 
     private func startScan() {
-        guard let arView = arViewReference else { return }
-        driftTracker.removeAll(session: arView.session)
-        driftText = ""
+        guard arViewReference != nil else { return }
         capturedRoom = nil
         report = nil
         comparisonText = ""
@@ -501,20 +451,6 @@ struct CrackSurfaceUV4CView: View {
         phase = .ready
         statusText = "房间确认完成，可拍照映射 UV"
         coachingText = "请对准裂缝拍照"
-
-        // P4C-Drift 第一阶段：放置漂移诊断锚点（墙A/墙B/地面），只记录不校正。
-        if let room = capturedRoom {
-            let surfaces =
-                room.walls + room.floors + room.doors
-                + room.windows + room.openings
-            let placed = driftTracker.place(
-                surfaces: surfaces,
-                session: arView.session
-            )
-            driftText = placed > 0
-                ? "锚点已放置 \(placed) 个（墙A/墙B/地面），漂移诊断中…"
-                : "无可用表面，未放置锚点"
-        }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             let afterCamera = arView.session.currentFrame?.camera.transform.position
@@ -665,9 +601,6 @@ struct CrackSurfaceUV4CView: View {
                     ].joined(separator: " · ")
                     performanceText = performance
                     appendReportLog(performance)
-                    if let sample = driftTracker.sample(session: arView.session) {
-                        appendReportLog("漂移诊断：" + sample.text)
-                    }
                     statusText = String(
                         format: "表面分配率 %.1f%% · UV 单位米 · 已解除静止锁定",
                         surfaceReport.assignedRatio * 100
