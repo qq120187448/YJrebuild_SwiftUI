@@ -133,6 +133,8 @@ struct CrackSurfaceUV4CView: View {
     @State private var driftTracker = AnchorDriftTracker()
     /// P4C-LongTermSpatialAlignment 第一步（专家批复）：多锚点刚体配准 T_currentToRoom。
     @State private var spatialManager = SpatialAlignmentManager()
+    /// 4C-L（专家更新意见）：ARWorldMap recovery 为长期空间恢复主方案。
+    @State private var recoveryManager = SpatialRecoveryManager()
     @State private var driftText = ""
     @State private var driftPulse = Timer.publish(
         every: 0.5,
@@ -203,6 +205,17 @@ struct CrackSurfaceUV4CView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 12)
             }
+            if !recoveryManager.lastHealthText.isEmpty {
+                Text(recoveryManager.lastHealthText)
+                    .font(.caption2)
+                    .foregroundStyle(
+                        recoveryManager.isMeasurementAllowed
+                            ? .secondary
+                            : .orange
+                    )
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 12)
+            }
             Text("照片红线/蓝点 = 4A 折线与采样点；AR 红点/红线 = raycast 世界点；扫描时 = 官方 RoomPlan 引导 + 底部 3D 模型")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -229,6 +242,7 @@ struct CrackSurfaceUV4CView: View {
                 .disabled(
                     isRunning || capturedRoom == nil
                         || arViewReference == nil || phase != .ready
+                        || !recoveryManager.isMeasurementAllowed
                 )
                 Button("标定") {
                     showCalibration = true
@@ -236,6 +250,7 @@ struct CrackSurfaceUV4CView: View {
                 .disabled(
                     capturedRoom == nil
                         || arViewReference == nil || phase != .ready
+                        || !recoveryManager.isMeasurementAllowed
                 )
 
                 if let report {
@@ -348,6 +363,10 @@ struct CrackSurfaceUV4CView: View {
                 let surfaces =
                     room.walls + room.floors + room.doors
                     + room.windows + room.openings
+                recoveryManager.pollRecovery(
+                    arView: arView,
+                    surfaces: surfaces
+                )
                 spatialManager.update(
                     arView: arView,
                     surfaces: surfaces
@@ -358,6 +377,7 @@ struct CrackSurfaceUV4CView: View {
             if let arView = arViewReference {
                 driftTracker.removeAll(session: arView.session)
                 spatialManager.removeAll(session: arView.session)
+                recoveryManager.reset(session: arView.session)
             }
         }
     }
@@ -440,6 +460,7 @@ struct CrackSurfaceUV4CView: View {
         guard let arView = arViewReference else { return }
         driftTracker.removeAll(session: arView.session)
         spatialManager.removeAll(session: arView.session)
+        recoveryManager.reset(session: arView.session)
         driftText = ""
         capturedRoom = nil
         report = nil
@@ -507,6 +528,18 @@ struct CrackSurfaceUV4CView: View {
             driftText = placed > 0
                 ? "锚点已放置 \(placed) 个（漂移门控）+ \(refs) 个（配准网络），诊断中…"
                 : "无可用表面，未放置锚点"
+            // 4C-L：保存基准 WorldMap（等待 worldMappingStatus == .mapped）。
+            Task { @MainActor in
+                let saved = await recoveryManager.saveWorldMap(
+                    session: arView.session,
+                    surfaces: surfaces
+                )
+                appendReportLog(
+                    saved
+                        ? "4C-L：" + recoveryManager.lastHealthText
+                        : "4C-L：" + recoveryManager.lastHealthText
+                )
+            }
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
@@ -697,44 +730,24 @@ struct CrackSurfaceUV4CView: View {
                         anchorConsistencyMM: driftSample?.consistencyMM
                     )
                     appendReportLog(aStar.text)
-                    // P4C-LongTermSpatialAlignment 第一步（专家批复）：
-                    // 输出 T_currentToRoom 配准诊断与校正后 snapDistance。
+                    // P4C-LongTermSpatialAlignment：配准诊断（观察用，不再作为测量修正）。
                     if !spatialManager.lastDiagnostic.isEmpty {
                         appendReportLog("配准：" + spatialManager.lastDiagnostic)
                     }
-                    if !spatialManager.lastTransform.isIdentity {
-                        let surfaces =
-                            room.walls + room.floors + room.doors
-                            + room.windows + room.openings
-                        var corrected: [Double] = []
-                        for polyline in raycast.polylines {
-                            for point in polyline.points {
-                                if let world = point.world,
-                                   let d = spatialManager
-                                    .correctedSnapDistanceMM(
-                                        world: world,
-                                        surfaces: surfaces
-                                    ) {
-                                    corrected.append(d)
-                                }
-                            }
-                        }
-                        if !corrected.isEmpty {
-                            let sorted = corrected.sorted()
-                            let p50 = sorted[sorted.count / 2]
-                            let p95Index = min(
-                                sorted.count - 1,
-                                Int(Double(sorted.count) * 0.95)
-                            )
-                            let p95 = sorted[p95Index]
-                            let maxV = sorted.last ?? 0
+                    // 4C-L：空间健康评估（snapDistance P95）→ 失配则触发 ARWorldMap recovery。
+                    let snapP95 = Self.percentile(
+                        aStar.snapDistancesMM,
+                        p: 95
+                    )
+                    let needRecovery = recoveryManager.evaluate(
+                        snapDistanceMM: snapP95,
+                        tracking: trackingText
+                    )
+                    appendReportLog("4C-L：" + recoveryManager.lastHealthText)
+                    if needRecovery {
+                        if recoveryManager.startRecovery(arView: arView) {
                             appendReportLog(
-                                String(
-                                    format: "校正后 snapDistance: P50=%.1f P95=%.1f max=%.1f mm（T_currentToRoom 已应用）",
-                                    p50,
-                                    p95,
-                                    maxV
-                                )
+                                "4C-L：" + recoveryManager.lastHealthText
                             )
                         }
                     }
@@ -1014,6 +1027,22 @@ struct CrackSurfaceUV4CView: View {
         @unknown default:
             return "unknown"
         }
+    }
+
+    /// 线性插值百分位。
+    private static func percentile(
+        _ values: [Double],
+        p: Double
+    ) -> Double? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        guard sorted.count > 1 else { return sorted[0] }
+        let rank = Double(sorted.count - 1) * p / 100.0
+        let lower = Int(floor(rank))
+        let upper = min(sorted.count - 1, Int(ceil(rank)))
+        let fraction = rank - Double(lower)
+        if lower == upper { return sorted[lower] }
+        return sorted[lower] * (1 - fraction) + sorted[upper] * fraction
     }
 
     static func meshConfiguration() -> ARWorldTrackingConfiguration {

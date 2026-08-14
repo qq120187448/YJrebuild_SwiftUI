@@ -4,6 +4,14 @@
 
 ## 未发布 · 当前分支 codex/defect-mesh-uv-polyline
 
+### 2026-08-14 · 4C-L：ARWorldMap recovery 提升为长期空间恢复主方案（专家更新意见）
+
+- 专家更新：不再自研 T_currentToRoom 修正，改用 Apple 官方 ARWorldMap + initialWorldMap + relocalization 作为长期空间恢复主方案；Anchor 退化为空间健康监测/触发/质量信号；
+- 新增 SpatialRecoveryManager（4C-L 状态机）：RoomPlan 完成后等待 worldMappingStatus==.mapped → getCurrentWorldMap 保存基准；snapDistance 分级 GOOD≤20mm / WARNING 20~50mm / SPACE_LOST>50mm；SPACE_LOST 事件触发 recovery（initialWorldMap 重启，唯一允许 resetTracking 处）；
+- recovery 流程：relocalizing 期间禁用拍照/测量 → 等 tracking==.normal → 校验锚点 raycast 的 Surface alignment ≤20mm → MEASUREMENT_READY；超时 30s → NEED_USER_RELOCALIZATION（提示回到已扫描区域，非重新扫描）；
+- 4C 测量后按 snapDistance P95 评估健康并输出 4C-L 状态；UI 显示空间状态文本，relocalizing 时拍照/标定禁用；
+- 自研配准（SpatialAlignmentManager）保留为观察诊断，不再作为测量修正输出。
+
 ### 2026-08-14 · P4C-LongTermSpatialAlignment 第一步（专家批复）+ UI 清理
 
 - 暂停扩大三轨实验，新增 SpatialAlignmentManager：扫描完成放置 4~6 个参考锚点（前 4 个 wall 中心 + floor 中心），后台 0.5s 轮询"锚点屏幕投影 → raycast 观测 → Umeyama 刚体配准"，估计 T_currentToRoom（world→room）；
