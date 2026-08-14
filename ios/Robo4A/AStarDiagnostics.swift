@@ -285,7 +285,8 @@ enum AStarDiagnostics {
         let cx = context.cameraIntrinsics.columns.2.x
         let cy = context.cameraIntrinsics.columns.2.y
         let sensorX = fx * local4.x / depth + cx
-        let sensorY = fy * local4.y / depth + cy
+        // 相机坐标 y 向上、图像 v 向下（左上原点）：投影必须翻转 y。
+        let sensorY = -fy * local4.y / depth + cy
         let normalizedImage = CGPoint(
             x: CGFloat(sensorX) / context.imageResolution.width,
             y: CGFloat(sensorY) / context.imageResolution.height
