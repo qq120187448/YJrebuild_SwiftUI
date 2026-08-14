@@ -6,6 +6,9 @@
 
 ### 2026-08-14 · 0.742B（分支 codex/4b-mask-roi-0742b）：以 4B 为基座四项改造
 
+- 4B 输出补全：裂缝长度（world 3D 折线）+ 宽度（mask 轮廓法向，mm 换算）+ 分步计时（requestSetup/coreML/maskDecode/centerline/spatial/total）进持久化累计日志（复制/清空）；
+- 投影回退官方 raycast 世界点（帧锁定拍照帧平面求交因拍照瞬间 ARPlaneAnchor 覆盖不足导致红线不重合，暂回退保留函数待修）；
+
 - 1024 统一：4B 页面拍照后图像转长边 1024 喂模型，坐标按 1024 计算（模型 1024 输入已由 CI workflow --imgsz 1024 导出，ContentViewModel 动态读取模型输入尺寸）；
 
 - 任务1 掩码性能：ROI 上采样（检测框区域 → 原图框尺寸，上限 1280，替代整张 960²）+ Metal 一次批处理（upsampleBatch 一次 commandBuffer/waitUntilCompleted，替代逐实例同步等待）；MaskPrediction 新增 bboxOrigin，CrackCenterlineOverlay grid/宽度统计映射回全图；

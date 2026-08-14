@@ -15,6 +15,8 @@ struct CrackRaycast4BView: View {
     @State private var history: [Raycast4BReport] = []
     @State private var arViewReference: ARView?
     @State private var worldAnchors: [AnchorEntity] = []
+    @State private var reportLog: [String] = []
+    @State private var measurementSummary = ""
     /// 0.742B 任务4：后台/息屏时保存 WorldMap，回前台复用坐标。
     @State private var savedWorldMap: ARWorldMap?
     @Environment(\.scenePhase) private var scenePhase
@@ -42,6 +44,13 @@ struct CrackRaycast4BView: View {
             Text("红色球/线 = raycast 命中的世界点，应贴合墙面裂缝")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+            if !measurementSummary.isEmpty {
+                Text(measurementSummary)
+                    .font(.caption2)
+                    .monospaced()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+            }
 
             HStack {
                 Button {
@@ -77,6 +86,25 @@ struct CrackRaycast4BView: View {
             }
             .buttonStyle(.borderedProminent)
 
+            HStack(spacing: 12) {
+                Text("累计日志 \(reportLog.count) 条")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Button("复制累计日志") {
+                    UIPasteboard.general.string = reportLog.joined(
+                        separator: "\n\n=====\n\n"
+                    )
+                }
+                .buttonStyle(.bordered)
+                .disabled(reportLog.isEmpty)
+                Button("清空日志") {
+                    clearReportLog()
+                }
+                .buttonStyle(.bordered)
+                .disabled(reportLog.isEmpty)
+            }
+            .padding(.horizontal)
+
             ScrollView {
                 if let report {
                     Text(report.text())
@@ -97,14 +125,20 @@ struct CrackRaycast4BView: View {
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhase(newPhase)
         }
+        .onAppear {
+            reportLog = UserDefaults.standard.stringArray(
+                forKey: Self.reportLogKey
+            ) ?? []
+        }
     }
+
+    private static let reportLogKey = "roboscan4BReportLogKey"
 
     private func measure() {
         guard let arView = arViewReference else { return }
         isRunning = true
         statusText = "拍照中…"
-        // 0.742B 任务3：按下拍照瞬间捕获帧，用于最终 AR 投影定位（识别期间移动不漂移）。
-        let captureFrame = arView.session.currentFrame
+        let totalStart = Date()
 
         arView.snapshot(saveToHDR: false) { image in
             Task { @MainActor in
@@ -136,25 +170,89 @@ struct CrackRaycast4BView: View {
                 }
 
                 statusText = "raycast + 反投影中…"
+                let spatialStart = Date()
                 let measured = CrackRaycast4B.measure(
                     arView: arView,
                     scenario: scenario,
                     samplePointsPerPolyline: samples,
                     imageToViewScale: scale
                 )
-                // AR 投影位置按"按下拍照时刻"锁定（帧锁定），替代识别后当前帧 raycast 点。
-                let displayWorldPoints = frameLockedWorldPoints(
-                    captureFrame: captureFrame,
-                    samplePointsPerPolyline: samples,
-                    imageToViewScale: scale,
-                    arView: arView
-                )
-                addWorldVisualization(
-                    arView: arView,
-                    worldPoints: displayWorldPoints
-                )
+                // 投影用官方 raycast 世界点（4B 已验证贴合，重投影 ≤3px）。
+                addWorldVisualization(arView: arView, report: measured)
                 report = measured
                 history.append(measured)
+                // 0.742B：长度（world 3D 折线）+ 宽度（mask 轮廓法向）
+                var length3D = 0.0
+                for polyline in measured.polylines {
+                    var previousWorld: SIMD3<Float>?
+                    for point in polyline.points {
+                        guard let world = point.world else {
+                            previousWorld = nil
+                            continue
+                        }
+                        if let previousWorld {
+                            length3D += Double(
+                                simd_distance(previousWorld, world)
+                            )
+                        }
+                        previousWorld = world
+                    }
+                }
+                let widthStats = viewModel.centerlineResult?.widthStats
+                let totalPx =
+                    viewModel.centerlineResult?.totalPixelLength ?? 0
+                let mmPerPx = totalPx > 0 && length3D > 0
+                    ? length3D * 1000 / totalPx
+                    : nil
+                let widthText = widthStats.map { stats in
+                    if let mmPerPx {
+                        String(
+                            format: "宽度 平均 %.1f · 最大 %.1f mm",
+                            stats.averagePx * mmPerPx,
+                            stats.maxPx * mmPerPx
+                        )
+                    } else {
+                        String(
+                            format: "宽度 平均 %.1f · 最大 %.1f px",
+                            stats.averagePx,
+                            stats.maxPx
+                        )
+                    }
+                } ?? "宽度 无"
+                let spatialDuration =
+                    Date().timeIntervalSince(spatialStart) * 1000
+                let totalDuration =
+                    Date().timeIntervalSince(totalStart) * 1000
+                let timing = viewModel.stageTimings
+                let performance = [
+                    String(
+                        format: "requestSetup=%.0fms",
+                        timing["requestSetup"] ?? 0
+                    ),
+                    String(
+                        format: "coreML=%.0fms",
+                        timing["coreML"] ?? 0
+                    ),
+                    String(
+                        format: "maskDecode=%.0fms",
+                        timing["maskDecode"] ?? 0
+                    ),
+                    String(
+                        format: "centerline=%.0fms",
+                        timing["centerline"] ?? 0
+                    ),
+                    String(format: "spatial=%.0fms", spatialDuration),
+                    String(format: "total=%.0fms", totalDuration),
+                    viewModel.inferenceHardware
+                ].joined(separator: " · ")
+                measurementSummary = String(
+                    format: "长度(3D) %.3f m · %@\n%@",
+                    length3D,
+                    widthText,
+                    performance
+                )
+                appendReportLog(measurementSummary)
+                appendReportLog("4B 基线报告\n" + measured.text())
                 statusText = String(
                     format: "命中率 %.1f%% · 平均重投影 %.2f px · P95 %.2f px",
                     measured.hitRate * 100,
@@ -166,38 +264,67 @@ struct CrackRaycast4BView: View {
         }
     }
 
+    private func appendReportLog(_ text: String) {
+        let clipped = String(text.prefix(1200))
+        reportLog.append(clipped)
+        if reportLog.count > 300 {
+            reportLog.removeFirst(reportLog.count - 300)
+        }
+        UserDefaults.standard.set(
+            reportLog,
+            forKey: Self.reportLogKey
+        )
+    }
+
+    private func clearReportLog() {
+        reportLog.removeAll()
+        UserDefaults.standard.set(
+            reportLog,
+            forKey: Self.reportLogKey
+        )
+    }
+
     // MARK: - AR 世界点可视化（红球 + 相邻点连线）
 
     private func addWorldVisualization(
         arView: ARView,
-        worldPoints: [SIMD3<Float>]
+        report: Raycast4BReport
     ) {
         clearWorldVisualization()
-        var previousWorld: SIMD3<Float>?
-        for world in worldPoints {
-            let anchor = AnchorEntity(world: world)
-            let sphere = ModelEntity(
-                mesh: .generateSphere(radius: 0.004),
-                materials: [SimpleMaterial(color: .red, isMetallic: false)]
-            )
-            anchor.addChild(sphere)
-            arView.scene.addAnchor(anchor)
-            worldAnchors.append(anchor)
-
-            if let previous = previousWorld {
-                if let line = Self.lineEntity(
-                    from: previous,
-                    to: world,
-                    color: .red
-                ) {
-                    let midpoint = (previous + world) * 0.5
-                    let lineAnchor = AnchorEntity(world: midpoint)
-                    lineAnchor.addChild(line)
-                    arView.scene.addAnchor(lineAnchor)
-                    worldAnchors.append(lineAnchor)
+        for polyline in report.polylines {
+            var previousWorld: SIMD3<Float>?
+            for point in polyline.points {
+                guard let world = point.world else {
+                    previousWorld = nil
+                    continue
                 }
+                let anchor = AnchorEntity(world: world)
+                let sphere = ModelEntity(
+                    mesh: .generateSphere(radius: 0.004),
+                    materials: [SimpleMaterial(
+                        color: .red,
+                        isMetallic: false
+                    )]
+                )
+                anchor.addChild(sphere)
+                arView.scene.addAnchor(anchor)
+                worldAnchors.append(anchor)
+
+                if let previous = previousWorld {
+                    if let line = Self.lineEntity(
+                        from: previous,
+                        to: world,
+                        color: .red
+                    ) {
+                        let midpoint = (previous + world) * 0.5
+                        let lineAnchor = AnchorEntity(world: midpoint)
+                        lineAnchor.addChild(line)
+                        arView.scene.addAnchor(lineAnchor)
+                        worldAnchors.append(lineAnchor)
+                    }
+                }
+                previousWorld = world
             }
-            previousWorld = world
         }
     }
 
