@@ -601,6 +601,27 @@ struct CrackSurfaceUV4CView: View {
                     ].joined(separator: " · ")
                     performanceText = performance
                     appendReportLog(performance)
+                    if let centerline = viewModel.centerlineResult {
+                        let w = centerline.widthStats
+                        let profile = w.profile10Px.enumerated()
+                            .map { "\($0.offset + 1):\(String(format: "%.1f", $0.element))px" }
+                            .joined(separator: " ")
+                        let widthDiag = String(
+                            format: "宽度诊断：min/avg/max %.1f/%.1f/%.1f px · P10/P50/P90 %.1f/%.1f/%.1f px · 质量 %@ · 10段剖面 %@",
+                            w.minPx, w.averagePx, w.maxPx,
+                            w.p10Px, w.p50Px, w.p90Px,
+                            w.quality.label, profile
+                        )
+                        let lengthDiag = String(
+                            format: "长度一致性：dense %.1f px → simplified %.1f px · loss %.2f%%",
+                            centerline.denseTotalPixelLength,
+                            centerline.simplifiedTotalPixelLength,
+                            centerline.lengthLossPercent
+                        )
+                        NSLog("4D.1 %@ | %@", widthDiag, lengthDiag)
+                        appendReportLog(widthDiag)
+                        appendReportLog(lengthDiag)
+                    }
                     statusText = String(
                         format: "表面分配率 %.1f%% · UV 单位米 · 已解除静止锁定",
                         surfaceReport.assignedRatio * 100

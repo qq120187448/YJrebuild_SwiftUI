@@ -3,15 +3,51 @@ import UIKit
 
 /// 4A/4D.1 折线方案（用户定稿）：
 /// mask（protos×系数→上采样）→ 框内自适应稀疏化采样（保连通）
-/// → 连通域提取 → 轮廓拟合中心线（PCA 主轴 + 分箱中点）→ Douglas-Peucker
-/// → 每条裂缝折线强制 ≤7 段（≤8 点）→ 按长度保留最多 7 条主裂缝（≥80px）
+/// → 连通域提取 → 轮廓拟合中心线（PCA 主轴 + 分箱中点）→ SwiftSimplify（MIT，Douglas-Peucker）
+/// → 每条裂缝折线强制 ≤6 段（≤7 点，对齐 PC max_pts=7）→ 按长度保留最多 7 条主裂缝（≥80px）
 /// → 等距采样点（供 4B raycast）。
-/// 宽度：沿中心线法向找两侧轮廓最近点，输出平均/最大像素宽。
+/// 宽度：沿中心线法向找两侧轮廓最近点，输出 min/avg/max、P10/P50/P90、10 段剖面与 widthQuality。
+/// 长度一致性：同时输出 dense（简化前）/ simplified（简化后）长度与 loss%。
+/// 合规：Zhang-Suen / EDT / DP 不手写；DP 使用 SwiftSimplify（MIT），主 App 旧骨架管线原样保留。
 /// 每条主裂缝只输出一条折线，避免重复计算。
+struct CrackWidthStats {
+    /// widthQuality：<2px 低分辨率 / 2–4px 受限 / >4px 正常。
+    enum Quality: String, CaseIterable {
+        case lowResolution
+        case limited
+        case normal
+
+        var label: String {
+            switch self {
+            case .lowResolution: return "低分辨率(<2px)"
+            case .limited: return "受限(2-4px)"
+            case .normal: return "正常(>4px)"
+            }
+        }
+    }
+
+    var minPx: Double = 0
+    var averagePx: Double = 0
+    var maxPx: Double = 0
+    var p10Px: Double = 0
+    var p50Px: Double = 0
+    var p90Px: Double = 0
+    /// 10 段剖面：沿每条折线弧长归一化到 10 段，各段跨裂缝平均宽度（px）。
+    var profile10Px: [Double] = []
+    var quality: Quality = .normal
+}
+
+/// CrackPoint 适配 SwiftSimplify（MIT）的 Point2DRepresentable 协议。
+extension CrackPoint: Point2DRepresentable {
+    var xValue: Float { Float(x) }
+    var yValue: Float { Float(y) }
+    var cgPoint: CGPoint { CGPoint(x: x, y: y) }
+}
+
 enum CrackCenterlineOverlay {
 
     struct Result {
-        /// 每条主裂缝一条折线（有序 + DP 简化 + ≤7 段）
+        /// 每条主裂缝一条折线（有序 + SwiftSimplify DP 简化 + ≤6 段）
         var polylines: [[CrackPoint]]
         /// 每条折线的等距采样点（供 4B raycast）
         var samplePointsPerPolyline: [[CrackPoint]]
@@ -23,8 +59,16 @@ enum CrackCenterlineOverlay {
         var componentCount: Int
         var totalPixelLength: Double
         var longestPixelLength: Double
-        var maxWidthPx: Double
-        var averageWidthPx: Double
+        /// 简化前（分箱中点折线）总像素长度。
+        var denseTotalPixelLength: Double
+        /// 简化后（SwiftSimplify + ≤6 段）总像素长度。
+        var simplifiedTotalPixelLength: Double
+        /// 长度一致性损失：(dense - simplified) / dense × 100。
+        var lengthLossPercent: Double
+        var widthStats: CrackWidthStats
+
+        var maxWidthPx: Double { widthStats.maxPx }
+        var averageWidthPx: Double { widthStats.averagePx }
     }
 
     static func compute(
@@ -77,20 +121,23 @@ enum CrackCenterlineOverlay {
         )
         var polylines: [[CrackPoint]] = []
         var samplesPerPolyline: [[CrackPoint]] = []
+        var denseTotalPixelLength = 0.0
         for component in components {
             guard component.count >= 3 else { continue }
+            let fitted = approximateCenterline(
+                from: component,
+                simplifyEpsilonPx: 1.5
+            )
             let centerline = cappedCenterline(
-                approximateCenterline(
-                    from: component,
-                    simplifyEpsilonPx: 1.5
-                ),
-                maxSegments: 7
+                fitted.simplified,
+                maxSegments: 6
             )
             guard centerline.count >= 2 else { continue }
             let length = polylineLength(centerline)
             guard length >= Double(crackConfig.minSkeletonLength) else {
                 continue
             }
+            denseTotalPixelLength += polylineLength(fitted.dense)
             polylines.append(centerline)
             samplesPerPolyline.append(
                 CrackSamplePoints.evenlySpaced(
@@ -118,6 +165,9 @@ enum CrackCenterlineOverlay {
         let total = polylines.reduce(0.0) { $0 + polylineLength($1) }
         let longest = polylines.map(polylineLength).max() ?? 0
         let flatSamples = samplesPerPolyline.flatMap { $0 }
+        let lengthLossPercent = denseTotalPixelLength > 0
+            ? (denseTotalPixelLength - total) / denseTotalPixelLength * 100
+            : 0
 
         return Result(
             polylines: polylines,
@@ -129,8 +179,10 @@ enum CrackCenterlineOverlay {
             componentCount: components.count,
             totalPixelLength: total,
             longestPixelLength: longest,
-            maxWidthPx: widthStats.maxWidthPx,
-            averageWidthPx: widthStats.averageWidthPx
+            denseTotalPixelLength: denseTotalPixelLength,
+            simplifiedTotalPixelLength: total,
+            lengthLossPercent: lengthLossPercent,
+            widthStats: widthStats
         )
     }
 
@@ -183,12 +235,16 @@ enum CrackCenterlineOverlay {
         return result
     }
 
-    /// 用连通域点的 PCA 主轴作为裂缝主方向，把每个横截面两侧轮廓中点连成中心线。
+    /// 用连通域点的 PCA 主轴作为裂缝主方向，把每个横截面两侧轮廓中点连成中心线，
+    /// 再用 SwiftSimplify（MIT，Douglas-Peucker）简化。返回 dense（简化前）与 simplified 两版，
+    /// 供长度一致性诊断（denseLength / simplifiedLength / loss%）。
     private static func approximateCenterline(
         from points: [CrackPoint],
         simplifyEpsilonPx: Double
-    ) -> [CrackPoint] {
-        guard points.count >= 3 else { return points }
+    ) -> (dense: [CrackPoint], simplified: [CrackPoint]) {
+        guard points.count >= 3 else {
+            return (dense: points, simplified: points)
+        }
         let sample: [CrackPoint]
         if points.count > 600 {
             sample = points.enumerated().compactMap { index, point in
@@ -197,7 +253,9 @@ enum CrackCenterlineOverlay {
         } else {
             sample = points
         }
-        guard !sample.isEmpty else { return [] }
+        guard !sample.isEmpty else {
+            return (dense: [], simplified: [])
+        }
 
         var centroidX = 0.0
         var centroidY = 0.0
@@ -233,7 +291,9 @@ enum CrackCenterlineOverlay {
             minT = min(minT, t)
             maxT = max(maxT, t)
         }
-        guard maxT > minT else { return [] }
+        guard maxT > minT else {
+            return (dense: [], simplified: [])
+        }
 
         let binCount = min(64, max(8, points.count / 8))
         let step = (maxT - minT) / Double(binCount)
@@ -269,20 +329,22 @@ enum CrackCenterlineOverlay {
                 )
             )
         }
-        return CrackSkeleton.douglasPeucker(
+        let simplified = SwiftSimplify.simplify(
             centers,
-            epsilon: simplifyEpsilonPx
+            tolerance: Float(simplifyEpsilonPx),
+            highestQuality: true
         )
+        return (dense: centers, simplified: simplified)
     }
 
     /// 从每个实例 mask 提取闭合轮廓边界点，沿中心线法向两侧找最近边界点，
-    /// 以两点欧氏距离作为局部像素宽度，返回平均/最大宽度。
+    /// 以两点欧氏距离作为局部像素宽度，返回 min/avg/max、P10/P50/P90、10 段剖面与质量分级。
     private static func contourWidthStats(
         masks: [MaskPrediction],
         imageWidth: Int,
         imageHeight: Int,
         samplesPerPolyline: [[CrackPoint]]
-    ) -> (maxWidthPx: Double, averageWidthPx: Double) {
+    ) -> CrackWidthStats {
         var contour = Set<CrackPoint>()
         for prediction in masks {
             let maskWidth = prediction.maskSize.width
@@ -316,11 +378,12 @@ enum CrackCenterlineOverlay {
                 }
             }
         }
-        guard !contour.isEmpty else { return (0, 0) }
+        guard !contour.isEmpty else { return CrackWidthStats() }
 
-        var widths: [Double] = []
+        var perPolylineWidths: [[Double]] = []
         for polyline in samplesPerPolyline {
             guard polyline.count >= 2 else { continue }
+            var polylineWidths: [Double] = []
             for index in 0..<polyline.count {
                 let point = polyline[index]
                 let previous = index > 0
@@ -368,7 +431,7 @@ enum CrackCenterlineOverlay {
                     }
                 }
                 if let positivePoint, let negativePoint {
-                    widths.append(
+                    polylineWidths.append(
                         hypot(
                             Double(positivePoint.x - negativePoint.x),
                             Double(positivePoint.y - negativePoint.y)
@@ -376,12 +439,59 @@ enum CrackCenterlineOverlay {
                     )
                 }
             }
+            if !polylineWidths.isEmpty {
+                perPolylineWidths.append(polylineWidths)
+            }
         }
-        guard !widths.isEmpty else { return (0, 0) }
-        return (
-            maxWidthPx: widths.max() ?? 0,
-            averageWidthPx: widths.reduce(0, +) / Double(widths.count)
-        )
+        let widths = perPolylineWidths.flatMap { $0 }
+        guard !widths.isEmpty else { return CrackWidthStats() }
+        let sorted = widths.sorted()
+        let average = widths.reduce(0, +) / Double(widths.count)
+        var stats = CrackWidthStats()
+        stats.minPx = sorted.first ?? 0
+        stats.averagePx = average
+        stats.maxPx = sorted.last ?? 0
+        stats.p10Px = percentile(sorted, 10)
+        stats.p50Px = percentile(sorted, 50)
+        stats.p90Px = percentile(sorted, 90)
+        stats.profile10Px = profile10(perPolylineWidths)
+        if average < 2 {
+            stats.quality = .lowResolution
+        } else if average <= 4 {
+            stats.quality = .limited
+        } else {
+            stats.quality = .normal
+        }
+        return stats
+    }
+
+    /// 线性插值百分位。
+    private static func percentile(_ sorted: [Double], _ p: Double) -> Double {
+        guard !sorted.isEmpty else { return 0 }
+        guard sorted.count > 1 else { return sorted[0] }
+        let rank = Double(sorted.count - 1) * p / 100.0
+        let lower = Int(floor(rank))
+        let upper = min(sorted.count - 1, Int(ceil(rank)))
+        let fraction = rank - Double(lower)
+        if lower == upper { return sorted[lower] }
+        return sorted[lower] * (1 - fraction) + sorted[upper] * fraction
+    }
+
+    /// 10 段剖面：每条折线采样点按弧长归一化（等距采样下索引比例≈弧长比例），
+    /// 分入 10 个桶取平均，再跨裂缝对同段求平均；空桶补 0。
+    private static func profile10(_ perPolylineWidths: [[Double]]) -> [Double] {
+        var buckets = Array(repeating: [Double](), count: 10)
+        for widths in perPolylineWidths {
+            guard widths.count >= 2 else { continue }
+            for (index, width) in widths.enumerated() {
+                let t = Double(index) / Double(widths.count - 1)
+                let bucket = min(9, max(0, Int(t * 10)))
+                buckets[bucket].append(width)
+            }
+        }
+        return buckets.map { bucket in
+            bucket.isEmpty ? 0 : bucket.reduce(0, +) / Double(bucket.count)
+        }
     }
 
     /// 有序折线像素长度（直接累加相邻点欧氏距离）。
@@ -397,6 +507,10 @@ enum CrackCenterlineOverlay {
     }
 
     static func statsText(detectionCount: Int, result: Result) -> String {
-        "主裂缝 \(result.polylines.count) 条 · mask 像素 \(result.maskPixelCount) · 平均宽 \(String(format: "%.1f", result.averageWidthPx)) px · 最大宽 \(String(format: "%.1f", result.maxWidthPx)) px · 总长 \(String(format: "%.1f", result.totalPixelLength)) px · 最长 \(String(format: "%.1f", result.longestPixelLength)) px · 采样点 \(result.samplePoints.count) 个"
+        let w = result.widthStats
+        let profile = w.profile10Px.enumerated()
+            .map { "\($0.offset + 1):\(String(format: "%.1f", $0.element))px" }
+            .joined(separator: " ")
+        return "主裂缝 \(result.polylines.count) 条 · mask 像素 \(result.maskPixelCount) · 宽度 min/avg/max \(String(format: "%.1f", w.minPx))/\(String(format: "%.1f", w.averagePx))/\(String(format: "%.1f", w.maxPx)) px · P10/P50/P90 \(String(format: "%.1f", w.p10Px))/\(String(format: "%.1f", w.p50Px))/\(String(format: "%.1f", w.p90Px)) px · 质量 \(w.quality.label) · 10段剖面 \(profile) · 长度 dense→simplified \(String(format: "%.1f", result.denseTotalPixelLength))→\(String(format: "%.1f", result.simplifiedTotalPixelLength)) px (loss \(String(format: "%.2f", result.lengthLossPercent))%) · 最长 \(String(format: "%.1f", result.longestPixelLength)) px · 采样点 \(result.samplePoints.count) 个"
     }
 }
