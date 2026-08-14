@@ -4,6 +4,20 @@
 
 ## 未发布 · 当前分支 codex/arkit-only-poc
 
+### 2026-08-14 · ARKit-Only 补全：阶段计时 + 持久化累计日志 + 历史投影
+
+- 拍照到出工程量阶段计时（requestSetup/coreML/maskDecode/centerline/spatial/total + computeUnitsPolicy）写入日志；
+- 累计日志持久化（UserDefaults）+ "复制累计日志"/"清空日志"按钮，与 4C 一致便于导出；
+- AR 投影保持历史：每次测量不清除旧投影，颜色循环（红/绿/蓝/橙/紫/青）区分测量次序，便于观察同一裂缝的漂移；"清除投影"按钮保留手动清理；
+- recovery 不再清除历史投影（保留 recovery 前后对比）。
+
+### 2026-08-14 · ARKit-Only POC 补全：AR 投影 + WorldMap 全自动
+
+- 补 4B 同款 AR 红点/红线投影（世界点红球 + 相邻点连线，可清除），不再只有数字；
+- WorldMap 自动化：mapped 时测量后自动保存（仅一次），不再手动按钮；
+- 自动失配检测（命中率 <80% / 重投影 >3px / tracking 非 normal）→ 自动 initialWorldMap recovery → relocalizing → normal 恢复测量，用户无感；
+- 界面按钮简化为"拍照测量 + 清除投影"。
+
 ### 2026-08-14 · 4C-L ARKit-Only POC（专家 A/B 优先级最高）
 
 - 新分支 codex/arkit-only-poc：纯 ARKit 实验页面（DemoApp 新增"4C-L ARKit-Only"tab），不用 RoomPlan；

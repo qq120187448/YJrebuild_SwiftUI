@@ -19,7 +19,11 @@ struct AROnlyScanView: View {
     @State private var reportText = ""
     @State private var savedWorldMap: ARWorldMap?
     @State private var isRelocalizing = false
-    @State private var logLines: [String] = []
+    @State private var worldAnchors: [AnchorEntity] = []
+    @State private var autoSaved = false
+    /// 历史投影颜色循环（区分每次测量，观察漂移）。
+    @State private var colorIndex = 0
+    @State private var reportLog: [String] = []
 
     var body: some View {
         VStack(spacing: 8) {
@@ -49,19 +53,36 @@ struct AROnlyScanView: View {
                     measure()
                 }
                 .disabled(isRunning || isRelocalizing)
-                Button("保存 WorldMap") {
-                    saveWorldMap()
-                }
-                .disabled(isRelocalizing)
-                Button("恢复 WorldMap") {
-                    recoverWorldMap()
+                if !worldAnchors.isEmpty {
+                    Button("清除投影") {
+                        clearWorldVisualization()
+                    }
                 }
             }
             .buttonStyle(.borderedProminent)
             .padding(.horizontal)
 
+            HStack(spacing: 12) {
+                Text("累计日志 \(reportLog.count) 条")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Button("复制累计日志") {
+                    UIPasteboard.general.string = reportLog.joined(
+                        separator: "\n\n=====\n\n"
+                    )
+                }
+                .buttonStyle(.bordered)
+                .disabled(reportLog.isEmpty)
+                Button("清空日志") {
+                    clearReportLog()
+                }
+                .buttonStyle(.bordered)
+                .disabled(reportLog.isEmpty)
+            }
+            .padding(.horizontal)
+
             ScrollView {
-                Text(logLines.joined(separator: "\n"))
+                Text(reportLog.joined(separator: "\n"))
                     .font(.caption2)
                     .monospaced()
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -70,10 +91,17 @@ struct AROnlyScanView: View {
             .padding(.horizontal)
         }
         .navigationTitle("4C-L ARKit-Only POC")
+        .onAppear {
+            reportLog = UserDefaults.standard.stringArray(
+                forKey: Self.reportLogKey
+            ) ?? []
+        }
         .onDisappear {
             session.pause()
         }
     }
+
+    private static let reportLogKey = "roboscanAROnlyReportLogKey"
 
     // MARK: - 会话配置
 
@@ -96,6 +124,7 @@ struct AROnlyScanView: View {
         guard let arView = arViewRef else { return }
         isRunning = true
         statusText = "拍照中…"
+        let totalStart = Date()
         arView.snapshot(saveToHDR: false) { image in
             Task { @MainActor in
                 defer { isRunning = false }
@@ -119,10 +148,12 @@ struct AROnlyScanView: View {
                     ? arView.bounds.width / imageWidth
                     : 1
 
+                let spatialStart = Date()
                 var totalSamples = 0
                 var hits = 0
                 var errors: [Double] = []
                 var totalLength = 0.0
+                var collectedWorldPoints: [SIMD3<Float>] = []
                 for polyline in samples {
                     var previousWorld: SIMD3<Float>?
                     for point in polyline {
@@ -139,6 +170,7 @@ struct AROnlyScanView: View {
                         guard let hit = results.first else { continue }
                         hits += 1
                         let world = hit.worldTransform.position
+                        collectedWorldPoints.append(world)
                         if let previousWorld {
                             totalLength += Double(
                                 simd_distance(previousWorld, world)
@@ -165,6 +197,32 @@ struct AROnlyScanView: View {
                 let tracking = Self.trackingText(
                     arView.session.currentFrame?.camera.trackingState
                 )
+                let spatialDuration =
+                    Date().timeIntervalSince(spatialStart) * 1000
+                let totalDuration =
+                    Date().timeIntervalSince(totalStart) * 1000
+                let timing = viewModel.stageTimings
+                let performance = [
+                    String(
+                        format: "requestSetup=%.0fms",
+                        timing["requestSetup"] ?? 0
+                    ),
+                    String(
+                        format: "coreML=%.0fms",
+                        timing["coreML"] ?? 0
+                    ),
+                    String(
+                        format: "maskDecode=%.0fms",
+                        timing["maskDecode"] ?? 0
+                    ),
+                    String(
+                        format: "centerline=%.0fms",
+                        timing["centerline"] ?? 0
+                    ),
+                    String(format: "spatial=%.0fms", spatialDuration),
+                    String(format: "total=%.0fms", totalDuration),
+                    viewModel.inferenceHardware
+                ].joined(separator: " · ")
                 reportText = String(
                     format: "长度 %.3f m · 命中 %.1f%% (%d/%d) · 重投影 avg %.2fpx · tracking %@",
                     totalLength,
@@ -175,42 +233,104 @@ struct AROnlyScanView: View {
                     tracking
                 )
                 statusText = "测量完成"
-                appendLog("测量：\(reportText)")
+                appendReportLog("测量：\(reportText)")
+                appendReportLog(performance)
+                addWorldVisualization(
+                    arView: arView,
+                    worldPoints: collectedWorldPoints
+                )
+                // WorldMap 自动保存（mapped 时，仅一次）
+                if !autoSaved {
+                    autoSaveWorldMapIfMapped(arView: arView)
+                }
+                // 自动失配检测 → 自动 recovery
+                autoDetectAndRecover(
+                    arView: arView,
+                    totalSamples: totalSamples,
+                    hits: hits,
+                    avgError: avgError
+                )
             }
         }
     }
 
-    // MARK: - WorldMap 保存 / 恢复
+    // MARK: - WorldMap 自动保存 / 自动恢复
 
-    private func saveWorldMap() {
-        guard let arView = arViewRef else { return }
-        guard let frame = arView.session.currentFrame else {
-            statusText = "无当前帧"
-            return
-        }
+    /// mapped 时自动保存基准 WorldMap（仅一次）。
+    private func autoSaveWorldMapIfMapped(arView: ARView) {
+        guard let frame = arView.session.currentFrame else { return }
         guard frame.worldMappingStatus == .mapped else {
-            statusText = "worldMappingStatus=\(frame.worldMappingStatus)，未达 mapped"
+            appendReportLog(
+                "WorldMap 未保存：worldMappingStatus=\(frame.worldMappingStatus)（等待 mapped）"
+            )
             return
         }
         arView.session.getCurrentWorldMap { map, error in
             if let map {
                 savedWorldMap = map
-                appendLog(
-                    "WorldMap 已保存（\(map.anchors.count) 锚点，mapped）"
+                autoSaved = true
+                appendReportLog(
+                    "WorldMap 已自动保存（\(map.anchors.count) 锚点，mapped）"
                 )
             } else {
-                appendLog(
-                    "WorldMap 保存失败：\(error?.localizedDescription ?? "未知")"
+                appendReportLog(
+                    "WorldMap 自动保存失败：\(error?.localizedDescription ?? "未知")"
                 )
             }
         }
     }
 
-    private func recoverWorldMap() {
-        guard let arView = arViewRef, let savedWorldMap else {
-            statusText = "无已保存 WorldMap"
+    /// 失配检测（命中率/重投影/tracking）→ 自动 ARWorldMap recovery。
+    @MainActor
+    private func autoDetectAndRecover(
+        arView: ARView,
+        totalSamples: Int,
+        hits: Int,
+        avgError: Double
+    ) {
+        let tracking = arView.session.currentFrame?.camera.trackingState
+        let trackingText = Self.trackingText(tracking)
+        let hitRate = totalSamples > 0
+            ? Double(hits) / Double(totalSamples)
+            : 0
+        var mismatch = false
+        var reason = ""
+        if tracking != .normal {
+            mismatch = true
+            reason = "tracking=\(trackingText)"
+        } else if hitRate < 0.8 {
+            mismatch = true
+            reason = String(
+                format: "命中率 %.1f%% <80%%",
+                hitRate * 100
+            )
+        } else if avgError > 3 {
+            mismatch = true
+            reason = String(format: "重投影 %.1fpx >3px", avgError)
+        }
+        guard mismatch else {
+            appendReportLog(
+                String(
+                    format: "空间健康 GOOD（命中 %.1f%% · 重投影 %.2fpx · %@）",
+                    hitRate * 100,
+                    avgError,
+                    trackingText
+                )
+            )
             return
         }
+        appendReportLog("空间失配（\(reason)），自动触发 recovery")
+        recoverWorldMap()
+    }
+
+    /// 用 initialWorldMap 重启会话并等待 normal（自动恢复测量）。
+    @MainActor
+    private func recoverWorldMap() {
+        guard let arView = arViewRef, let savedWorldMap else {
+            appendReportLog("无已保存 WorldMap，无法自动恢复")
+            return
+        }
+        guard !isRelocalizing else { return }
         let configuration = ARWorldTrackingConfiguration()
         configuration.initialWorldMap = savedWorldMap
         configuration.planeDetection = [.horizontal, .vertical]
@@ -225,8 +345,8 @@ struct AROnlyScanView: View {
             options: [.resetTracking, .removeExistingAnchors]
         )
         isRelocalizing = true
-        statusText = "正在重新定位空间…请缓慢移动手机观察已扫描区域"
-        appendLog("ARWorldMap recovery 已触发（relocalizing…）")
+        statusText = "正在自动重新定位空间…请缓慢移动手机观察已扫描区域"
+        appendReportLog("ARWorldMap 自动 recovery 已触发（relocalizing…）")
 
         Task { @MainActor in
             for _ in 0..<120 {
@@ -235,23 +355,97 @@ struct AROnlyScanView: View {
                 if frame.camera.trackingState == .normal {
                     isRelocalizing = false
                     statusText = "recovery 成功：tracking normal"
-                    appendLog("recovery 成功：tracking normal")
+                    appendReportLog("recovery 成功：tracking normal")
                     return
                 }
             }
             isRelocalizing = false
             statusText = "recovery 超时（60s），请回到已扫描区域"
-            appendLog("recovery 超时（60s），请回到已扫描区域")
+            appendReportLog("recovery 超时（60s），请回到已扫描区域")
         }
     }
 
     // MARK: - 工具
 
-    private func appendLog(_ text: String) {
-        logLines.append(text)
-        if logLines.count > 200 {
-            logLines.removeFirst(logLines.count - 200)
+    /// AR 红点/红线投影（4B 同款：世界点红球 + 相邻点连线）。
+    private func addWorldVisualization(
+        arView: ARView,
+        worldPoints: [SIMD3<Float>]
+    ) {
+        // 保持历史投影（用户要求）：不清除旧投影，每次测量用不同颜色便于对比漂移。
+        let colors: [UIColor] = [
+            .red, .green, .blue, .orange, .purple, .cyan
+        ]
+        let color = colors[colorIndex % colors.count]
+        colorIndex += 1
+        var previous: SIMD3<Float>?
+        for world in worldPoints {
+            let anchor = AnchorEntity(world: world)
+            let sphere = ModelEntity(
+                mesh: .generateSphere(radius: 0.004),
+                materials: [SimpleMaterial(
+                    color: color,
+                    isMetallic: false
+                )]
+            )
+            anchor.addChild(sphere)
+            arView.scene.addAnchor(anchor)
+            worldAnchors.append(anchor)
+            if let previous {
+                let delta = world - previous
+                let length = simd_length(delta)
+                if length > 0.001 {
+                    let lineAnchor = AnchorEntity(
+                        world: (previous + world) * 0.5
+                    )
+                    let line = ModelEntity(
+                        mesh: .generateBox(
+                            size: SIMD3<Float>(0.003, 0.003, length),
+                            cornerRadius: 0.0015
+                        ),
+                        materials: [SimpleMaterial(
+                            color: color,
+                            isMetallic: false
+                        )]
+                    )
+                    line.orientation = simd_quatf(
+                        from: SIMD3<Float>(0, 0, 1),
+                        to: simd_normalize(delta)
+                    )
+                    lineAnchor.addChild(line)
+                    arView.scene.addAnchor(lineAnchor)
+                    worldAnchors.append(lineAnchor)
+                }
+            }
+            previous = world
         }
+    }
+
+    private func clearWorldVisualization() {
+        for anchor in worldAnchors {
+            anchor.removeFromParent()
+        }
+        worldAnchors.removeAll()
+    }
+
+    private func appendReportLog(_ text: String) {
+        let clipped = String(text.prefix(1000))
+        reportLog.append(clipped)
+        if reportLog.count > 300 {
+            reportLog.removeFirst(reportLog.count - 300)
+        }
+        UserDefaults.standard.set(
+            reportLog,
+            forKey: Self.reportLogKey
+        )
+    }
+
+    private func clearReportLog() {
+        reportLog.removeAll()
+        UserDefaults.standard.set(
+            reportLog,
+            forKey: Self.reportLogKey
+        )
     }
 
     private static func trackingText(
