@@ -19,11 +19,12 @@ struct CrackRaycast4BView: View {
     @State private var measurementSummary = ""
 
     var body: some View {
-        VStack(spacing: 8) {
+        GeometryReader { geo in
+            VStack(spacing: 8) {
             ARViewContainer { arView in
                 arViewReference = arView
             }
-            .frame(maxHeight: .infinity)
+            .frame(height: Self.viewfinderHeight(in: geo))
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .padding(.horizontal)
 
@@ -99,6 +100,7 @@ struct CrackRaycast4BView: View {
             .frame(height: 170)
             .padding(.horizontal)
         }
+        }
         .navigationTitle("4B Raycast")
         .onAppear {
             viewModel.deferWidthStats = true
@@ -109,6 +111,13 @@ struct CrackRaycast4BView: View {
     }
 
     private static let reportLogKey = "roboscan4BReportLogKey"
+
+    /// Fixed viewfinder height so post-capture info never squeezes it.
+    private static func viewfinderHeight(in geo: GeometryProxy) -> CGFloat {
+        max(180, geo.size.height - Self.bottomPanelHeight)
+    }
+
+    private static let bottomPanelHeight: CGFloat = 350
 
     private func measure() {
         guard let arView = arViewReference else { return }
@@ -197,6 +206,7 @@ struct CrackRaycast4BView: View {
                 let widthImageSize = analysisImage.size
                 let measuredCopy = measured
                 Task.detached(priority: .userInitiated) {
+                    let widthStart = Date()
                     // 长度：world 3D 折线（后台）
                     var length3D = 0.0
                     for polyline in measuredCopy.polylines {
@@ -221,11 +231,20 @@ struct CrackRaycast4BView: View {
                             imageSize: widthImageSize,
                             samplesPerPolyline: widthSamples
                         )
-                    let totalPx = widthSamples.reduce(0) {
-                        $0 + $1.count
+                    let widthDuration = Date().timeIntervalSince(widthStart) * 1000
+                    // Scale: mm per image pixel, derived from the crack's own
+                    // pixel length (not the sample-point count).
+                    var imagePixelLength = 0.0
+                    for polyline in widthSamples {
+                        for index in 1..<polyline.count {
+                            imagePixelLength += hypot(
+                                Double(polyline[index].x - polyline[index - 1].x),
+                                Double(polyline[index].y - polyline[index - 1].y)
+                            )
+                        }
                     }
-                    let mmPerPx = totalPx > 0 && length3D > 0
-                        ? length3D * 1000 / Double(totalPx)
+                    let mmPerPx = imagePixelLength > 0 && length3D > 0
+                        ? length3D * 1000 / imagePixelLength
                         : nil
                     let summary: String
                     if let mmPerPx {
@@ -246,6 +265,31 @@ struct CrackRaycast4BView: View {
                     await MainActor.run {
                         measurementSummary = summary
                         appendReportLog(summary)
+                        let gridSize = String(
+                            format: "%dx%d",
+                            Int(widthImageSize.width.rounded()),
+                            Int(widthImageSize.height.rounded())
+                        )
+                        let maskSize = widthMasks.first.map {
+                            "\($0.maskSize.width)x\($0.maskSize.height)"
+                        } ?? "none"
+                        let pxText = String(
+                            format: "min/avg/max %.1f/%.1f/%.1f px · P10/P50/P90 %.1f/%.1f/%.1f px · %@ · samples %d · pxLen %.1f · mmPerPx %@ · grid %@ · mask %@ · width=%.0fms",
+                            widthStats.minPx,
+                            widthStats.averagePx,
+                            widthStats.maxPx,
+                            widthStats.p10Px,
+                            widthStats.p50Px,
+                            widthStats.p90Px,
+                            widthStats.quality.label,
+                            widthSamples.reduce(0) { $0 + $1.count },
+                            imagePixelLength,
+                            mmPerPx.map { String(format: "%.4f", $0) } ?? "nil",
+                            gridSize,
+                            maskSize,
+                            widthDuration
+                        )
+                        appendReportLog("宽度诊断: " + pxText)
                     }
                 }
 
