@@ -210,8 +210,8 @@ struct CrackSurfaceUV4CView: View {
                     .font(.caption2)
                     .foregroundStyle(
                         recoveryManager.isMeasurementAllowed
-                            ? .secondary
-                            : .orange
+                            ? Color.secondary
+                            : Color.orange
                     )
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 12)

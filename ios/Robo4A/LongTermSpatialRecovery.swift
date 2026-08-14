@@ -68,7 +68,26 @@ final class SpatialRecoveryManager {
             if let frame = session.currentFrame,
                frame.worldMappingStatus == .mapped {
                 do {
-                    let map = try await session.getCurrentWorldMap()
+                    let map: ARWorldMap = try await withCheckedThrowingContinuation {
+                        continuation in
+                        session.getCurrentWorldMap { worldMap, error in
+                            if let worldMap {
+                                continuation.resume(returning: worldMap)
+                            } else {
+                                continuation.resume(
+                                    throwing: error
+                                        ?? NSError(
+                                            domain: "SpatialRecovery",
+                                            code: 1,
+                                            userInfo: [
+                                                NSLocalizedDescriptionKey:
+                                                    "getCurrentWorldMap 返回空"
+                                            ]
+                                        )
+                                )
+                            }
+                        }
+                    }
                     worldMap = map
                     state = .measurementReady
                     lastHealthText = "WorldMap 已保存（\(map.anchors.count) 锚点，mapped）"
