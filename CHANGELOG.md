@@ -2,6 +2,16 @@
 
 > **约定（用户要求，2026-08-14 起）**：每次版本更新必须同步更新本文件并提交到 GitHub。
 
+## 未发布 · 当前分支 codex/arkit-only-poc
+
+### 2026-08-14 · 4C-L ARKit-Only POC（专家 A/B 优先级最高）
+
+- 新分支 codex/arkit-only-poc：纯 ARKit 实验页面（DemoApp 新增"4C-L ARKit-Only"tab），不用 RoomPlan；
+- 架构：ARWorldTrackingConfiguration + planeDetection + sceneReconstruction（meshWithClassification）+ environmentTexturing 为唯一表面；测量 = 拍照 → YOLO → 采样点 → ARView.raycast → world 3D 折线长度 + 重投影 + tracking；
+- WorldMap 保存（worldMappingStatus==.mapped）/ initialWorldMap 恢复（relocalizing → normal 后恢复测量）；
+- 与 RoomPlan 4C-L 同设备/同场景/同 30 分钟轨迹 A/B，比较 tracking / recovery / surface assignment / reprojection / 长度；
+- 目的：验证"能否让 ARKit 自己的 Plane/Mesh 成为唯一 Surface，消除 ARWorld↔RoomPlan 双坐标系"。
+
 ## 未发布 · 当前分支 codex/defect-mesh-uv-polyline
 
 ### 2026-08-14 · 4C-L 专家批复执行：状态拆分 + 全局校验 + 降级模式 + 跨面长度

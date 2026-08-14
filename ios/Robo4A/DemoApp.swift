@@ -28,6 +28,10 @@ struct DemoApp: App {
                     .tabItem {
                         Label("4C UI A/B", systemImage: "rectangle.3.group")
                     }
+                AROnlyScanView()
+                    .tabItem {
+                        Label("4C-L ARKit-Only", systemImage: "arkit")
+                    }
             }
         }
     }
