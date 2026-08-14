@@ -144,6 +144,7 @@ struct CrackSurfaceUV4CView: View {
         on: .main,
         in: .common
     ).autoconnect()
+    @State private var scanID = UUID()
 
     var body: some View {
         GeometryReader { geo in
@@ -193,6 +194,39 @@ struct CrackSurfaceUV4CView: View {
                     view.captureSession.run(configuration: configuration)
                 }
                 .frame(width: width, height: width)
+                .id(scanID)
+            } else if phase == .ready, capturedRoom != nil {
+                // 拍照阶段小窗：同一官方 RoomCaptureView 的结果视图缩小显示，
+                // 代表 RoomPlan 模型仍在会话中（官方模型，不自建）。
+                VStack(alignment: .trailing, spacing: 4) {
+                    RoomCaptureView4C(
+                        session: sharedSession,
+                        coordinator: coordinator
+                    ) { view in
+                        roomCaptureViewReference = view
+                        var configuration = RoomCaptureSession.Configuration()
+                        configuration.isCoachingEnabled = true
+                        view.captureSession.run(configuration: configuration)
+                    }
+                    .frame(width: 132, height: 172)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .id(scanID)
+
+                    Text("RoomPlan 在线")
+                        .font(.caption2)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.black.opacity(0.6))
+                        .clipShape(Capsule())
+                }
+                .frame(
+                    maxWidth: .infinity,
+                    maxHeight: .infinity,
+                    alignment: .bottomTrailing
+                )
+                .padding(10)
+                .allowsHitTesting(false)
             }
 
             if isRunning {
@@ -453,6 +487,7 @@ struct CrackSurfaceUV4CView: View {
         guard let arView = arViewReference else { return }
         driftTracker.removeAll(session: arView.session)
         driftText = ""
+        scanID = UUID()
         capturedRoom = nil
         report = nil
         comparisonText = ""
