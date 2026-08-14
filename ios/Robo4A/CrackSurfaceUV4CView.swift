@@ -314,14 +314,6 @@ struct CrackSurfaceUV4CView: View {
         phase = .processing
         coachingText = "正在生成房间模型…"
         statusText = "RoomPlan 处理中…"
-        // RoomPlan 已停止，恢复 ARKit mesh 配置，供 raycast 使用。
-        restoreMesh()
-    }
-
-    private func restoreMesh() {
-        if let arView = arViewReference {
-            arView.session.run(Self.meshConfiguration())
-        }
     }
 
     // MARK: - 测量
