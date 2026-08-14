@@ -287,8 +287,8 @@ enum AStarDiagnostics {
         let sensorX = fx * local4.x / depth + cx
         let sensorY = fy * local4.y / depth + cy
         let normalizedImage = CGPoint(
-            x: sensorX / context.imageResolution.width,
-            y: sensorY / context.imageResolution.height
+            x: CGFloat(sensorX) / context.imageResolution.width,
+            y: CGFloat(sensorY) / context.imageResolution.height
         )
         let normalizedView = normalizedImage.applying(context.displayTransform)
         return CGPoint(
