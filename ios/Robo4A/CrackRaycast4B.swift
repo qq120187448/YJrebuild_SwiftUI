@@ -438,7 +438,7 @@ enum CrackRaycast4B {
             let sensorY = Float(normalized.y * imageHeight)
             let localDirection = SIMD3<Float>(
                 (sensorX - cx) / fx,
-                (sensorY - cy) / fy,
+                -(sensorY - cy) / fy,
                 -1
             )
             let worldDirection = simd_normalize(

@@ -81,7 +81,7 @@ enum CaptureFrameSurfaceMapper {
             )
             let localDirection = SIMD3<Float>(
                 (sensorPoint.x - cx) / fx,
-                (sensorPoint.y - cy) / fy,
+                -(sensorPoint.y - cy) / fy,
                 -1
             )
             let worldDirection = simd_normalize(

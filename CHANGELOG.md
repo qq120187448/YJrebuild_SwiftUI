@@ -4,6 +4,12 @@
 
 ## 未发布 · 当前分支 codex/defect-mesh-uv-polyline
 
+### 2026-08-14 · 4C 反投影 y 镜像修复（长直线根因）
+
+- 修复 CaptureFrameSurfaceMapper 与 CrackRaycast4B.measureFrameLocked 两处自研反投影的 y 分量未翻转问题：`localDirection.y` 由 `(sensorY - cy) / fy` 改为 `-(sensorY - cy) / fy`（传感器坐标 y 向下、相机坐标 y 向上，标准针孔反投影需翻转）；
+- 修复前：射线垂直方向镜像，画面中线上方点打到下方、下方点打到上方；裂缝偏离画面水平中线越远错位越大，导致"红线变成长直线、交点聚在相机旁/背后"、裂缝长度异常偏大（实测 2.119m vs 真实 ~0.77m）；
+- 修复后：CapturedRoom 表面与 ARSession 相机帧正确对应（同一空间），命中率不受影响（原 100% 系交点仍在表面容差内）。
+
 ### 2026-08-14 · 4D.1 折线优化（SwiftSimplify + 宽度全量统计）
 
 - 折线简化改用 SwiftSimplify（MIT，Douglas-Peucker），新管线不再调用自研 DP；落实专家合规原则（Zhang-Suen / EDT / DP 不手写，主 App 旧骨架管线原样保留）；
