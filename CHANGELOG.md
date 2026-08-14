@@ -8,6 +8,15 @@
 
 ### 2026-08-14 · 第一步：干净 4B 基线
 
+### 2026-08-14 · 第二步：centerline 性能优化（目标 <100ms）+ 时间日志
+
+- 4B 拍照图压到 1024 长边（中心线 grid 从 snapshot 原图缩小数倍）；
+- 采样优化：每条裂缝采样点上限 64→32（raycast 与宽度采样减半）；
+- 宽度统计延迟异步（compute includeWidthStats 开关 + 后台 computeWidthStats），长度(world 3D)/宽度均在 Task.detached 后台算，拍照→出数不阻塞；
+- 宽度统计边界检测 stride=2 降采样（计算量降约 4 倍）；
+- 分步时间（requestSetup/coreML/maskDecode/centerline/spatial/total）写入持久化累计日志（屏幕不显示，可"复制累计日志"）；
+- 取景窗口布局保持不变（锁死）。
+
 - 从 0.74D 主分支（00dd9e0）切 codex/4b-clean-perf，4B 页面恢复原始逻辑（无 0.742B 正方形取景/letterbox/帧锁定/宽度延迟等改造）；
 - CI 模型导出固定 --imgsz 640（crack_seg_n 为 640 训练，1024 输入确认导致识别退化/形状错）；
 - 目标：先验证干净 4B 识别/红线正常，之后每一步只加一项性能优化，验证通过再下一步。

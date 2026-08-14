@@ -15,6 +15,8 @@ struct CrackRaycast4BView: View {
     @State private var history: [Raycast4BReport] = []
     @State private var arViewReference: ARView?
     @State private var worldAnchors: [AnchorEntity] = []
+    @State private var reportLog: [String] = []
+    @State private var measurementSummary = ""
 
     var body: some View {
         VStack(spacing: 8) {
@@ -36,6 +38,13 @@ struct CrackRaycast4BView: View {
             Text(statusText)
                 .font(.caption)
                 .foregroundStyle(.orange)
+            if !measurementSummary.isEmpty {
+                Text(measurementSummary)
+                    .font(.caption2)
+                    .monospaced()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+            }
             Text("红色球/线 = raycast 命中的世界点，应贴合墙面裂缝")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -91,12 +100,21 @@ struct CrackRaycast4BView: View {
             .padding(.horizontal)
         }
         .navigationTitle("4B Raycast")
+        .onAppear {
+            viewModel.deferWidthStats = true
+            reportLog = UserDefaults.standard.stringArray(
+                forKey: Self.reportLogKey
+            ) ?? []
+        }
     }
+
+    private static let reportLogKey = "roboscan4BReportLogKey"
 
     private func measure() {
         guard let arView = arViewReference else { return }
         isRunning = true
         statusText = "拍照中…"
+        let totalStart = Date()
 
         arView.snapshot(saveToHDR: false) { image in
             Task { @MainActor in
@@ -108,7 +126,9 @@ struct CrackRaycast4BView: View {
                 statusText = "4A 识别裂缝中…"
                 viewModel.centerlineResult = nil
                 viewModel.centerlineStats = ""
-                viewModel.uiImage = image
+                // 性能：拍照图统一压到 1024 长边（缩小中心线 grid，采样点坐标仍在 1024 空间）。
+                let analysisImage = Self.resizedImage(image, maxSide: 1024)
+                viewModel.uiImage = analysisImage
                 await viewModel.runInference()
 
                 guard let samples = viewModel.centerlineResult?.samplePointsPerPolyline,
@@ -119,13 +139,14 @@ struct CrackRaycast4BView: View {
                 }
 
                 let scale: CGFloat
-                if image.size.width > 0 {
-                    scale = arView.bounds.width / image.size.width
+                if analysisImage.size.width > 0 {
+                    scale = arView.bounds.width / analysisImage.size.width
                 } else {
                     scale = 1
                 }
 
                 statusText = "raycast + 反投影中…"
+                let spatialStart = Date()
                 let measured = CrackRaycast4B.measure(
                     arView: arView,
                     scenario: scenario,
@@ -141,9 +162,123 @@ struct CrackRaycast4BView: View {
                     measured.avgError,
                     measured.p95Error
                 )
+                // 长度/宽度后台异步计算（不阻塞拍照→出数）；分步时间写入累计日志（屏幕不显示）。
+                let spatialDuration =
+                    Date().timeIntervalSince(spatialStart) * 1000
+                let totalDuration =
+                    Date().timeIntervalSince(totalStart) * 1000
+                let timing = viewModel.stageTimings
+                let performance = [
+                    String(
+                        format: "requestSetup=%.0fms",
+                        timing["requestSetup"] ?? 0
+                    ),
+                    String(
+                        format: "coreML=%.0fms",
+                        timing["coreML"] ?? 0
+                    ),
+                    String(
+                        format: "maskDecode=%.0fms",
+                        timing["maskDecode"] ?? 0
+                    ),
+                    String(
+                        format: "centerline=%.0fms",
+                        timing["centerline"] ?? 0
+                    ),
+                    String(format: "spatial=%.0fms", spatialDuration),
+                    String(format: "total=%.0fms", totalDuration),
+                    viewModel.inferenceHardware
+                ].joined(separator: " · ")
+                appendReportLog(performance)
+                appendReportLog(measured.text())
+
+                let widthMasks = viewModel.maskPredictions ?? []
+                let widthSamples = samples
+                let widthImageSize = analysisImage.size
+                let measuredCopy = measured
+                Task.detached(priority: .userInitiated) {
+                    // 长度：world 3D 折线（后台）
+                    var length3D = 0.0
+                    for polyline in measuredCopy.polylines {
+                        var previousWorld: SIMD3<Float>?
+                        for point in polyline.points {
+                            guard let world = point.world else {
+                                previousWorld = nil
+                                continue
+                            }
+                            if let previousWorld {
+                                length3D += Double(
+                                    simd_distance(previousWorld, world)
+                                )
+                            }
+                            previousWorld = world
+                        }
+                    }
+                    // 宽度：mask 轮廓法向（后台）
+                    let widthStats = CrackCenterlineOverlay
+                        .computeWidthStats(
+                            masks: widthMasks,
+                            imageSize: widthImageSize,
+                            samplesPerPolyline: widthSamples
+                        )
+                    let totalPx = widthSamples.reduce(0) {
+                        $0 + $1.count
+                    }
+                    let mmPerPx = totalPx > 0 && length3D > 0
+                        ? length3D * 1000 / Double(totalPx)
+                        : nil
+                    let summary: String
+                    if let mmPerPx {
+                        summary = String(
+                            format: "长度(3D) %.3f m · 宽度 平均 %.1f · 最大 %.1f mm",
+                            length3D,
+                            widthStats.averagePx * mmPerPx,
+                            widthStats.maxPx * mmPerPx
+                        )
+                    } else {
+                        summary = String(
+                            format: "长度(3D) %.3f m · 宽度 平均 %.1f · 最大 %.1f px",
+                            length3D,
+                            widthStats.averagePx,
+                            widthStats.maxPx
+                        )
+                    }
+                    await MainActor.run {
+                        measurementSummary = summary
+                        appendReportLog(summary)
+                    }
+                }
+
+                if !reportLog.isEmpty {
+                    Button("复制累计日志") {
+                        UIPasteboard.general.string = reportLog.joined(
+                            separator: "\n\n=====\n\n"
+                        )
+                    }
+                }
                 isRunning = false
             }
         }
+    }
+
+    private func appendReportLog(_ text: String) {
+        let clipped = String(text.prefix(1200))
+        reportLog.append(clipped)
+        if reportLog.count > 300 {
+            reportLog.removeFirst(reportLog.count - 300)
+        }
+        UserDefaults.standard.set(
+            reportLog,
+            forKey: Self.reportLogKey
+        )
+    }
+
+    private func clearReportLog() {
+        reportLog.removeAll()
+        UserDefaults.standard.set(
+            reportLog,
+            forKey: Self.reportLogKey
+        )
     }
 
     // MARK: - AR 世界点可视化（红球 + 相邻点连线）
@@ -215,6 +350,26 @@ struct CrackRaycast4BView: View {
             to: direction
         )
         return entity
+    }
+
+    /// 等比压缩长边到 maxSide（性能：缩小中心线 grid，坐标仍在 1024 空间）。
+    private static func resizedImage(
+        _ image: UIImage,
+        maxSide: CGFloat
+    ) -> UIImage {
+        let largest = max(image.size.width, image.size.height)
+        guard largest > maxSide, largest > 0 else { return image }
+        let scale = maxSide / largest
+        let size = CGSize(
+            width: max(1, image.size.width * scale),
+            height: max(1, image.size.height * scale)
+        )
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: size, format: format)
+            .image { _ in
+                image.draw(in: CGRect(origin: .zero, size: size))
+            }
     }
 }
 

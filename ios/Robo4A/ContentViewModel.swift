@@ -46,6 +46,8 @@ extension Status {
 class ContentViewModel: ObservableObject {
     
     var cancellables = Set<AnyCancellable>()
+    /// 4B 延迟宽度统计（先出折线/长度，宽度后台异步补）；其他页面默认同步。
+    var deferWidthStats = false
     
     @Published var imageSelection: PhotosPickerItem?
     @Published var uiImage: UIImage?
@@ -230,7 +232,8 @@ extension ContentViewModel {
                     let skeletonStart = CFAbsoluteTimeGetCurrent()
                     let result = CrackCenterlineOverlay.compute(
                         masks: maskPredictions,
-                        imageSize: uiImage.size
+                        imageSize: uiImage.size,
+                        includeWidthStats: !deferWidthStats
                     )
                     let skeletonDuration =
                         (CFAbsoluteTimeGetCurrent() - skeletonStart) * 1000
