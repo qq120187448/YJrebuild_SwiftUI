@@ -11,6 +11,8 @@ struct CaptureFrameSpatialContext {
     let cameraIntrinsics: simd_float3x3
     let imageResolution: CGSize
     let displayTransform: CGAffineTransform
+    /// 拍照瞬间 ARView 视口尺寸（displayTransform 的输出屏幕坐标范围）。
+    let viewportSize: CGSize
 }
 
 /// 只负责：裂缝采样像素 → 拍照帧相机射线 → RoomPlan Surface → world。
@@ -76,6 +78,7 @@ enum CaptureFrameSurfaceMapper {
             let sensorPoint = Self.sensorPoint(
                 viewPoint: viewPoint,
                 displayTransform: displayTransform,
+                viewportSize: context.viewportSize,
                 imageWidth: imageWidth,
                 imageHeight: imageHeight
             )
@@ -255,10 +258,17 @@ enum CaptureFrameSurfaceMapper {
     static func sensorPoint(
         viewPoint: CGPoint,
         displayTransform: CGAffineTransform,
+        viewportSize: CGSize,
         imageWidth: CGFloat,
         imageHeight: CGFloat
     ) -> SIMD3<Float> {
-        let normalized = viewPoint.applying(displayTransform.inverted())
+        // displayTransform 的输入输出均为归一化坐标 [0,1]：
+        // 屏幕点 → 除以 viewportSize 归一化 → 逆变换 → 归一化图像坐标 → sensor 像素。
+        let normalizedView = CGPoint(
+            x: viewportSize.width > 0 ? viewPoint.x / viewportSize.width : 0,
+            y: viewportSize.height > 0 ? viewPoint.y / viewportSize.height : 0
+        )
+        let normalized = normalizedView.applying(displayTransform.inverted())
         return SIMD3<Float>(
             Float(normalized.x * imageWidth),
             Float(normalized.y * imageHeight),

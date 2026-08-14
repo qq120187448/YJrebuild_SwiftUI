@@ -154,6 +154,7 @@ enum AStarDiagnostics {
                     let sensor = CaptureFrameSurfaceMapper.sensorPoint(
                         viewPoint: viewPoint,
                         displayTransform: context.displayTransform,
+                        viewportSize: context.viewportSize,
                         imageWidth: context.imageResolution.width,
                         imageHeight: context.imageResolution.height
                     )
@@ -237,7 +238,11 @@ enum AStarDiagnostics {
                     )
                 }
                 if let worldIsect,
-                   let projected = arView.project(worldIsect) {
+                   let context,
+                   let projected = projectToCaptureFrame(
+                       worldIsect,
+                       context: context
+                   ) {
                     isectErrorsPx.append(
                         hypot(
                             Double(projected.x - viewPoint.x),
@@ -262,6 +267,33 @@ enum AStarDiagnostics {
             uvLengthIsectM: uvLength(uvIsect),
             trackingState: trackingState,
             anchorConsistencyMM: anchorConsistencyMM
+        )
+    }
+
+    /// 拍照帧相机投影：world → 相机局部 → sensor 像素 → displayTransform → 屏幕点。
+    /// 用于 Isect 路重投影（Isect 世界点基于拍照帧，不能用当前帧 arView.project）。
+    private static func projectToCaptureFrame(
+        _ world: SIMD3<Float>,
+        context: CaptureFrameSpatialContext
+    ) -> CGPoint? {
+        let local4 = context.cameraTransform.inverse
+            * SIMD4<Float>(world.x, world.y, world.z, 1)
+        let depth = -local4.z
+        guard depth > 0.001 else { return nil }
+        let fx = context.cameraIntrinsics.columns.0.x
+        let fy = context.cameraIntrinsics.columns.1.y
+        let cx = context.cameraIntrinsics.columns.2.x
+        let cy = context.cameraIntrinsics.columns.2.y
+        let sensorX = fx * local4.x / depth + cx
+        let sensorY = fy * local4.y / depth + cy
+        let normalizedImage = CGPoint(
+            x: sensorX / context.imageResolution.width,
+            y: sensorY / context.imageResolution.height
+        )
+        let normalizedView = normalizedImage.applying(context.displayTransform)
+        return CGPoint(
+            x: normalizedView.x * context.viewportSize.width,
+            y: normalizedView.y * context.viewportSize.height
         )
     }
 

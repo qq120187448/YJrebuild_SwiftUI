@@ -4,6 +4,12 @@
 
 ## 未发布 · 当前分支 codex/defect-mesh-uv-polyline
 
+### 2026-08-14 · A' 修复：Isect 路传感器坐标归一化 + 拍照帧投影
+
+- 真机 A' 数据发现 Isect 路异常（reprojection 34079px、UV length 3.234m）：根因一为 sensorPoint 缺"除以 viewportSize 归一化"步骤（displayTransform 输入输出均为归一化 [0,1]，当前直接拿屏幕点逆变换导致射线方向错误）；根因二为 Isect 世界点基于拍照帧相机，却用当前帧 arView.project 投影（用户拍照后移动 0.8~1.8m 必然巨大偏差）；
+- 修复：CaptureFrameSpatialContext 增加 viewportSize；sensorPoint 先归一化 viewPoint 再逆变换；A' Isect 路改用拍照帧手动投影（cameraTransform+intrinsics→sensor→displayTransform→屏幕点）；
+- Raw/Snap 路不受影响：Raw 分配 100%、reprojection ≤1px、长度 0.769/0.766m；Snap UV length 与 Raw 完全一致；Snap 投影误差随吸附距离增大（6~8.5mm→P95 1.3px；16.5~19.4mm→P95 3.4px），提示吸附距离需作为验收约束。
+
 ### 2026-08-14 · A' 三轨对照实验版（专家批准，不直接上生产）
 
 - 专家否决把"15cm 法向吸附"直接作为正式算法；`SurfaceUV4C.map()` 默认退回正式 20mm 容差（snapMaxM=nil），吸附仅实验路径显式传 debugSafetyCap=150mm；

@@ -562,7 +562,8 @@ struct CrackSurfaceUV4CView: View {
                     displayTransform: frame.displayTransform(
                         for: orientation,
                         viewportSize: arView.bounds.size
-                    )
+                    ),
+                    viewportSize: arView.bounds.size
                 )
             }
             arView.snapshot(saveToHDR: false) { image in
