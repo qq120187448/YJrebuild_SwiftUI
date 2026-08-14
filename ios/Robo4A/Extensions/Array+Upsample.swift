@@ -28,6 +28,135 @@ import Metal
 import MetalPerformanceShaders
 
 extension Array where Element == Float {
+    /// 0.742B：批量双线性上采样——多个实例一次 commandBuffer 提交、一次 waitUntilCompleted，
+    /// 替代逐实例同步等待。返回每个实例的阈值化掩码。
+    static func upsampleBatch(
+        items: [(
+            input: [Float],
+            initialSize: (width: Int, height: Int),
+            targetSize: (width: Int, height: Int)
+        )],
+        maskThreshold: Float
+    ) -> [[UInt8]] {
+        let thresholdValue = UInt8(clamping: Int(maskThreshold * 255))
+        guard !items.isEmpty else { return [] }
+        guard let metal = MetalHelper.shared,
+              let commandBuffer = metal.commandQueue.makeCommandBuffer() else {
+            return items.map { item in
+                item.input.map {
+                    UInt8(clamping: Int($0 * 255)) > thresholdValue ? 255 : 0
+                }
+            }
+        }
+
+        enum BatchOutput {
+            case texture(MTLTexture, width: Int, height: Int)
+            case direct([UInt8])
+        }
+        var outputs: [BatchOutput] = []
+
+        for item in items {
+            let initialWidth = item.initialSize.width
+            let initialHeight = item.initialSize.height
+            let newWidth = item.targetSize.width
+            let newHeight = item.targetSize.height
+            guard initialWidth != newWidth || initialHeight != newHeight else {
+                // 无缩放：直接阈值化
+                outputs.append(
+                    .direct(
+                        item.input.map {
+                            UInt8(clamping: Int($0 * 255)) > thresholdValue
+                                ? 255
+                                : 0
+                        }
+                    )
+                )
+                continue
+            }
+            let inputArray: [UInt8] = item.input.map {
+                UInt8(clamping: Int($0 * 255))
+            }
+            guard let inputTexture = Self.createTexture(
+                from: inputArray,
+                width: initialWidth,
+                height: initialHeight,
+                metal: metal
+            ), let outputTexture = Self.createTexture(
+                from: [UInt8](repeating: 0, count: newWidth * newHeight),
+                width: newWidth,
+                height: newHeight,
+                metal: metal
+            ) else {
+                continue
+            }
+            MPSImageBilinearScale(device: metal.device).encode(
+                commandBuffer: commandBuffer,
+                sourceTexture: inputTexture,
+                destinationTexture: outputTexture
+            )
+            outputs.append(.texture(outputTexture, newWidth, newHeight))
+        }
+
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+
+        return outputs.map { output in
+            switch output {
+            case .texture(let texture, _, _):
+                let result = Self.readTextureData(texture: texture)
+                return result.map {
+                    $0 > thresholdValue ? 255 : 0
+                }
+            case .direct(let array):
+                return array
+            }
+        }
+    }
+
+    private static func createTexture(
+        from array: [UInt8],
+        width: Int,
+        height: Int,
+        metal: MetalHelper
+    ) -> MTLTexture? {
+        let descriptor = MTLTextureDescriptor()
+        descriptor.pixelFormat = .r8Unorm
+        descriptor.width = width
+        descriptor.height = height
+        descriptor.usage = [.shaderRead, .shaderWrite]
+        guard let texture = metal.device.makeTexture(
+            descriptor: descriptor
+        ) else { return nil }
+        let region = MTLRegionMake2D(0, 0, width, height)
+        texture.replace(
+            region: region,
+            mipmapLevel: 0,
+            withBytes: array,
+            bytesPerRow: width
+        )
+        return texture
+    }
+
+    private static func readTextureData(
+        texture: MTLTexture
+    ) -> [UInt8] {
+        let byteCount = texture.width * texture.height
+        var output = [UInt8](repeating: 0, count: byteCount)
+        let region = MTLRegionMake2D(
+            0,
+            0,
+            texture.width,
+            texture.height
+        )
+        texture.getBytes(
+            &output,
+            bytesPerRow: texture.width,
+            from: region,
+            mipmapLevel: 0
+        )
+        return output
+    }
+
     func upsample(
         initialSize: (width: Int, height: Int),
         targetSize: (width: Int, height: Int)? = nil,

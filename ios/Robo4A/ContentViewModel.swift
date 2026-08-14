@@ -518,6 +518,17 @@ extension ContentViewModel {
     ) -> [MaskPrediction] {
         NSLog(#function)
         var maskPredictions: [MaskPrediction] = []
+        // 0.742B：ROI 批量上采样——先收集所有实例，一次 Metal 批处理。
+        var batchItems: [(
+            input: [Float],
+            initialSize: (width: Int, height: Int),
+            targetSize: (width: Int, height: Int)
+        )] = []
+        var batchMeta: [(
+            classIndex: Int,
+            targetSize: (width: Int, height: Int),
+            origin: (x: Int, y: Int)
+        )] = []
         for prediction in boxPredictions {
             
             let maskCoefficients = prediction.maskCoefficients
@@ -551,8 +562,8 @@ extension ContentViewModel {
             vDSP_vsadd(expResult, 1, &one, &expResult, 1, vDSP_Length(count))
             vDSP_svdiv(&one, expResult, 1, &finalMask, 1, vDSP_Length(count))
 
-            NSLog("Crop mask to bounding box")
-            let croppedFinalMask = crop(
+            // ROI：只保留检测框区域（160 网格），返回压缩尺寸 + 原点。
+            let roi = cropROI(
                 mask: finalMask,
                 maskSize: maskSize,
                 box: .init(
@@ -561,43 +572,77 @@ extension ContentViewModel {
                   x2: prediction.xyxy.x2 / 4,
                   y2: prediction.xyxy.y2 / 4
                 ))
-          
-            let widthScale = Int(originalImgSize.width) / maskSize.width
-            let heightScale = Int(originalImgSize.height) / maskSize.height
-            let maxPossibleScale = max(widthScale, heightScale)
-            let clampedScale = max(min(maxPossibleScale, 6), 1)
 
-            let targetSize = (
-                width: maskSize.width * clampedScale,
-                height: maskSize.height * clampedScale
+            // 目标尺寸：检测框在原图中的尺寸（上限 1280 长边）
+            let xScale = originalImgSize.width / CGFloat(maskSize.width)
+            let yScale = originalImgSize.height / CGFloat(maskSize.height)
+            var targetW = Int(CGFloat(roi.roiSize.width) * xScale)
+            var targetH = Int(CGFloat(roi.roiSize.height) * yScale)
+            let maxSide = max(targetW, targetH)
+            if maxSide > 1280 {
+                let s = CGFloat(1280) / CGFloat(maxSide)
+                targetW = max(1, Int(CGFloat(targetW) * s))
+                targetH = max(1, Int(CGFloat(targetH) * s))
+            }
+
+            batchItems.append(
+                (
+                    roi.values,
+                    roi.roiSize,
+                    (width: targetW, height: targetH)
+                )
             )
-            NSLog("Upsample mask with size \(maskSize) to \(targetSize)")
-            let upsampledMask: [UInt8] = croppedFinalMask
-                .map { Float(($0 > maskThreshold ? 1 : 0)) }
-                .upsample(
-                    initialSize: maskSize,
-                    scale: clampedScale,
-                    maskThreshold: maskThreshold)
-            
-            NSLog("Crop mask to bounding box")
-            let croppedUpsampledMaskSize = crop(
-                mask: upsampledMask,
-                maskSize: targetSize,
-                box: .init(
-                    x1: (prediction.xyxy.x1 / 4) * Float(clampedScale),
-                    y1: (prediction.xyxy.y1 / 4) * Float(clampedScale),
-                    x2: (prediction.xyxy.x2 / 4) * Float(clampedScale),
-                    y2: (prediction.xyxy.y2 / 4) * Float(clampedScale)
-                ))
-            
+            batchMeta.append(
+                (
+                    prediction.classIndex,
+                    (width: targetW, height: targetH),
+                    roi.origin
+                )
+            )
+        }
+
+        let batchResults = [Float].upsampleBatch(
+            items: batchItems,
+            maskThreshold: maskThreshold
+        )
+        for (index, mask) in batchResults.enumerated() {
+            guard index < batchMeta.count else { continue }
             maskPredictions.append(
                 MaskPrediction(
-                    classIndex: prediction.classIndex,
-                    mask: croppedUpsampledMaskSize,
-                    maskSize: targetSize))
+                    classIndex: batchMeta[index].classIndex,
+                    mask: mask,
+                    maskSize: batchMeta[index].targetSize,
+                    bboxOrigin: batchMeta[index].origin
+                )
+            )
         }
-        
         return maskPredictions
+    }
+
+    /// ROI 裁剪：返回检测框区域的压缩数组（非整张补零），并给出 roi 尺寸与原点（160 网格）。
+    private func cropROI(
+        mask: [Float],
+        maskSize: (width: Int, height: Int),
+        box: XYXY
+    ) -> (values: [Float], roiSize: (width: Int, height: Int), origin: (x: Int, y: Int)) {
+        let columns = maskSize.width
+        let rows = maskSize.height
+        let x1 = max(0, Int(box.x1))
+        let y1 = max(0, Int(box.y1))
+        let x2 = min(columns - 1, Int(box.x2))
+        let y2 = min(rows - 1, Int(box.y2))
+        let roiW = max(1, x2 - x1 + 1)
+        let roiH = max(1, y2 - y1 + 1)
+        var cropped = [Float](repeating: 0, count: roiW * roiH)
+        for row in 0..<roiH {
+            let srcStart = (y1 + row) * columns + x1
+            let dstStart = row * roiW
+            cropped.replaceSubrange(
+                dstStart..<(dstStart + roiW),
+                with: mask[srcStart..<(srcStart + roiW)]
+            )
+        }
+        return (cropped, (roiW, roiH), (x1, y1))
     }
     
     private func crop(

@@ -15,6 +15,20 @@ struct MaskPrediction: Identifiable {
     
     let mask: [UInt8]
     let maskSize: (width: Int, height: Int)
+    /// 0.742B ROI：bbox 左上角在 160 网格坐标（nil = 全图掩码，兼容旧路径）。
+    let bboxOrigin: (x: Int, y: Int)?
+
+    init(
+        classIndex: Int,
+        mask: [UInt8],
+        maskSize: (width: Int, height: Int),
+        bboxOrigin: (x: Int, y: Int)? = nil
+    ) {
+        self.classIndex = classIndex
+        self.mask = mask
+        self.maskSize = maskSize
+        self.bboxOrigin = bboxOrigin
+    }
     
     func getMaskImage() -> UIImage? {
         guard !mask.isEmpty else { return nil }
