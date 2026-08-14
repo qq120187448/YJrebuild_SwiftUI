@@ -181,7 +181,7 @@ struct CrackRaycast4BView: View {
                     samplePointsPerPolyline: samples,
                     imageToViewScale: scale
                 )
-                // 投影用官方 raycast 世界点（4B 已验证贴合，重投影 ≤3px）。
+                // 回退：投影/长度均用官方 raycast 世界点（4B 已验证贴合）。
                 addWorldVisualization(arView: arView, report: measured)
                 report = measured
                 history.append(measured)
@@ -256,7 +256,7 @@ struct CrackRaycast4BView: View {
                     performance
                 )
                 appendReportLog(measurementSummary)
-                appendReportLog("4B 基线报告\n" + measured.text())
+                appendReportLog(measured.text())
                 statusText = String(
                     format: "命中率 %.1f%% · 平均重投影 %.2f px · P95 %.2f px",
                     measured.hitRate * 100,
@@ -346,8 +346,8 @@ struct CrackRaycast4BView: View {
 
     // MARK: - 0.742B 任务3：按下拍照时刻帧锁定投影
 
-    /// 拍照帧锁定：像素 → 拍照帧相机射线 → 拍照帧 ARPlaneAnchor 求交 → world 投影点。
-    /// 识别期间手机移动不影响投影位置（AR 红线锚定在按下瞬间）。
+    /// 拍照帧锁定：像素 → 拍照帧相机射线 → 当前帧 ARPlaneAnchor（世界固定几何）求交 → world 投影点。
+    /// 识别期间手机移动不影响投影位置（AR 红线锚定在按下瞬间的视线与墙面交点）。
     @MainActor
     private func frameLockedWorldPoints(
         captureFrame: ARFrame?,
@@ -356,9 +356,10 @@ struct CrackRaycast4BView: View {
         arView: ARView
     ) -> [SIMD3<Float>] {
         guard let captureFrame else { return [] }
-        let planes = captureFrame.anchors.compactMap {
+        // 平面用当前帧（识别完成后覆盖更完整）；平面是世界固定几何，与拍照帧位姿兼容。
+        let planes = arView.session.currentFrame?.anchors.compactMap {
             $0 as? ARPlaneAnchor
-        }
+        } ?? []
         guard !planes.isEmpty else { return [] }
         let orientation =
             arView.window?.windowScene?.interfaceOrientation ?? .portrait
