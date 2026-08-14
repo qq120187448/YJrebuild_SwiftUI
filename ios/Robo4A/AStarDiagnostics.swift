@@ -43,22 +43,22 @@ enum AStarDiagnostics {
                     total == 0 ? 0 : Double(assignmentIsect) / Double(total) * 100
                 )
             )
-            let snap = Self.percentileText(snapDistancesMM)
+            let snap = AStarDiagnostics.percentileText(snapDistancesMM)
             lines.append("snapDistance(debugSafetyCap=150mm): \(snap)")
             lines.append(
-                "reprojection(px): Raw \(Self.statsText(rawErrorsPx)) · Snap \(Self.statsText(snapErrorsPx)) · Isect \(Self.statsText(isectErrorsPx))"
+                "reprojection(px): Raw \(AStarDiagnostics.statsText(rawErrorsPx)) · Snap \(AStarDiagnostics.statsText(snapErrorsPx)) · Isect \(AStarDiagnostics.statsText(isectErrorsPx))"
             )
             lines.append(
                 String(
                     format: "UV length(m): Raw %@ · Snap %@ · Isect %@ · |Snap-Isect|/Isect %@",
-                    Self.mText(uvLengthRawM),
-                    Self.mText(uvLengthSnapM),
-                    Self.mText(uvLengthIsectM),
-                    Self.diffText(uvLengthSnapM, uvLengthIsectM)
+                    AStarDiagnostics.mText(uvLengthRawM),
+                    AStarDiagnostics.mText(uvLengthSnapM),
+                    AStarDiagnostics.mText(uvLengthIsectM),
+                    AStarDiagnostics.diffText(uvLengthSnapM, uvLengthIsectM)
                 )
             )
             lines.append(
-                "门控: tracking=\(trackingState) · anchor=\(Self.anchorStatusText(anchorConsistencyMM, tracking: trackingState))"
+                "门控: tracking=\(trackingState) · anchor=\(AStarDiagnostics.anchorStatusText(anchorConsistencyMM, tracking: trackingState))"
             )
             return lines.joined(separator: "\n")
         }
