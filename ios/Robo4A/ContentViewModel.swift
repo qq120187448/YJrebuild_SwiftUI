@@ -576,6 +576,11 @@ extension ContentViewModel {
             // 目标尺寸：检测框在原图中的尺寸（上限 1280 长边）
             let xScale = originalImgSize.width / CGFloat(maskSize.width)
             let yScale = originalImgSize.height / CGFloat(maskSize.height)
+            // bboxOrigin 转全图像素（不依赖 160/256 网格，避免 1024 模型 proto=256 时 /160 越界）
+            let originPx = (
+                x: Int(CGFloat(roi.origin.x) * xScale),
+                y: Int(CGFloat(roi.origin.y) * yScale)
+            )
             var targetW = Int(CGFloat(roi.roiSize.width) * xScale)
             var targetH = Int(CGFloat(roi.roiSize.height) * yScale)
             let maxSide = max(targetW, targetH)
@@ -596,7 +601,7 @@ extension ContentViewModel {
                 (
                     prediction.classIndex,
                     (width: targetW, height: targetH),
-                    roi.origin
+                    originPx
                 )
             )
         }

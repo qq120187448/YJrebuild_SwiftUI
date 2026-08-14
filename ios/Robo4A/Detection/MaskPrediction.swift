@@ -15,7 +15,7 @@ struct MaskPrediction: Identifiable {
     
     let mask: [UInt8]
     let maskSize: (width: Int, height: Int)
-    /// 0.742B ROI：bbox 左上角在 160 网格坐标（nil = 全图掩码，兼容旧路径）。
+    /// 0.742B ROI：bbox 左上角在全图像素坐标（nil = 全图掩码，兼容旧路径）。
     let bboxOrigin: (x: Int, y: Int)?
 
     init(

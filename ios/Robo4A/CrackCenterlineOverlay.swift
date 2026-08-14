@@ -90,21 +90,18 @@ enum CrackCenterlineOverlay {
             }
             let scaleX = CGFloat(width) / CGFloat(maskWidth)
             let scaleY = CGFloat(height) / CGFloat(maskHeight)
-            // 0.742B ROI：mask 为检测框局部，映射回全图坐标。
-            let originX = prediction.bboxOrigin.map {
-                CGFloat($0.x) * CGFloat(width) / 160
-            } ?? 0
-            let originY = prediction.bboxOrigin.map {
-                CGFloat($0.y) * CGFloat(height) / 160
-            } ?? 0
+            // 0.742B ROI：bboxOrigin 为全图像素，mask 局部映射回全图坐标。
+            let originX = CGFloat(prediction.bboxOrigin?.x ?? 0)
+            let originY = CGFloat(prediction.bboxOrigin?.y ?? 0)
             for y in 0..<maskHeight {
                 for x in 0..<maskWidth where prediction.mask[y * maskWidth + x] > 0 {
-                    let x0 = Int(originX + CGFloat(x) * scaleX)
-                    let x1 = Int(originX + CGFloat(x + 1) * scaleX)
-                    let y0 = Int(originY + CGFloat(y) * scaleY)
-                    let y1 = Int(originY + CGFloat(y + 1) * scaleY)
-                    for py in y0..<max(y0 + 1, y1) {
-                        for px in x0..<max(x0 + 1, x1) {
+                    // 越界保护（浮点截断可能使右/下边缘 +1 越界）
+                    let x0 = min(width - 1, max(0, Int(originX + CGFloat(x) * scaleX)))
+                    let x1 = min(width, max(x0 + 1, Int(originX + CGFloat(x + 1) * scaleX)))
+                    let y0 = min(height - 1, max(0, Int(originY + CGFloat(y) * scaleY)))
+                    let y1 = min(height, max(y0 + 1, Int(originY + CGFloat(y + 1) * scaleY)))
+                    for py in y0..<y1 {
+                        for px in x0..<x1 {
                             grid[py * width + px] = true
                         }
                     }
@@ -362,13 +359,9 @@ enum CrackCenterlineOverlay {
             }
             let scaleX = CGFloat(imageWidth) / CGFloat(maskWidth)
             let scaleY = CGFloat(imageHeight) / CGFloat(maskHeight)
-            // 0.742B ROI：mask 为检测框局部，边界点映射回全图坐标。
-            let originX = prediction.bboxOrigin.map {
-                CGFloat($0.x) * CGFloat(imageWidth) / 160
-            } ?? 0
-            let originY = prediction.bboxOrigin.map {
-                CGFloat($0.y) * CGFloat(imageHeight) / 160
-            } ?? 0
+            // 0.742B ROI：bboxOrigin 为全图像素，边界点映射回全图坐标。
+            let originX = CGFloat(prediction.bboxOrigin?.x ?? 0)
+            let originY = CGFloat(prediction.bboxOrigin?.y ?? 0)
             for y in 0..<maskHeight {
                 for x in 0..<maskWidth
                     where prediction.mask[y * maskWidth + x] > 0 {
@@ -385,12 +378,12 @@ enum CrackCenterlineOverlay {
                         }
                     }
                     if isBoundary {
-                        let px = Int(
+                        let px = min(imageWidth - 1, max(0, Int(
                             originX + (CGFloat(x) + 0.5) * scaleX
-                        )
-                        let py = Int(
+                        )))
+                        let py = min(imageHeight - 1, max(0, Int(
                             originY + (CGFloat(y) + 0.5) * scaleY
-                        )
+                        )))
                         contour.insert(CrackPoint(x: px, y: py))
                     }
                 }
