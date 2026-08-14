@@ -37,11 +37,16 @@ enum SpatialHealthState {
 /// 统一管理 WorldMap 保存/恢复、relocalization、tracking 状态（专家：SpatialSessionCoordinator 雏形）。
 final class SpatialRecoveryManager {
 
+    /// 状态变化日志回调（4C 接入累计日志）。
+    var onLog: ((String) -> Void)?
+
     private(set) var worldMap: ARWorldMap?
     private(set) var state: SpatialHealthState = .notReady
     private(set) var lastHealthText = ""
     private var recoveryStart: Date?
     private var recoveryTimeout: TimeInterval = 30
+    /// 去重：仅在状态或文本变化时记录一次。
+    private var lastReportedText = ""
 
     /// 校验锚点（recovery 后用于 Surface alignment 检查）。
     private struct VerifyAnchor {
@@ -89,17 +94,25 @@ final class SpatialRecoveryManager {
                         }
                     }
                     worldMap = map
-                    state = .measurementReady
-                    lastHealthText = "WorldMap 已保存（\(map.anchors.count) 锚点，mapped）"
+                    setState(
+                        .measurementReady,
+                        text: "WorldMap 已保存（\(map.anchors.count) 锚点，mapped）"
+                    )
                     return true
                 } catch {
-                    lastHealthText = "WorldMap 保存失败：\(error.localizedDescription)"
+                    setState(
+                        .notReady,
+                        text: "WorldMap 保存失败：\(error.localizedDescription)"
+                    )
                     return false
                 }
             }
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
-        lastHealthText = "worldMappingStatus 未达 mapped（超时），WorldMap 未保存"
+        setState(
+            .notReady,
+            text: "worldMappingStatus 未达 mapped（超时），WorldMap 未保存"
+        )
         return false
     }
 
@@ -112,35 +125,45 @@ final class SpatialRecoveryManager {
         tracking: String
     ) -> Bool {
         guard tracking == "normal" else {
-            state = .relocalizationRequired
-            lastHealthText = "tracking=\(tracking)，空间失配"
+            setState(
+                .relocalizationRequired,
+                text: "tracking=\(tracking)，空间失配"
+            )
             return true
         }
         guard let snapDistanceMM else {
-            state = .relocalizationRequired
-            lastHealthText = "无 snapDistance（未分配表面），空间失配"
+            setState(
+                .relocalizationRequired,
+                text: "无 snapDistance（未分配表面），空间失配"
+            )
             return true
         }
         if snapDistanceMM <= 20 {
-            state = .measurementReady
-            lastHealthText = String(
-                format: "空间健康 GOOD（snap %.1fmm ≤20）",
-                snapDistanceMM
+            setState(
+                .measurementReady,
+                text: String(
+                    format: "空间健康 GOOD（snap %.1fmm ≤20）",
+                    snapDistanceMM
+                )
             )
             return false
         }
         if snapDistanceMM <= 50 {
-            state = .spaceWarning
-            lastHealthText = String(
-                format: "空间 WARNING（snap %.1fmm，20~50）",
-                snapDistanceMM
+            setState(
+                .spaceWarning,
+                text: String(
+                    format: "空间 WARNING（snap %.1fmm，20~50）",
+                    snapDistanceMM
+                )
             )
             return false
         }
-        state = .relocalizationRequired
-        lastHealthText = String(
-            format: "空间失配 SPACE_LOST（snap %.1fmm >50），触发 recovery",
-            snapDistanceMM
+        setState(
+            .relocalizationRequired,
+            text: String(
+                format: "空间失配 SPACE_LOST（snap %.1fmm >50），触发 recovery",
+                snapDistanceMM
+            )
         )
         return true
     }
@@ -153,7 +176,10 @@ final class SpatialRecoveryManager {
         arView: ARView
     ) -> Bool {
         guard let worldMap else {
-            lastHealthText = "无基准 WorldMap，无法 recovery"
+            setState(
+                .relocalizationRequired,
+                text: "无基准 WorldMap，无法 recovery"
+            )
             return false
         }
         let configuration = ARWorldTrackingConfiguration()
@@ -169,9 +195,8 @@ final class SpatialRecoveryManager {
             configuration,
             options: [.resetTracking, .removeExistingAnchors]
         )
-        state = .relocalizing
+        setState(.relocalizing, text: "ARWorldMap recovery 已触发（relocalizing…）")
         recoveryStart = Date()
-        lastHealthText = "ARWorldMap recovery 已触发（relocalizing…）"
         return true
     }
 
@@ -183,17 +208,22 @@ final class SpatialRecoveryManager {
     ) {
         guard state == .relocalizing else { return }
         guard let recoveryStart else {
-            state = .relocalizationRequired
+            setState(.relocalizationRequired, text: "recovery 状态异常，重新触发")
             return
         }
         guard Date().timeIntervalSince(recoveryStart) < recoveryTimeout else {
-            state = .needUserRelocalization
-            lastHealthText = "recovery 超时，请回到已扫描区域"
+            setState(
+                .needUserRelocalization,
+                text: "recovery 超时（30s），请回到刚才扫描过的区域"
+            )
             return
         }
         guard let frame = arView.session.currentFrame,
               frame.camera.trackingState == .normal else {
-            lastHealthText = "relocalizing…（等待 normal）"
+            setState(
+                .relocalizing,
+                text: "relocalizing…（等待 tracking normal）"
+            )
             return
         }
         // normal 后校验 Surface alignment
@@ -202,19 +232,23 @@ final class SpatialRecoveryManager {
             surfaces: surfaces
         )
         if let snapMM, snapMM <= 20 {
-            state = .measurementReady
-            lastHealthText = String(
-                format: "recovery 成功：normal + Surface alignment %.1fmm ≤20",
-                snapMM
+            setState(
+                .measurementReady,
+                text: String(
+                    format: "recovery 成功：normal + Surface alignment %.1fmm ≤20",
+                    snapMM
+                )
             )
         } else {
-            state = .needUserRelocalization
-            lastHealthText = snapMM.map {
-                String(
-                    format: "recovery 后 alignment 仍差（%.1fmm），请回到已扫描区域",
-                    $0
-                )
-            } ?? "recovery 后无表面观测，请回到已扫描区域"
+            setState(
+                .needUserRelocalization,
+                text: snapMM.map {
+                    String(
+                        format: "recovery 后 alignment 仍差（%.1fmm），请回到已扫描区域",
+                        $0
+                    )
+                } ?? "recovery 后无表面观测，请回到已扫描区域"
+            )
         }
     }
 
@@ -296,6 +330,7 @@ final class SpatialRecoveryManager {
         worldMap = nil
         state = .notReady
         lastHealthText = ""
+        lastReportedText = ""
         recoveryStart = nil
         removeVerifyAnchors(session: session)
     }
@@ -303,5 +338,20 @@ final class SpatialRecoveryManager {
     /// 是否允许测量（normal + alignment good）。
     var isMeasurementAllowed: Bool {
         state == .measurementReady
+    }
+
+    // MARK: - 状态设置（变化时写日志，去重）
+
+    private func setState(
+        _ newState: SpatialHealthState,
+        text: String
+    ) {
+        let changed = state != newState || lastHealthText != text
+        state = newState
+        lastHealthText = text
+        if changed, text != lastReportedText {
+            lastReportedText = text
+            onLog?(text)
+        }
     }
 }

@@ -420,6 +420,10 @@ struct CrackSurfaceUV4CView: View {
     // MARK: - RoomPlan 扫描
 
     private func setupCoordinator() {
+        // 4C-L：SpatialRecoveryManager 状态变化写入累计日志。
+        recoveryManager.onLog = { [self] text in
+            appendReportLog("4C-L：" + text)
+        }
         coordinator.onDidEnd = { data, error in
             if let error {
                 statusText = "扫描出错：\(error.localizedDescription)"
@@ -530,14 +534,9 @@ struct CrackSurfaceUV4CView: View {
                 : "无可用表面，未放置锚点"
             // 4C-L：保存基准 WorldMap（等待 worldMappingStatus == .mapped）。
             Task { @MainActor in
-                let saved = await recoveryManager.saveWorldMap(
+                _ = await recoveryManager.saveWorldMap(
                     session: arView.session,
                     surfaces: surfaces
-                )
-                appendReportLog(
-                    saved
-                        ? "4C-L：" + recoveryManager.lastHealthText
-                        : "4C-L：" + recoveryManager.lastHealthText
                 )
             }
         }
@@ -743,13 +742,8 @@ struct CrackSurfaceUV4CView: View {
                         snapDistanceMM: snapP95,
                         tracking: trackingText
                     )
-                    appendReportLog("4C-L：" + recoveryManager.lastHealthText)
                     if needRecovery {
-                        if recoveryManager.startRecovery(arView: arView) {
-                            appendReportLog(
-                                "4C-L：" + recoveryManager.lastHealthText
-                            )
-                        }
+                        _ = recoveryManager.startRecovery(arView: arView)
                     }
                     statusText = String(
                         format: "表面分配率 %.1f%% · UV 单位米 · 已解除静止锁定",
