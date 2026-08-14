@@ -4,6 +4,14 @@
 
 ## 未发布 · 当前分支 codex/defect-mesh-uv-polyline
 
+### 2026-08-14 · 0.74D：RoomPlan 降级，ARKit 出数为工程量主值（主流程）
+
+- 版本 0.74D（project.yml）；
+- RoomPlan 不再作为工程量计算前提：4C 报告新增"裂缝总长（ARKit）"（world 3D 折线长度，不依赖 RoomPlan 分配），即使分配率 0% 也出数；
+- RoomPlan 降为语义附加：报告同时输出"RoomPlan 语义：分配 x/y · UV z m"（命中则记录表面归属，供后续工程统计）；
+- 完整报告增加"0.74D 工程量（ARKit）"行；recovery 降级模式保留（Isect 通道 + measurementMode 标注）；
+- 后续：纯 ARKit 优化（ROI/Metal）在 0.74D 基础上进行。
+
 ### 2026-08-14 · 4C-L 专家批复执行：状态拆分 + 全局校验 + 降级模式 + 跨面长度
 
 - 状态拆分：RECOVERY 成功不再直接=测量就绪——`MEASUREMENT_ALIGNED`（tracking normal + 全局对齐达标）vs `RELOCALIZED`（normal 但未对齐，降级模式）；

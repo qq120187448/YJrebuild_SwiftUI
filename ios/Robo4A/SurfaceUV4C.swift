@@ -85,6 +85,8 @@ enum SurfaceUV4C {
         let thresholdRates: [(thresholdMm: Int, ratio: Double)]
         let raycastTargetSummary: [String: Int]
         let targetComparisonRates: [(thresholdMm: Int, estimatedRatio: Double, existingRatio: Double)]
+        /// 0.74D：ARKit 3D 折线长度（工程量主值，不依赖 RoomPlan 分配）。
+        let arkitLengthM: Double?
         let uvLengthM: Double?
         let uvLengthSegments: [UVLengthSegment]
         let crossSurfaceTransitionCount: Int
@@ -111,6 +113,18 @@ enum SurfaceUV4C {
             lines.append(SurfaceUV4C.raycastTargetSummaryText(raycastTargetSummary))
             lines.append(SurfaceUV4C.thresholdRatesText(thresholdRates))
             lines.append(SurfaceUV4C.targetComparisonRatesText(targetComparisonRates))
+            if let arkitLengthM, arkitLengthM > 0 {
+                lines.append(
+                    String(
+                        format: "0.74D 工程量（ARKit）：%.3f m",
+                        arkitLengthM
+                    )
+                )
+            } else {
+                lines.append(
+                    "0.74D 工程量（ARKit）：无法计算（world 命中 \(totalWorldHits)）"
+                )
+            }
             lines.append(
                 SurfaceUV4C.uvLengthText(
                     uvLengthM,
@@ -243,20 +257,35 @@ enum SurfaceUV4C {
             return String(full[..<cut]) + "\n…（已截断至 \(limit) 字符，可调大 limit 后重测）"
         }
 
-        /// 当前 4D.1 阶段精简日志：只保留裂缝总长、平均宽度、最大宽度。
+        /// 0.74D 精简日志：ARKit 长度为工程量主值；RoomPlan 分配/UV 为语义附加。
         func compactText() -> String {
             var lines = [
                 "4C Surface UV",
                 "场景：\(scenario)"
             ]
-            if let uvLengthM, uvLengthM > 0 {
-                lines.append(String(format: "裂缝总长：%.3f m", uvLengthM))
-            } else {
-                let assigned = polylines.reduce(0) { $0 + $1.assignedCount }
+            if let arkitLengthM, arkitLengthM > 0 {
                 lines.append(
-                    "裂缝总长：无法计算（world 命中 \(totalWorldHits) · 分配 \(assigned)）"
+                    String(
+                        format: "裂缝总长（ARKit）：%.3f m",
+                        arkitLengthM
+                    )
+                )
+            } else {
+                lines.append(
+                    "裂缝总长（ARKit）：无法计算（world 命中 \(totalWorldHits)）"
                 )
             }
+            let assigned = polylines.reduce(0) { $0 + $1.assignedCount }
+            lines.append(
+                String(
+                    format: "RoomPlan 语义：分配 %d/%d%@",
+                    assigned,
+                    totalWorldHits,
+                    uvLengthM.map {
+                        String(format: " · UV %.3f m", $0)
+                    } ?? ""
+                )
+            )
             if let averageWidthM, averageWidthM > 0,
                let maxWidthM, maxWidthM > 0 {
                 lines.append(
@@ -586,6 +615,24 @@ enum SurfaceUV4C {
         let uvLengthSegments = lengthResult.segments
         let crossSurfaceTransitionCount = lengthResult.transitions
         let uvLengthM = lengthResult.total
+        // 0.74D：ARKit 3D 折线长度（工程量主值，不依赖 RoomPlan 分配）
+        var arkitLength = 0.0
+        for polyline in raycast.polylines {
+            var previousWorld: SIMD3<Float>?
+            for point in polyline.points {
+                guard let world = point.world else {
+                    previousWorld = nil
+                    continue
+                }
+                if let previousWorld {
+                    arkitLength += Double(
+                        simd_distance(previousWorld, world)
+                    )
+                }
+                previousWorld = world
+            }
+        }
+        let arkitLengthM = arkitLength > 0 ? arkitLength : nil
         let averageWidthM: Double?
         let maxWidthM: Double?
         if let uvLengthM,
@@ -665,6 +712,7 @@ enum SurfaceUV4C {
             thresholdRates: thresholdRates,
             raycastTargetSummary: raycastTargetSummary,
             targetComparisonRates: targetComparisonRates,
+            arkitLengthM: arkitLengthM,
             uvLengthM: uvLengthM,
             uvLengthSegments: uvLengthSegments,
             crossSurfaceTransitionCount: crossSurfaceTransitionCount,
