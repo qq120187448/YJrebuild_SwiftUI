@@ -15,6 +15,9 @@ struct CrackRaycast4BView: View {
     @State private var history: [Raycast4BReport] = []
     @State private var arViewReference: ARView?
     @State private var worldAnchors: [AnchorEntity] = []
+    /// 0.742B 任务4：后台/息屏时保存 WorldMap，回前台复用坐标。
+    @State private var savedWorldMap: ARWorldMap?
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         VStack(spacing: 8) {
@@ -91,12 +94,17 @@ struct CrackRaycast4BView: View {
             .padding(.horizontal)
         }
         .navigationTitle("4B Raycast")
+        .onChange(of: scenePhase) { _, newPhase in
+            handleScenePhase(newPhase)
+        }
     }
 
     private func measure() {
         guard let arView = arViewReference else { return }
         isRunning = true
         statusText = "拍照中…"
+        // 0.742B 任务3：按下拍照瞬间捕获帧，用于最终 AR 投影定位（识别期间移动不漂移）。
+        let captureFrame = arView.session.currentFrame
 
         arView.snapshot(saveToHDR: false) { image in
             Task { @MainActor in
@@ -132,7 +140,17 @@ struct CrackRaycast4BView: View {
                     samplePointsPerPolyline: samples,
                     imageToViewScale: scale
                 )
-                addWorldVisualization(arView: arView, report: measured)
+                // AR 投影位置按"按下拍照时刻"锁定（帧锁定），替代识别后当前帧 raycast 点。
+                let displayWorldPoints = frameLockedWorldPoints(
+                    captureFrame: captureFrame,
+                    samplePointsPerPolyline: samples,
+                    imageToViewScale: scale,
+                    arView: arView
+                )
+                addWorldVisualization(
+                    arView: arView,
+                    worldPoints: displayWorldPoints
+                )
                 report = measured
                 history.append(measured)
                 statusText = String(
@@ -150,40 +168,34 @@ struct CrackRaycast4BView: View {
 
     private func addWorldVisualization(
         arView: ARView,
-        report: Raycast4BReport
+        worldPoints: [SIMD3<Float>]
     ) {
         clearWorldVisualization()
-        for polyline in report.polylines {
-            var previousWorld: SIMD3<Float>?
-            for point in polyline.points {
-                guard let world = point.world else {
-                    previousWorld = nil
-                    continue
-                }
-                let anchor = AnchorEntity(world: world)
-                let sphere = ModelEntity(
-                    mesh: .generateSphere(radius: 0.004),
-                    materials: [SimpleMaterial(color: .red, isMetallic: false)]
-                )
-                anchor.addChild(sphere)
-                arView.scene.addAnchor(anchor)
-                worldAnchors.append(anchor)
+        var previousWorld: SIMD3<Float>?
+        for world in worldPoints {
+            let anchor = AnchorEntity(world: world)
+            let sphere = ModelEntity(
+                mesh: .generateSphere(radius: 0.004),
+                materials: [SimpleMaterial(color: .red, isMetallic: false)]
+            )
+            anchor.addChild(sphere)
+            arView.scene.addAnchor(anchor)
+            worldAnchors.append(anchor)
 
-                if let previous = previousWorld {
-                    if let line = Self.lineEntity(
-                        from: previous,
-                        to: world,
-                        color: .red
-                    ) {
-                        let midpoint = (previous + world) * 0.5
-                        let lineAnchor = AnchorEntity(world: midpoint)
-                        lineAnchor.addChild(line)
-                        arView.scene.addAnchor(lineAnchor)
-                        worldAnchors.append(lineAnchor)
-                    }
+            if let previous = previousWorld {
+                if let line = Self.lineEntity(
+                    from: previous,
+                    to: world,
+                    color: .red
+                ) {
+                    let midpoint = (previous + world) * 0.5
+                    let lineAnchor = AnchorEntity(world: midpoint)
+                    lineAnchor.addChild(line)
+                    arView.scene.addAnchor(lineAnchor)
+                    worldAnchors.append(lineAnchor)
                 }
-                previousWorld = world
             }
+            previousWorld = world
         }
     }
 
@@ -192,6 +204,176 @@ struct CrackRaycast4BView: View {
             anchor.removeFromParent()
         }
         worldAnchors.removeAll()
+    }
+
+    // MARK: - 0.742B 任务3：按下拍照时刻帧锁定投影
+
+    /// 拍照帧锁定：像素 → 拍照帧相机射线 → 拍照帧 ARPlaneAnchor 求交 → world 投影点。
+    /// 识别期间手机移动不影响投影位置（AR 红线锚定在按下瞬间）。
+    @MainActor
+    private func frameLockedWorldPoints(
+        captureFrame: ARFrame?,
+        samplePointsPerPolyline: [[CrackPoint]],
+        imageToViewScale: CGFloat,
+        arView: ARView
+    ) -> [SIMD3<Float>] {
+        guard let captureFrame else { return [] }
+        let planes = captureFrame.anchors.compactMap {
+            $0 as? ARPlaneAnchor
+        }
+        guard !planes.isEmpty else { return [] }
+        let orientation =
+            arView.window?.windowScene?.interfaceOrientation ?? .portrait
+        let displayTransform = captureFrame.displayTransform(
+            for: orientation,
+            viewportSize: arView.bounds.size
+        )
+        let intrinsics = captureFrame.camera.intrinsics
+        let fx = intrinsics.columns.0.x
+        let fy = intrinsics.columns.1.y
+        let cx = intrinsics.columns.2.x
+        let cy = intrinsics.columns.2.y
+        let cameraTransform = captureFrame.camera.transform
+        let rotation = simd_float3x3(columns: (
+            SIMD3<Float>(
+                cameraTransform.columns.0.x,
+                cameraTransform.columns.0.y,
+                cameraTransform.columns.0.z
+            ),
+            SIMD3<Float>(
+                cameraTransform.columns.1.x,
+                cameraTransform.columns.1.y,
+                cameraTransform.columns.1.z
+            ),
+            SIMD3<Float>(
+                cameraTransform.columns.2.x,
+                cameraTransform.columns.2.y,
+                cameraTransform.columns.2.z
+            )
+        ))
+        let origin = cameraTransform.position
+        let imageW = captureFrame.camera.imageResolution.width
+        let imageH = captureFrame.camera.imageResolution.height
+
+        var points: [SIMD3<Float>] = []
+        for polyline in samplePointsPerPolyline {
+            for point in polyline {
+                let viewPoint = CGPoint(
+                    x: CGFloat(point.x) * imageToViewScale,
+                    y: CGFloat(point.y) * imageToViewScale
+                )
+                let sensor = CaptureFrameSurfaceMapper.sensorPoint(
+                    viewPoint: viewPoint,
+                    displayTransform: displayTransform,
+                    viewportSize: arView.bounds.size,
+                    imageWidth: imageW,
+                    imageHeight: imageH
+                )
+                let localDirection = SIMD3<Float>(
+                    (sensor.x - cx) / fx,
+                    -(sensor.y - cy) / fy,
+                    -1
+                )
+                let worldDirection = simd_normalize(
+                    rotation * localDirection
+                )
+                var bestWorld: SIMD3<Float>?
+                var bestDistance = Float.greatestFiniteMagnitude
+                for plane in planes {
+                    let inverse = plane.transform.inverse
+                    let localOrigin4 = inverse
+                        * SIMD4<Float>(origin.x, origin.y, origin.z, 1)
+                    let localDir4 = inverse
+                        * SIMD4<Float>(
+                            worldDirection.x,
+                            worldDirection.y,
+                            worldDirection.z,
+                            0
+                        )
+                    let localOrigin = SIMD3<Float>(
+                        localOrigin4.x,
+                        localOrigin4.y,
+                        localOrigin4.z
+                    )
+                    let localDir = SIMD3<Float>(
+                        localDir4.x,
+                        localDir4.y,
+                        localDir4.z
+                    )
+                    guard abs(localDir.z) > 0.0001 else { continue }
+                    let t = -localOrigin.z / localDir.z
+                    guard t > 0 else { continue }
+                    let localHit = localOrigin + localDir * t
+                    let halfX = plane.planeExtent.width * 0.5 + 0.02
+                    let halfY = plane.planeExtent.height * 0.5 + 0.02
+                    guard abs(localHit.x) <= halfX,
+                          abs(localHit.y) <= halfY,
+                          abs(localHit.z) <= 0.02 else {
+                        continue
+                    }
+                    let world4 = plane.transform
+                        * SIMD4<Float>(
+                            localHit.x,
+                            localHit.y,
+                            localHit.z,
+                            1
+                        )
+                    let world = SIMD3<Float>(world4.x, world4.y, world4.z)
+                    let distance = simd_distance(world, origin)
+                    if distance < bestDistance {
+                        bestDistance = distance
+                        bestWorld = world
+                    }
+                }
+                if let bestWorld {
+                    points.append(bestWorld)
+                }
+            }
+        }
+        return points
+    }
+
+    // MARK: - 0.742B 任务4：息屏/后台 WorldMap 坐标复用
+
+    private func handleScenePhase(_ phase: ScenePhase) {
+        guard let arView = arViewReference else { return }
+        switch phase {
+        case .background:
+            saveWorldMapForResume(arView: arView)
+        case .active:
+            if savedWorldMap != nil {
+                resumeWithWorldMap(arView: arView)
+            }
+        default:
+            break
+        }
+    }
+
+    private func saveWorldMapForResume(arView: ARView) {
+        guard let frame = arView.session.currentFrame,
+              frame.worldMappingStatus == .mapped else { return }
+        arView.session.getCurrentWorldMap { map, _ in
+            if let map {
+                savedWorldMap = map
+            }
+        }
+    }
+
+    private func resumeWithWorldMap(arView: ARView) {
+        guard let savedWorldMap else { return }
+        let configuration = ARWorldTrackingConfiguration()
+        configuration.initialWorldMap = savedWorldMap
+        configuration.planeDetection = [.horizontal, .vertical]
+        if ARWorldTrackingConfiguration.supportsSceneReconstruction(
+            .meshWithClassification
+        ) {
+            configuration.sceneReconstruction = .meshWithClassification
+        }
+        configuration.environmentTexturing = .automatic
+        arView.session.run(
+            configuration,
+            options: [.resetTracking, .removeExistingAnchors]
+        )
     }
 
     private static func lineEntity(
