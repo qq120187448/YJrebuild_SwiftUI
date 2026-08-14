@@ -4,6 +4,14 @@
 
 ## 未发布 · 当前分支 codex/defect-mesh-uv-polyline
 
+### 2026-08-14 · P4C-LongTermSpatialAlignment 第一步（专家批复）+ UI 清理
+
+- 暂停扩大三轨实验，新增 SpatialAlignmentManager：扫描完成放置 4~6 个参考锚点（前 4 个 wall 中心 + floor 中心），后台 0.5s 轮询"锚点屏幕投影 → raycast 观测 → Umeyama 刚体配准"，估计 T_currentToRoom（world→room）；
+- 测量日志新增"配准"诊断（点数 / T 平移 mm / 残差 mm）与"校正后 snapDistance"（应用 T 后与表面法向距离），验证走动/长时间后能否把漂移压回小值；
+- 校正的是变换不是点：所有新测量可经 T 转换到 Room 空间，再小范围 Snap；
+- UI 清理（用户要求）：移除"保留 mesh / 扫描前清空 mesh"对照开关及其 reset 逻辑；"参数"入口移入导航栏 toolbar（不占主行）；时间统计从屏幕移除（保留累计日志）；取景整体下移 .padding(.top, 24) 避开灵动岛；
+- 方案定位：snapDistance >50mm 仅作最后 fallback，正常产品流程走"多锚点持续配准 → T_currentToRoom → 小范围 Snap"。
+
 ### 2026-08-14 · 4D.1A 标定决策阶段（专家批复，只做标定版不改算法）
 
 - 不直接上线 A/C，进入 Ground Truth 标定：新增 CalibrationView（4C 页面"标定"入口），已知长度 500/1000/2000mm × 方向 0/45/90° × 距离 1/2m，照片点选线段两端 → Raw/Snap/Isect 三路长度与误差（mm + %），记入累计日志；

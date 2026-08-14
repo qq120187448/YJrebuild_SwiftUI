@@ -106,13 +106,6 @@ struct CrackSurfaceUV4CView: View {
         case ready
     }
 
-    private enum MeshControl: String, CaseIterable, Identifiable, Equatable {
-        case baseline = "保留既有 mesh"
-        case clear = "扫描前清空 mesh"
-
-        var id: String { rawValue }
-    }
-
     @StateObject private var viewModel = ContentViewModel()
     @State private var coordinator = RoomPlanSessionCoordinator()
     @State private var sharedSession = ARSession()
@@ -131,7 +124,6 @@ struct CrackSurfaceUV4CView: View {
     @State private var worldAnchors: [AnchorEntity] = []
     @State private var roomCaptureFrameTimestamp: TimeInterval?
     @State private var roomCaptureCameraPosition: SIMD3<Float>?
-    @State private var meshControl: MeshControl = .baseline
     @State private var surfaceToleranceMM: Double = 20
     @State private var showParameterPanel = false
     @State private var showCalibration = false
@@ -139,6 +131,8 @@ struct CrackSurfaceUV4CView: View {
     @State private var performanceText = ""
     /// P4C-Drift 第一阶段（专家批准）：只检测/诊断，不改测量。
     @State private var driftTracker = AnchorDriftTracker()
+    /// P4C-LongTermSpatialAlignment 第一步（专家批复）：多锚点刚体配准 T_currentToRoom。
+    @State private var spatialManager = SpatialAlignmentManager()
     @State private var driftText = ""
     @State private var driftPulse = Timer.publish(
         every: 0.5,
@@ -188,6 +182,8 @@ struct CrackSurfaceUV4CView: View {
             .frame(height: max(geo.size.height * 0.55, 320))
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .padding(.horizontal)
+            // 取景整体下移，避开灵动岛对视线的遮挡（用户要求）。
+            .padding(.top, 24)
 
             Picker("场景", selection: $scenario) {
                 ForEach(CrackRaycast4B.scenarios, id: \.self) { name in
@@ -197,30 +193,9 @@ struct CrackSurfaceUV4CView: View {
             .pickerStyle(.menu)
             .padding(.horizontal)
 
-            Picker("Mesh 对照", selection: $meshControl) {
-                ForEach(MeshControl.allCases) { control in
-                    Text(control.rawValue).tag(control)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-
-            Button {
-                showParameterPanel = true
-            } label: {
-                Label("参数", systemImage: "slider.horizontal.3")
-            }
-            .buttonStyle(.bordered)
-            .padding(.horizontal)
-
             Text(statusText)
                 .font(.caption)
                 .foregroundStyle(.orange)
-            if !performanceText.isEmpty {
-                Text(performanceText)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
             if !driftText.isEmpty {
                 Text(driftText)
                     .font(.caption2)
@@ -339,6 +314,15 @@ struct CrackSurfaceUV4CView: View {
             .frame(width: geo.size.width, height: geo.size.height)
         }
         .navigationTitle("4C Surface UV")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showParameterPanel = true
+                } label: {
+                    Label("参数", systemImage: "slider.horizontal.3")
+                }
+            }
+        }
         .onAppear {
             setupCoordinator()
             reportLog = UserDefaults.standard.stringArray(
@@ -360,10 +344,20 @@ struct CrackSurfaceUV4CView: View {
         }
         .onReceive(driftPulse) { _ in
             sampleDrift()
+            if let arView = arViewReference, let room = capturedRoom {
+                let surfaces =
+                    room.walls + room.floors + room.doors
+                    + room.windows + room.openings
+                spatialManager.update(
+                    arView: arView,
+                    surfaces: surfaces
+                )
+            }
         }
         .onDisappear {
             if let arView = arViewReference {
                 driftTracker.removeAll(session: arView.session)
+                spatialManager.removeAll(session: arView.session)
             }
         }
     }
@@ -445,6 +439,7 @@ struct CrackSurfaceUV4CView: View {
     private func startScan() {
         guard let arView = arViewReference else { return }
         driftTracker.removeAll(session: arView.session)
+        spatialManager.removeAll(session: arView.session)
         driftText = ""
         capturedRoom = nil
         report = nil
@@ -459,18 +454,9 @@ struct CrackSurfaceUV4CView: View {
         coordinator.scanStopped = false
         roomCaptureViewReference = nil
 
-        if meshControl == .clear {
-            arView.session.run(
-                Self.noMeshConfiguration(),
-                options: [.resetTracking, .removeExistingAnchors]
-            )
-        }
-
         phase = .scanning
         coachingText = "开始扫描：请缓慢移动设备"
-        statusText = meshControl == .clear
-            ? "RoomPlan 扫描中…（对照组：已清空既有 mesh）"
-            : "RoomPlan 扫描中…（官方引导 + 底部 3D 模型）"
+        statusText = "RoomPlan 扫描中…（官方引导 + 底部 3D 模型）"
     }
 
     private func stopScan() {
@@ -514,8 +500,12 @@ struct CrackSurfaceUV4CView: View {
                 surfaces: surfaces,
                 session: arView.session
             )
+            let refs = spatialManager.buildRegistry(
+                surfaces: surfaces,
+                session: arView.session
+            )
             driftText = placed > 0
-                ? "锚点已放置 \(placed) 个（墙A/墙B/地面），漂移诊断中…"
+                ? "锚点已放置 \(placed) 个（漂移门控）+ \(refs) 个（配准网络），诊断中…"
                 : "无可用表面，未放置锚点"
         }
 
@@ -707,6 +697,47 @@ struct CrackSurfaceUV4CView: View {
                         anchorConsistencyMM: driftSample?.consistencyMM
                     )
                     appendReportLog(aStar.text)
+                    // P4C-LongTermSpatialAlignment 第一步（专家批复）：
+                    // 输出 T_currentToRoom 配准诊断与校正后 snapDistance。
+                    if !spatialManager.lastDiagnostic.isEmpty {
+                        appendReportLog("配准：" + spatialManager.lastDiagnostic)
+                    }
+                    if !spatialManager.lastTransform.isIdentity {
+                        let surfaces =
+                            room.walls + room.floors + room.doors
+                            + room.windows + room.openings
+                        var corrected: [Double] = []
+                        for polyline in raycast.polylines {
+                            for point in polyline.points {
+                                if let world = point.world,
+                                   let d = spatialManager
+                                    .correctedSnapDistanceMM(
+                                        world: world,
+                                        surfaces: surfaces
+                                    ) {
+                                    corrected.append(d)
+                                }
+                            }
+                        }
+                        if !corrected.isEmpty {
+                            let sorted = corrected.sorted()
+                            let p50 = sorted[sorted.count / 2]
+                            let p95Index = min(
+                                sorted.count - 1,
+                                Int(Double(sorted.count) * 0.95)
+                            )
+                            let p95 = sorted[p95Index]
+                            let maxV = sorted.last ?? 0
+                            appendReportLog(
+                                String(
+                                    format: "校正后 snapDistance: P50=%.1f P95=%.1f max=%.1f mm（T_currentToRoom 已应用）",
+                                    p50,
+                                    p95,
+                                    maxV
+                                )
+                            )
+                        }
+                    }
                     statusText = String(
                         format: "表面分配率 %.1f%% · UV 单位米 · 已解除静止锁定",
                         surfaceReport.assignedRatio * 100
@@ -995,11 +1026,6 @@ struct CrackSurfaceUV4CView: View {
         return configuration
     }
 
-    static func noMeshConfiguration() -> ARWorldTrackingConfiguration {
-        let configuration = ARWorldTrackingConfiguration()
-        configuration.planeDetection = []
-        return configuration
-    }
 }
 
 /// 官方 RoomPlan 扫描视图（自带引导、进度与底部 3D 模型），与 ARView 共享同一个 ARSession。
