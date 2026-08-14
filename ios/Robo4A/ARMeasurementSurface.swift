@@ -97,8 +97,8 @@ final class ARPlaneSurfaceProvider: ARMeasurementSurfaceProvider {
             let t = -localOrigin.z / localDir.z
             guard t > 0 else { continue }
             let localHit = localOrigin + localDir * t
-            let halfX = plane.planeExtent.x * 0.5 + toleranceM
-            let halfY = plane.planeExtent.y * 0.5 + toleranceM
+            let halfX = plane.planeExtent.width * 0.5 + toleranceM
+            let halfY = plane.planeExtent.height * 0.5 + toleranceM
             guard abs(localHit.x) <= halfX,
                   abs(localHit.y) <= halfY,
                   abs(localHit.z) <= toleranceM else {
@@ -139,8 +139,8 @@ final class ARPlaneSurfaceProvider: ARMeasurementSurfaceProvider {
                     1
                 )
             let local = SIMD3<Float>(local4.x, local4.y, local4.z)
-            let halfX = plane.planeExtent.x * 0.5 + toleranceM
-            let halfY = plane.planeExtent.y * 0.5 + toleranceM
+            let halfX = plane.planeExtent.width * 0.5 + toleranceM
+            let halfY = plane.planeExtent.height * 0.5 + toleranceM
             guard abs(local.x) <= halfX,
                   abs(local.y) <= halfY,
                   abs(local.z) <= toleranceM else {
