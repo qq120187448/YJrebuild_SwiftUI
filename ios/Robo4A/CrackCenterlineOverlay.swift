@@ -357,13 +357,13 @@ enum CrackCenterlineOverlay {
             let scaleY = CGFloat(imageHeight) / CGFloat(maskHeight)
             // 性能优化（0.74D）：边界检测 stride=2 降采样，
             // 宽度统计计算量降约 4 倍（平均/最大宽度统计可接受）。
-            let stride = 2
-            for y in stride(from: 0, to: maskHeight, by: stride) {
-                for x in stride(from: 0, to: maskWidth, by: stride)
+            let samplingStep = 2
+            for y in stride(from: 0, to: maskHeight, by: samplingStep) {
+                for x in stride(from: 0, to: maskWidth, by: samplingStep)
                     where prediction.mask[y * maskWidth + x] > 0 {
                     var isBoundary = false
-                    for dy in -stride...stride where !isBoundary {
-                        for dx in -stride...stride where !isBoundary {
+                    for dy in -samplingStep...samplingStep where !isBoundary {
+                        for dx in -samplingStep...samplingStep where !isBoundary {
                             let nx = x + dx
                             let ny = y + dy
                             if nx >= 0, nx < maskWidth,
@@ -374,8 +374,14 @@ enum CrackCenterlineOverlay {
                         }
                     }
                     if isBoundary {
-                        let px = Int((CGFloat(x) + CGFloat(stride) * 0.5) * scaleX)
-                        let py = Int((CGFloat(y) + CGFloat(stride) * 0.5) * scaleY)
+                        let px = Int(
+                            (CGFloat(x) + CGFloat(samplingStep) * 0.5)
+                                * scaleX
+                        )
+                        let py = Int(
+                            (CGFloat(y) + CGFloat(samplingStep) * 0.5)
+                                * scaleY
+                        )
                         contour.insert(CrackPoint(x: px, y: py))
                     }
                 }
