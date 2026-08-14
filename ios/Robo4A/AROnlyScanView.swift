@@ -19,8 +19,6 @@ struct AROnlyScanView: View {
     @State private var reportText = ""
     /// 0.74D：统一空间会话管理（WorldMap/relocalization/状态机）。
     @State private var spatialSession = SpatialSessionManager()
-    /// 0.74D：ARKit 测量表面提供者（当前 ARPlaneAnchor 主测量）。
-    @State private var surfaceProvider = ARPlaneSurfaceProvider()
     @State private var worldAnchors: [AnchorEntity] = []
     /// 历史投影颜色循环（区分每次测量，观察漂移）。
     @State private var colorIndex = 0
@@ -134,23 +132,6 @@ struct AROnlyScanView: View {
         isRunning = true
         statusText = "拍照中…"
         let totalStart = Date()
-        // 0.74D Isect：保留拍照帧空间上下文（射线基于拍照瞬间，移动不影响对应关系）。
-        let captureFrame = arView.session.currentFrame
-        let orientation =
-            arView.window?.windowScene?.interfaceOrientation ?? .portrait
-        let captureContext = captureFrame.map { frame in
-            CaptureFrameSpatialContext(
-                timestamp: frame.timestamp,
-                cameraTransform: frame.camera.transform,
-                cameraIntrinsics: frame.camera.intrinsics,
-                imageResolution: frame.camera.imageResolution,
-                displayTransform: frame.displayTransform(
-                    for: orientation,
-                    viewportSize: arView.bounds.size
-                ),
-                viewportSize: arView.bounds.size
-            )
-        }
         arView.snapshot(saveToHDR: false) { image in
             Task { @MainActor in
                 defer { isRunning = false }
@@ -174,10 +155,6 @@ struct AROnlyScanView: View {
                     ? arView.bounds.width / imageWidth
                     : 1
 
-                // 刷新 ARKit 测量表面（ARPlaneAnchor）
-                if let captureFrame {
-                    surfaceProvider.refresh(from: captureFrame)
-                }
                 let spatialStart = Date()
                 var totalSamples = 0
                 var hits = 0
@@ -195,52 +172,18 @@ struct AROnlyScanView: View {
                             x: CGFloat(point.x) * scale,
                             y: CGFloat(point.y) * scale
                         )
-                        // Isect：拍照帧相机射线 → ARKit 测量表面求交
-                        guard let captureContext else { continue }
-                        let sensor = CaptureFrameSurfaceMapper.sensorPoint(
-                            viewPoint: viewPoint,
-                            displayTransform: captureContext.displayTransform,
-                            viewportSize: captureContext.viewportSize,
-                            imageWidth: captureContext.imageResolution.width,
-                            imageHeight: captureContext.imageResolution.height
+                        // 官方 ARView.raycast（4B 已验证），只做 SurfaceHit 胶水包装。
+                        let results = arView.raycast(
+                            from: viewPoint,
+                            allowing: .estimatedPlane,
+                            alignment: .any
                         )
-                        let fx = captureContext.cameraIntrinsics.columns.0.x
-                        let fy = captureContext.cameraIntrinsics.columns.1.y
-                        let cx = captureContext.cameraIntrinsics.columns.2.x
-                        let cy = captureContext.cameraIntrinsics.columns.2.y
-                        let localDirection = SIMD3<Float>(
-                            (sensor.x - cx) / fx,
-                            -(sensor.y - cy) / fy,
-                            -1
-                        )
-                        let t = captureContext.cameraTransform
-                        let rotation = simd_float3x3(columns: (
-                            SIMD3<Float>(
-                                t.columns.0.x,
-                                t.columns.0.y,
-                                t.columns.0.z
-                            ),
-                            SIMD3<Float>(
-                                t.columns.1.x,
-                                t.columns.1.y,
-                                t.columns.1.z
-                            ),
-                            SIMD3<Float>(
-                                t.columns.2.x,
-                                t.columns.2.y,
-                                t.columns.2.z
-                            )
-                        ))
-                        let worldDirection = simd_normalize(
-                            rotation * localDirection
-                        )
-                        guard let surfaceHit = surfaceProvider.intersect(
-                            origin: captureContext.cameraTransform.position,
-                            direction: worldDirection,
-                            toleranceM: 0.02
-                        ) else { continue }
+                        guard let result = results.first else { continue }
                         hits += 1
-                        let world = surfaceHit.worldPoint
+                        let surfaceHit = ARMeasurementSurface.hit(
+                            from: result
+                        )
+                        let world = result.worldTransform.position
                         collectedWorldPoints.append(world)
                         if let previousWorld {
                             totalLength += Double(
@@ -318,7 +261,9 @@ struct AROnlyScanView: View {
                     totalSamples,
                     avgError,
                     tracking,
-                    surfaceProvider.surfaceCount
+                    arView.session.currentFrame?.anchors
+                        .compactMap { $0 as? ARPlaneAnchor }
+                        .count ?? 0
                 )
                 statusText = "测量完成"
                 appendReportLog("测量：\(reportText)")

@@ -4,6 +4,13 @@
 
 ## 未发布 · 当前分支 codex/arkit-only-poc
 
+### 2026-08-14 · 0.74D 胶水原则修正：测量回官方 ARView.raycast
+
+- 按"只写胶水、尽量用官方示范"原则：纯 ARKit 测量改回 4B 已验证的官方 ARView.raycast，删除自研拍照帧射线/平面求交；
+- ARMeasurementSurface 仅做胶水包装：官方 ARRaycastResult → ARSurfaceHit（ARPlaneAnchor 时给 surface-local 坐标与 wall/floor 分类，供 UV）；
+- 测量输出：长度(3D，官方 world 点折线) + 长度(UV，平面 surface-local 同面连续) + 命中率 + 重投影 + tracking + 平面数量；
+- SpatialSessionManager（WorldMap/状态机）与阶段计时/持久化日志/历史投影保留。
+
 ### 2026-08-14 · 0.74D：RoomPlan 降级为语义层，ARKit 成为测量主链（专家架构变更）
 
 - 架构调整：ARKit = 测量与长期空间层（工程量以 ARKit 出数为准）；RoomPlan = 建筑/房间语义层（统计/3D 报告可选，不参与工程量计算主链）；
