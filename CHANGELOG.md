@@ -6,6 +6,8 @@
 
 ### 2026-08-14 · 0.742B（分支 codex/4b-mask-roi-0742b）：以 4B 为基座四项改造
 
+- 1024 统一：4B 页面拍照后图像转长边 1024 喂模型，坐标按 1024 计算（模型 1024 输入已由 CI workflow --imgsz 1024 导出，ContentViewModel 动态读取模型输入尺寸）；
+
 - 任务1 掩码性能：ROI 上采样（检测框区域 → 原图框尺寸，上限 1280，替代整张 960²）+ Metal 一次批处理（upsampleBatch 一次 commandBuffer/waitUntilCompleted，替代逐实例同步等待）；MaskPrediction 新增 bboxOrigin，CrackCenterlineOverlay grid/宽度统计映射回全图；
 - 任务2 折线几何：长度/宽度沿用已定稿的轮廓拟合中心线 + SwiftSimplify DP 折线求和 + 轮廓法向宽度（md 文档 Zhang-Suen/EDT 因无 MIT Swift 实现用等效轮廓方法，专家合规约束保留）；
 - 任务3 手持优化：AR 投影位置按"按下拍照时刻"帧锁定——拍照瞬间捕获 ARFrame，识别后像素经拍照帧相机射线与拍照帧 ARPlaneAnchor 求交得投影点，识别期间移动不漂移（长度仍用官方 raycast）；

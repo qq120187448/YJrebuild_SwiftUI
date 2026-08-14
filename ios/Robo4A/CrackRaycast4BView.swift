@@ -116,7 +116,9 @@ struct CrackRaycast4BView: View {
                 statusText = "4A 识别裂缝中…"
                 viewModel.centerlineResult = nil
                 viewModel.centerlineStats = ""
-                viewModel.uiImage = image
+                // 0.742B：拍照后图像统一转长边 1024，喂给 1024 输入模型，后续坐标按 1024。
+                let analysisImage = Self.resizedImage(image, maxSide: 1024)
+                viewModel.uiImage = analysisImage
                 await viewModel.runInference()
 
                 guard let samples = viewModel.centerlineResult?.samplePointsPerPolyline,
@@ -127,8 +129,8 @@ struct CrackRaycast4BView: View {
                 }
 
                 let scale: CGFloat
-                if image.size.width > 0 {
-                    scale = arView.bounds.width / image.size.width
+                if analysisImage.size.width > 0 {
+                    scale = arView.bounds.width / analysisImage.size.width
                 } else {
                     scale = 1
                 }
@@ -397,6 +399,26 @@ struct CrackRaycast4BView: View {
             to: direction
         )
         return entity
+    }
+
+    /// 等比压缩长边到 maxSide（0.742B：统一 1024）。
+    private static func resizedImage(
+        _ image: UIImage,
+        maxSide: CGFloat
+    ) -> UIImage {
+        let largest = max(image.size.width, image.size.height)
+        guard largest > maxSide, largest > 0 else { return image }
+        let scale = maxSide / largest
+        let size = CGSize(
+            width: max(1, image.size.width * scale),
+            height: max(1, image.size.height * scale)
+        )
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: size, format: format)
+            .image { _ in
+                image.draw(in: CGRect(origin: .zero, size: size))
+            }
     }
 }
 
