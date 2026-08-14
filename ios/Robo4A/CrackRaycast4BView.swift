@@ -15,6 +15,8 @@ struct CrackRaycast4BView: View {
     @State private var history: [Raycast4BReport] = []
     @State private var arViewReference: ARView?
     @State private var worldAnchors: [AnchorEntity] = []
+    /// 历史投影颜色循环（区分每次测量，观察漂移）。
+    @State private var colorIndex = 0
     @State private var reportLog: [String] = []
     @State private var measurementSummary = ""
     /// 0.742B 任务4：后台/息屏时保存 WorldMap，回前台复用坐标。
@@ -25,6 +27,8 @@ struct CrackRaycast4BView: View {
         VStack(spacing: 8) {
             ARViewContainer { arView in
                 arViewReference = arView
+                // 0.742B：进入 4B 后自动获取 ARWorldMap（息屏/后台恢复的坐标基准）。
+                autoAcquireWorldMap(arView: arView)
             }
             .frame(maxHeight: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -290,7 +294,12 @@ struct CrackRaycast4BView: View {
         arView: ARView,
         report: Raycast4BReport
     ) {
-        clearWorldVisualization()
+        // 0.742B：保存本次实例的历史投影——不清除旧投影，颜色循环区分测量次序。
+        let colors: [UIColor] = [
+            .red, .green, .blue, .orange, .purple, .cyan
+        ]
+        let color = colors[colorIndex % colors.count]
+        colorIndex += 1
         for polyline in report.polylines {
             var previousWorld: SIMD3<Float>?
             for point in polyline.points {
@@ -302,7 +311,7 @@ struct CrackRaycast4BView: View {
                 let sphere = ModelEntity(
                     mesh: .generateSphere(radius: 0.004),
                     materials: [SimpleMaterial(
-                        color: .red,
+                        color: color,
                         isMetallic: false
                     )]
                 )
@@ -314,7 +323,7 @@ struct CrackRaycast4BView: View {
                     if let line = Self.lineEntity(
                         from: previous,
                         to: world,
-                        color: .red
+                        color: color
                     ) {
                         let midpoint = (previous + world) * 0.5
                         let lineAnchor = AnchorEntity(world: midpoint)
@@ -463,6 +472,31 @@ struct CrackRaycast4BView: View {
     }
 
     // MARK: - 0.742B 任务4：息屏/后台 WorldMap 坐标复用
+
+    /// 进入 4B 后自动获取 ARWorldMap（等待 worldMappingStatus == .mapped，最多 15s），
+    /// 作为息屏/后台恢复的坐标基准。
+    private func autoAcquireWorldMap(arView: ARView) {
+        Task { @MainActor in
+            for _ in 0..<60 {
+                if let frame = arView.session.currentFrame,
+                   frame.worldMappingStatus == .mapped {
+                    arView.session.getCurrentWorldMap { map, _ in
+                        if let map {
+                            savedWorldMap = map
+                            appendReportLog(
+                                "WorldMap 已获取（\(map.anchors.count) 锚点，mapped）——息屏/后台坐标复用基准"
+                            )
+                        }
+                    }
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            appendReportLog(
+                "WorldMap 获取超时（worldMappingStatus 未达 mapped）"
+            )
+        }
+    }
 
     private func handleScenePhase(_ phase: ScenePhase) {
         guard let arView = arViewReference else { return }

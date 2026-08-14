@@ -6,6 +6,9 @@
 
 ### 2026-08-14 · 0.742B（分支 codex/4b-mask-roi-0742b）：以 4B 为基座四项改造
 
+- 历史投影：4B 每次测量不清除旧投影，颜色循环（红/绿/蓝/橙/紫/青）区分测量次序，便于观察漂移；"清除投影"按钮保留手动清理；
+- 息屏/后台坐标复用：进入 4B 后自动等待 worldMappingStatus==.mapped 并获取 ARWorldMap（日志记录），后台再保存最新、回前台 initialWorldMap 恢复；
+
 - 4B 输出补全：裂缝长度（world 3D 折线）+ 宽度（mask 轮廓法向，mm 换算）+ 分步计时（requestSetup/coreML/maskDecode/centerline/spatial/total）进持久化累计日志（复制/清空）；
 - 投影回退官方 raycast 世界点（帧锁定拍照帧平面求交因拍照瞬间 ARPlaneAnchor 覆盖不足导致红线不重合，暂回退保留函数待修）；
 
