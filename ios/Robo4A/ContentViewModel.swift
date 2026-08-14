@@ -92,7 +92,12 @@ class ContentViewModel: ObservableObject {
                             self?.predictions = []
                             self?.maskPredictions = []
                             self?.combinedMaskImage = nil
-                            self?.uiImage = uiImage
+                            // 0.742B：相册照片任意比例 → letterbox 到正方形 1024，
+                            // 避免 scaleFill 拉伸变形导致识别形状失真。
+                            self?.uiImage = Self.letterbox(
+                                uiImage,
+                                side: 1024
+                            )
                         }
                         return
                     }
@@ -120,6 +125,44 @@ class ContentViewModel: ObservableObject {
             }
             if done { break }
             try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    /// 等比缩放 + 黑边填充到正方形（letterbox），供模型 scaleFill 不变形。
+    static func letterbox(
+        _ image: UIImage,
+        side: CGFloat
+    ) -> UIImage {
+        let imageSize = image.size
+        guard imageSize.width > 0, imageSize.height > 0 else { return image }
+        let scale = min(
+            side / imageSize.width,
+            side / imageSize.height
+        )
+        let drawSize = CGSize(
+            width: imageSize.width * scale,
+            height: imageSize.height * scale
+        )
+        let x = (side - drawSize.width) * 0.5
+        let y = (side - drawSize.height) * 0.5
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(
+            size: CGSize(width: side, height: side),
+            format: format
+        ).image { context in
+            UIColor.black.setFill()
+            context.fill(
+                CGRect(x: 0, y: 0, width: side, height: side)
+            )
+            image.draw(
+                in: CGRect(
+                    x: x,
+                    y: y,
+                    width: drawSize.width,
+                    height: drawSize.height
+                )
+            )
         }
     }
 }

@@ -24,106 +24,110 @@ struct CrackRaycast4BView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        VStack(spacing: 8) {
-            ARViewContainer { arView in
-                arViewReference = arView
-                // 0.742B：进入 4B 后自动获取 ARWorldMap（息屏/后台恢复的坐标基准）。
-                autoAcquireWorldMap(arView: arView)
-            }
-            .frame(maxHeight: .infinity)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .padding(.horizontal)
-
-            Picker("场景", selection: $scenario) {
-                ForEach(CrackRaycast4B.scenarios, id: \.self) { name in
-                    Text(name).tag(name)
+        GeometryReader { geo in
+            // 0.742B：锁死正方形取景（防 scaleFill 拉伸变形，形状失真）。
+            let side = min(geo.size.width - 32, geo.size.height * 0.42)
+            VStack(spacing: 8) {
+                ARViewContainer { arView in
+                    arViewReference = arView
+                    // 0.742B：进入 4B 后自动获取 ARWorldMap（息屏/后台恢复的坐标基准）。
+                    autoAcquireWorldMap(arView: arView)
                 }
-            }
-            .pickerStyle(.menu)
-            .padding(.horizontal)
+                .frame(width: side, height: side)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .frame(maxWidth: .infinity)
 
-            Text(statusText)
-                .font(.caption)
-                .foregroundStyle(.orange)
-            Text("红色球/线 = raycast 命中的世界点，应贴合墙面裂缝")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            if !measurementSummary.isEmpty {
-                Text(measurementSummary)
-                    .font(.caption2)
-                    .monospaced()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal)
-            }
-
-            HStack {
-                Button {
-                    measure()
-                } label: {
-                    Label("拍照并 4B 测量", systemImage: "camera.viewfinder")
-                }
-                .disabled(isRunning || arViewReference == nil)
-
-                if let report {
-                    Button {
-                        UIPasteboard.general.string = report.text()
-                    } label: {
-                        Label("复制本组", systemImage: "doc.on.doc")
+                Picker("场景", selection: $scenario) {
+                    ForEach(CrackRaycast4B.scenarios, id: \.self) { name in
+                        Text(name).tag(name)
                     }
                 }
+                .pickerStyle(.menu)
+                .padding(.horizontal)
 
-                if !history.isEmpty {
-                    Button {
-                        UIPasteboard.general.string = history
-                            .map { $0.text() }
-                            .joined(separator: "\n\n")
-                    } label: {
-                        Label("复制全部", systemImage: "doc.on.doc.fill")
-                    }
-                }
-
-                Button {
-                    clearWorldVisualization()
-                } label: {
-                    Label("清除投影", systemImage: "xmark.circle")
-                }
-            }
-            .buttonStyle(.borderedProminent)
-
-            HStack(spacing: 12) {
-                Text("累计日志 \(reportLog.count) 条")
+                Text(statusText)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                Text("红色球/线 = raycast 命中的世界点，应贴合墙面裂缝")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                Button("复制累计日志") {
-                    UIPasteboard.general.string = reportLog.joined(
-                        separator: "\n\n=====\n\n"
-                    )
+                if !measurementSummary.isEmpty {
+                    Text(measurementSummary)
+                        .font(.caption2)
+                        .monospaced()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
                 }
-                .buttonStyle(.bordered)
-                .disabled(reportLog.isEmpty)
-                Button("清空日志") {
-                    clearReportLog()
-                }
-                .buttonStyle(.bordered)
-                .disabled(reportLog.isEmpty)
-            }
-            .padding(.horizontal)
 
-            ScrollView {
-                if let report {
-                    Text(report.text())
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    Text("测量后此处显示 4B 基线报告（区域固定，取景框比例不变）")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                HStack {
+                    Button {
+                        measure()
+                    } label: {
+                        Label("拍照并 4B 测量", systemImage: "camera.viewfinder")
+                    }
+                    .disabled(isRunning || arViewReference == nil)
+
+                    if let report {
+                        Button {
+                            UIPasteboard.general.string = report.text()
+                        } label: {
+                            Label("复制本组", systemImage: "doc.on.doc")
+                        }
+                    }
+
+                    if !history.isEmpty {
+                        Button {
+                            UIPasteboard.general.string = history
+                                .map { $0.text() }
+                                .joined(separator: "\n\n")
+                        } label: {
+                            Label("复制全部", systemImage: "doc.on.doc.fill")
+                        }
+                    }
+
+                    Button {
+                        clearWorldVisualization()
+                    } label: {
+                        Label("清除投影", systemImage: "xmark.circle")
+                    }
                 }
+                .buttonStyle(.borderedProminent)
+
+                HStack(spacing: 12) {
+                    Text("累计日志 \(reportLog.count) 条")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Button("复制累计日志") {
+                        UIPasteboard.general.string = reportLog.joined(
+                            separator: "\n\n=====\n\n"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(reportLog.isEmpty)
+                    Button("清空日志") {
+                        clearReportLog()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(reportLog.isEmpty)
+                }
+                .padding(.horizontal)
+
+                ScrollView {
+                    if let report {
+                        Text(report.text())
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Text("测量后此处显示 4B 基线报告（区域固定，取景框比例不变）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .frame(height: 170)
+                .padding(.horizontal)
             }
-            .frame(height: 170)
-            .padding(.horizontal)
         }
         .navigationTitle("4B Raycast")
         .onChange(of: scenePhase) { _, newPhase in

@@ -6,6 +6,8 @@
 
 ### 2026-08-14 · 0.742B（分支 codex/4b-mask-roi-0742b）：以 4B 为基座四项改造
 
+- 形状失真修复：4B 取景锁死正方形（scaleFill 不再拉伸变形）；4A 相册照片 letterbox 到正方形 1024（等比+黑边）再喂模型——识别形状不再被非正方形拉伸扭曲；
+
 - 识别修复：CI 模型导出回退 --imgsz 640（crack_seg_n 为 640 训练，1024 输入导致 4A 识别退化/形状错）；图像与坐标保持 1024（Vision scaleFill 到 640 模型输入，采样点仍在 1024 空间）；1024 模型需 1024 数据重新训练后启用；
 
 - 全流程异步化（保持镜头不卡顿）：中心线计算（CrackCenterlineOverlay.compute）从 MainActor 移出到 Task.detached 后台执行，完成后回主线程更新；runInference 等待中心线完成（最多 5s）再返回；Vision perform/maskDecode 本就在后台线程，主线程不再被半秒~1.8 秒的中心线计算阻塞；
