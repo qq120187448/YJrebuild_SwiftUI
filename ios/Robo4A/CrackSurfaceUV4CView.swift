@@ -439,6 +439,15 @@ struct CrackSurfaceUV4CView: View {
         phase = .reviewing
         coachingText = "正在展示官方 3D 房间结果…"
         statusText = "RoomPlan 官方结果生成中，请稍候"
+        // 0.74C 基线（fa14c9e 已验证）：RoomPlan 停止后恢复 mesh 配置供系统
+        // ARView.raycast 命中；不带 .resetTracking，保持 RoomPlan 会话世界原点。
+        restoreMesh()
+    }
+
+    private func restoreMesh() {
+        if let arView = arViewReference {
+            arView.session.run(Self.meshConfiguration())
+        }
     }
 
     private func finishRoomReview() {
@@ -491,21 +500,6 @@ struct CrackSurfaceUV4CView: View {
 
             // 拍照时间戳：用于 Capture→Raycast 延迟统计（专家建议指标）。
             let captureTime = Date()
-            let captureFrame = arView.session.currentFrame
-            let orientation =
-                arView.window?.windowScene?.interfaceOrientation ?? .portrait
-            let captureContext = captureFrame.map { frame in
-                CaptureFrameSpatialContext(
-                    timestamp: frame.timestamp,
-                    cameraTransform: frame.camera.transform,
-                    cameraIntrinsics: frame.camera.intrinsics,
-                    imageResolution: frame.camera.imageResolution,
-                    displayTransform: frame.displayTransform(
-                        for: orientation,
-                        viewportSize: arView.bounds.size
-                    )
-                )
-            }
             arView.snapshot(saveToHDR: false) { image in
                 Task { @MainActor in
                     guard let image else {
@@ -542,29 +536,17 @@ struct CrackSurfaceUV4CView: View {
 
                     statusText = "raycast + Surface UV 映射中…"
                     let spatialStart = Date()
-                    let raycast: Raycast4BReport
-                    if let captureContext {
-                        raycast = CaptureFrameSurfaceMapper.map(
-                            arView: arView,
-                            context: captureContext,
-                            room: room,
-                            samplePointsPerPolyline: samples,
-                            imageToViewScale: scale,
-                            captureTime: captureTime,
-                            centerlinesPerPolyline:
-                                viewModel.centerlineResult?.polylines ?? []
-                        )
-                    } else {
-                        raycast = CrackRaycast4B.measure(
-                            arView: arView,
-                            scenario: scenario,
-                            samplePointsPerPolyline: samples,
-                            imageToViewScale: scale,
-                            captureTime: captureTime,
-                            centerlinesPerPolyline:
-                                viewModel.centerlineResult?.polylines ?? []
-                        )
-                    }
+                    // 0.74C 基线（fa14c9e 已验证）：使用 Apple 系统 ARView.raycast，
+                    // 不经过自研帧锁定映射，避免 y 镜像等自研几何误差。
+                    let raycast = CrackRaycast4B.measure(
+                        arView: arView,
+                        scenario: scenario,
+                        samplePointsPerPolyline: samples,
+                        imageToViewScale: scale,
+                        captureTime: captureTime,
+                        centerlinesPerPolyline:
+                            viewModel.centerlineResult?.polylines ?? []
+                    )
                     let sessionDiagnosticText = Self.sessionDiagnosticText(
                         arView: arView,
                         roomCaptureFrameTimestamp: roomCaptureFrameTimestamp,

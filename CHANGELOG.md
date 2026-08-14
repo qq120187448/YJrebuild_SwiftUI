@@ -4,6 +4,14 @@
 
 ## 未发布 · 当前分支 codex/defect-mesh-uv-polyline
 
+### 2026-08-14 · 定稿 0.74C（fa14c9e 方案为 4C 正式基线）
+
+- 版本号更新为 0.74C（project.yml MARKETING_VERSION）；
+- 4C 测量路径从自研帧锁定映射（CaptureFrameSurfaceMapper）改回 Apple 系统 ARView.raycast（fa14c9e 真机已验证：命中/分配 100%、红线正确）；
+- stopScan 恢复 restoreMesh()（无 .resetTracking，保持 RoomPlan 世界原点；恢复 mesh 供系统 raycast 命中）；
+- 保留 4D.1 折线优化（SwiftSimplify ≤6 段）、宽度全量统计、dense/simplified 长度一致性、y 镜像修复；
+- 实测对照：fa14c9e 原版（系统 raycast + restoreMesh）命中 100% 分配 100%；去掉 restoreMesh 后 ARView.raycast 无 mesh 可命中，分配率 0；b453b35 帧锁定映射因 y 镜像出现长直线。确认系统 raycast + restoreMesh 为正确底座。
+
 ### 2026-08-14 · 4C 反投影 y 镜像修复（长直线根因）
 
 - 修复 CaptureFrameSurfaceMapper 与 CrackRaycast4B.measureFrameLocked 两处自研反投影的 y 分量未翻转问题：`localDirection.y` 由 `(sensorY - cy) / fy` 改为 `-(sensorY - cy) / fy`（传感器坐标 y 向下、相机坐标 y 向上，标准针孔反投影需翻转）；
