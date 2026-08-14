@@ -283,12 +283,17 @@ enum SurfaceUV4C {
         return SIMD3<Float>(v.x, v.y, v.z)
     }
 
-    /// 在 surface 集合中查找包含该 world 点的表面（含容差），取最贴近表面平面的那个。
-    /// 注意：2cm 只是“哪个 Surface 接收该点”的关联分类阈值，不代表 UV 测量精度。
+    /// 在 surface 集合中查找包含该 world 点的表面（含容差），取最贴近表面平面的那个，
+    /// 并把命中点“法向吸附”到表面上（local.z→0，保留 x/y）。
+    /// 背景（方案 A'，专家批准实验）：ARKit 实时估计平面与 RoomPlan 优化表面存在
+    /// 2.6~8.5cm 法向偏差（锚点漂移诊断已证明 CapturedRoom 坐标稳定），吸附用于实验对照；
+    /// snapMaxM 为 debugSafetyCap（防明显错误点无限吸附），**正式测量默认 snapMaxM=nil，
+    /// 保持 20mm 正式容差**；仅 A' 实验的 Snap 路显式传 0.15。
     static func map(
         world: SIMD3<Float>,
         surfaces: [CapturedRoom.Surface],
-        toleranceM: Float = 0.02
+        toleranceM: Float = 0.02,
+        snapMaxM: Float? = nil
     ) -> (surface: CapturedRoom.Surface, local: SIMD3<Float>)? {
         var bestSurface: CapturedRoom.Surface?
         var bestLocal: SIMD3<Float>?
@@ -297,12 +302,12 @@ enum SurfaceUV4C {
             let local = surfaceLocal(world, surface: surface)
             let halfX = surface.dimensions.x * 0.5 + toleranceM
             let halfY = surface.dimensions.y * 0.5 + toleranceM
-            let halfZ = surface.dimensions.z * 0.5 + toleranceM
             guard abs(local.x) <= halfX,
-                  abs(local.y) <= halfY,
-                  abs(local.z) <= halfZ else {
+                  abs(local.y) <= halfY else {
                 continue
             }
+            let zLimit = snapMaxM ?? (surface.dimensions.z * 0.5 + toleranceM)
+            guard abs(local.z) <= zLimit else { continue }
             if abs(local.z) < bestAbsZ {
                 bestAbsZ = abs(local.z)
                 bestSurface = surface
@@ -310,7 +315,9 @@ enum SurfaceUV4C {
             }
         }
         guard let bestSurface, let bestLocal else { return nil }
-        return (bestSurface, bestLocal)
+        // 法向吸附：命中点投影到表面平面（local.z=0），保留表面上的 x/y 坐标。
+        let snapped = SIMD3<Float>(bestLocal.x, bestLocal.y, 0)
+        return (bestSurface, snapped)
     }
 
     static func buildReport(
@@ -597,7 +604,12 @@ enum SurfaceUV4C {
             [20, 30, 40, 50].map { thresholdMm in
                 let toleranceM = Float(thresholdMm) / 1000.0
                 let assigned = worldPoints.filter {
-                    map(world: $0, surfaces: surfaces, toleranceM: toleranceM)
+                    map(
+                        world: $0,
+                        surfaces: surfaces,
+                        toleranceM: toleranceM,
+                        snapMaxM: nil
+                    )
                         != nil
                 }.count
                 let ratio = worldPoints.isEmpty
@@ -611,10 +623,20 @@ enum SurfaceUV4C {
         ] = [20, 30, 40, 50].map { thresholdMm in
             let toleranceM = Float(thresholdMm) / 1000.0
             let estimatedAssigned = worldPoints.filter {
-                map(world: $0, surfaces: surfaces, toleranceM: toleranceM) != nil
+                map(
+                    world: $0,
+                    surfaces: surfaces,
+                    toleranceM: toleranceM,
+                    snapMaxM: nil
+                ) != nil
             }.count
             let existingAssigned = existingWorldPoints.filter {
-                map(world: $0, surfaces: surfaces, toleranceM: toleranceM) != nil
+                map(
+                    world: $0,
+                    surfaces: surfaces,
+                    toleranceM: toleranceM,
+                    snapMaxM: nil
+                ) != nil
             }.count
             return (
                 thresholdMm: thresholdMm,

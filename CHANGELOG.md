@@ -4,6 +4,16 @@
 
 ## 未发布 · 当前分支 codex/defect-mesh-uv-polyline
 
+### 2026-08-14 · A' 三轨对照实验版（专家批准，不直接上生产）
+
+- 专家否决把"15cm 法向吸附"直接作为正式算法；`SurfaceUV4C.map()` 默认退回正式 20mm 容差（snapMaxM=nil），吸附仅实验路径显式传 debugSafetyCap=150mm；
+- 新增 AStarDiagnostics（A' Diagnostic Mode）：同一批采样点三轨对照 Raw（20mm 正式分配）/ Snap（法向吸附，cap 150mm）/ Isect（拍照帧相机射线 → RoomPlan Surface 直接求交，方案 C 验证基准）；
+- 输出：三路 assignment、snapDistance P50/P90/P95/max、三路重投影（avg/max/P95）、三路 UV length、|Snap−Isect|/Isect 差异%、trackingState、anchor 门控（GOOD ≤5mm / WARNING 5–10mm / UNSAFE >10mm 或 tracking≠normal）；
+- 重新引入拍照帧空间上下文（CaptureFrameSpatialContext），仅用于对照路与重投影，不改变主测量路径；
+- CaptureFrameSurfaceMapper 的 sensorPoint / nearestSurfaceIntersection 改为 internal 供 A' 复用；
+- 措辞严谨化：已确认 ARKit raycast 表面与 RoomPlan Surface 存在 2.6–8.5cm 法向不一致（随拍摄时刻/设备状态变化），是否"时间累积漂移"需固定点分时实验进一步验证；
+- 宽度不随 A 验证（误差来源独立：mask 分辨率/EDT/中心线/图像投影），A 先验位置/Surface/UV/长度。
+
 ### 2026-08-14 · P4C-Drift 第一阶段：锚点漂移检测/诊断接入（专家批准，只检测不改测量）
 
 - 恢复 AnchorDriftTracker（f3151bc 保留文件）：finishRoomReview 时在墙A（最大墙）/墙B（离A最远）/地面放置 ARAnchor（transform=surface.transform），记录初始位姿；

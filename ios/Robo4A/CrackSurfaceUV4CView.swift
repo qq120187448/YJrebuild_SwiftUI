@@ -548,6 +548,23 @@ struct CrackSurfaceUV4CView: View {
 
             // 拍照时间戳：用于 Capture→Raycast 延迟统计（专家建议指标）。
             let captureTime = Date()
+            // A' 三轨对照（专家批准）：保留拍照帧空间上下文，供
+            // Surface-Intersection 对照路与重投影闭环使用；不改变主测量路径。
+            let captureFrame = arView.session.currentFrame
+            let orientation =
+                arView.window?.windowScene?.interfaceOrientation ?? .portrait
+            let captureContext = captureFrame.map { frame in
+                CaptureFrameSpatialContext(
+                    timestamp: frame.timestamp,
+                    cameraTransform: frame.camera.transform,
+                    cameraIntrinsics: frame.camera.intrinsics,
+                    imageResolution: frame.camera.imageResolution,
+                    displayTransform: frame.displayTransform(
+                        for: orientation,
+                        viewportSize: arView.bounds.size
+                    )
+                )
+            }
             arView.snapshot(saveToHDR: false) { image in
                 Task { @MainActor in
                     guard let image else {
@@ -652,9 +669,25 @@ struct CrackSurfaceUV4CView: View {
                         appendReportLog(widthDiag)
                         appendReportLog(lengthDiag)
                     }
-                    if let sample = driftTracker.sample(session: arView.session) {
+                    let driftSample = driftTracker.sample(session: arView.session)
+                    if let sample = driftSample {
                         appendReportLog("漂移诊断：" + sample.text)
                     }
+                    // A' 三轨对照（专家批准）：Raw / Snap / Surface-Intersection
+                    // 仅诊断，不改测量。
+                    let trackingText = Self.trackingStateText(
+                        arView.session.currentFrame?.camera.trackingState
+                    )
+                    let aStar = AStarDiagnostics.run(
+                        arView: arView,
+                        context: captureContext,
+                        room: room,
+                        raycast: raycast,
+                        viewPointScale: scale,
+                        trackingState: trackingText,
+                        anchorConsistencyMM: driftSample?.consistencyMM
+                    )
+                    appendReportLog(aStar.text)
                     statusText = String(
                         format: "表面分配率 %.1f%% · UV 单位米 · 已解除静止锁定",
                         surfaceReport.assignedRatio * 100

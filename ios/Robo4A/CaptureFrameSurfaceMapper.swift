@@ -201,12 +201,12 @@ enum CaptureFrameSurfaceMapper {
         )
     }
 
-    private struct FrameSurfaceHit {
+    struct FrameSurfaceHit {
         let world: SIMD3<Float>
         let distance: Float
     }
 
-    private static func nearestSurfaceIntersection(
+    static func nearestSurfaceIntersection(
         origin: SIMD3<Float>,
         direction: SIMD3<Float>,
         surfaces: [CapturedRoom.Surface],
@@ -252,7 +252,7 @@ enum CaptureFrameSurfaceMapper {
         return best
     }
 
-    private static func sensorPoint(
+    static func sensorPoint(
         viewPoint: CGPoint,
         displayTransform: CGAffineTransform,
         imageWidth: CGFloat,
