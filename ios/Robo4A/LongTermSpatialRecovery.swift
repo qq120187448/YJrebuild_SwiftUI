@@ -48,6 +48,12 @@ final class SpatialRecoveryManager {
     /// 最近一次 recovery 尝试时间（needUser 自动重试用）。
     private var lastRecoveryAttempt: Date?
     private var autoRetryInterval: TimeInterval = 5
+    /// 自动重试次数上限（防死循环）。
+    private var recoveryAttempts = 0
+    private let maxRecoveryAttempts = 5
+    /// normal 后表面校验连续失败计数（mesh 重建需时间，先等待重试）。
+    private var verifyFailCount = 0
+    private let maxVerifyFails = 10
     /// 去重：仅在状态或文本变化时记录一次。
     private var lastReportedText = ""
 
@@ -213,6 +219,8 @@ final class SpatialRecoveryManager {
         setState(.relocalizing, text: "ARWorldMap recovery 已触发（relocalizing…）")
         recoveryStart = Date()
         lastRecoveryAttempt = Date()
+        recoveryAttempts += 1
+        verifyFailCount = 0
         return true
     }
 
@@ -224,13 +232,20 @@ final class SpatialRecoveryManager {
     ) {
         // needUserRelocalization：用户走回已扫描区域后自动重试 recovery（每 5s）。
         if state == .needUserRelocalization {
+            guard recoveryAttempts < maxRecoveryAttempts else {
+                setState(
+                    .needUserRelocalization,
+                    text: "重定位多次失败（\(recoveryAttempts) 次），请回到已扫描区域缓慢转动手机；仍失败请重新扫描"
+                )
+                return
+            }
             if let last = lastRecoveryAttempt,
                Date().timeIntervalSince(last) < autoRetryInterval {
                 return
             }
             setState(
                 .relocalizationRequired,
-                text: "自动重试 ARWorldMap recovery…"
+                text: "自动重试 ARWorldMap recovery（第 \(recoveryAttempts + 1)/\(maxRecoveryAttempts) 次）…"
             )
             _ = startRecovery(arView: arView)
             return
@@ -255,12 +270,17 @@ final class SpatialRecoveryManager {
             )
             return
         }
-        // normal 后校验 Surface alignment
+        // normal 后校验 Surface alignment。
+        // WorldMap 恢复的锚点 identifier 不保证保留：用 RoomPlan surfaces 重新放置校验锚点。
+        if verifyAnchors.isEmpty {
+            placeVerifyAnchors(surfaces: surfaces, session: arView.session)
+        }
         let snapMM = verifySnapDistance(
             arView: arView,
             surfaces: surfaces
         )
         if let snapMM, snapMM <= 20 {
+            verifyFailCount = 0
             setState(
                 .measurementReady,
                 text: String(
@@ -269,15 +289,30 @@ final class SpatialRecoveryManager {
                 )
             )
         } else {
-            setState(
-                .needUserRelocalization,
-                text: snapMM.map {
-                    String(
-                        format: "recovery 后 alignment 仍差（%.1fmm），请回到已扫描区域",
-                        $0
-                    )
-                } ?? "recovery 后无表面观测，请回到已扫描区域"
-            )
+            verifyFailCount += 1
+            if verifyFailCount >= maxVerifyFails {
+                setState(
+                    .needUserRelocalization,
+                    text: snapMM.map {
+                        String(
+                            format: "recovery 后 alignment 仍差（%.1fmm），请回到已扫描区域",
+                            $0
+                        )
+                    } ?? "recovery 后持续无表面观测（mesh 未恢复），请回到已扫描区域"
+                )
+            } else {
+                setState(
+                    .relocalizing,
+                    text: snapMM.map {
+                        String(
+                            format: "normal 已恢复，等待表面校验（%.1fmm，第 %d/%d 次）…",
+                            $0,
+                            verifyFailCount,
+                            maxVerifyFails
+                        )
+                    } ?? "normal 已恢复，等待表面观测（mesh 重建中，第 \(verifyFailCount)/\(maxVerifyFails) 次）…"
+                )
+            }
         }
     }
 
@@ -367,6 +402,8 @@ final class SpatialRecoveryManager {
         lastHealthText = ""
         lastReportedText = ""
         recoveryStart = nil
+        recoveryAttempts = 0
+        verifyFailCount = 0
         removeVerifyAnchors(session: session)
     }
 
