@@ -1,15 +1,17 @@
 import Foundation
 import UIKit
 
-/// 4A 折线方案（用户定稿）：
+/// 4A/4D.1 折线方案（用户定稿）：
 /// mask（protos×系数→上采样）→ 框内自适应稀疏化采样（保连通）
-/// → Zhang-Suen 类骨架化 → 端点回溯剪枝(<30px) → 按长度保留 1~5 条主裂缝(≥80px)
-/// → 每分量 BFS 最长路径 → 有序点序列 → Douglas-Peucker(ε=1.5px) → 采样点。
+/// → 连通域提取 → 轮廓拟合中心线（PCA 主轴 + 分箱中点）→ Douglas-Peucker
+/// → 每条裂缝折线强制 ≤7 段（≤8 点）→ 按长度保留最多 7 条主裂缝（≥80px）
+/// → 等距采样点（供 4B raycast）。
+/// 宽度：沿中心线法向找两侧轮廓最近点，输出平均/最大像素宽。
 /// 每条主裂缝只输出一条折线，避免重复计算。
 enum CrackCenterlineOverlay {
 
     struct Result {
-        /// 每条主裂缝一条折线（有序 + DP 简化）
+        /// 每条主裂缝一条折线（有序 + DP 简化 + ≤7 段）
         var polylines: [[CrackPoint]]
         /// 每条折线的等距采样点（供 4B raycast）
         var samplePointsPerPolyline: [[CrackPoint]]
@@ -17,7 +19,7 @@ enum CrackCenterlineOverlay {
         var samplePoints: [CrackPoint]
         var maskPixelCount: Int
         var sparsePointCount: Int
-        var skeletonPointCount: Int
+        var centerlinePointCount: Int
         var componentCount: Int
         var totalPixelLength: Double
         var longestPixelLength: Double
@@ -77,9 +79,12 @@ enum CrackCenterlineOverlay {
         var samplesPerPolyline: [[CrackPoint]] = []
         for component in components {
             guard component.count >= 3 else { continue }
-            let centerline = approximateCenterline(
-                from: component,
-                simplifyEpsilonPx: 1.5
+            let centerline = cappedCenterline(
+                approximateCenterline(
+                    from: component,
+                    simplifyEpsilonPx: 1.5
+                ),
+                maxSegments: 7
             )
             guard centerline.count >= 2 else { continue }
             let length = polylineLength(centerline)
@@ -120,13 +125,62 @@ enum CrackCenterlineOverlay {
             samplePoints: flatSamples,
             maskPixelCount: maskPixelCount,
             sparsePointCount: components.reduce(0) { $0 + $1.count },
-            skeletonPointCount: polylines.reduce(0) { $0 + $1.count },
+            centerlinePointCount: polylines.reduce(0) { $0 + $1.count },
             componentCount: components.count,
             totalPixelLength: total,
             longestPixelLength: longest,
             maxWidthPx: widthStats.maxWidthPx,
             averageWidthPx: widthStats.averageWidthPx
         )
+    }
+
+    /// 强制每条裂缝折线 ≤ maxSegments 段（≤ maxSegments+1 点）：
+    /// 若 DP 结果超限，按弧长均匀重采样（保留首尾）。
+    private static func cappedCenterline(
+        _ points: [CrackPoint],
+        maxSegments: Int
+    ) -> [CrackPoint] {
+        let maxPoints = maxSegments + 1
+        guard points.count > maxPoints, maxSegments > 0 else {
+            return points
+        }
+
+        var cumulative: [Double] = [0]
+        for index in 1..<points.count {
+            cumulative.append(
+                cumulative[index - 1]
+                    + hypot(
+                        Double(points[index].x - points[index - 1].x),
+                        Double(points[index].y - points[index - 1].y)
+                    )
+            )
+        }
+        let total = cumulative.last ?? 0
+        guard total > 0 else {
+            return Array(points.prefix(maxPoints))
+        }
+
+        var result: [CrackPoint] = []
+        var targetIndex = 1
+        for segmentIndex in 0...maxSegments {
+            let target = total * Double(segmentIndex) / Double(maxSegments)
+            while targetIndex < cumulative.count - 1,
+                  cumulative[targetIndex] < target {
+                targetIndex += 1
+            }
+            let t0 = cumulative[targetIndex - 1]
+            let t1 = cumulative[targetIndex]
+            let fraction = t1 > t0 ? (target - t0) / (t1 - t0) : 0
+            let x = Double(points[targetIndex - 1].x)
+                + fraction * Double(points[targetIndex].x - points[targetIndex - 1].x)
+            let y = Double(points[targetIndex - 1].y)
+                + fraction * Double(points[targetIndex].y - points[targetIndex - 1].y)
+            let point = CrackPoint(x: Int(x.rounded()), y: Int(y.rounded()))
+            if result.last != point {
+                result.append(point)
+            }
+        }
+        return result
     }
 
     /// 用连通域点的 PCA 主轴作为裂缝主方向，把每个横截面两侧轮廓中点连成中心线。
@@ -328,207 +382,6 @@ enum CrackCenterlineOverlay {
             maxWidthPx: widths.max() ?? 0,
             averageWidthPx: widths.reduce(0, +) / Double(widths.count)
         )
-    }
-
-    /// 只在中心线采样点附近做局部 BFS，找到最近背景作为半宽。
-    private static func crackWidthStatsLocal(
-        grid: [Bool],
-        width: Int,
-        height: Int,
-        samplesPerPolyline: [[CrackPoint]]
-    ) -> (maxWidthPx: Double, averageWidthPx: Double) {
-        guard width > 0, height > 0, grid.count == width * height else {
-            return (0, 0)
-        }
-        let directions = [
-            (1, 0), (-1, 0), (0, 1), (0, -1),
-            (1, 1), (1, -1), (-1, 1), (-1, -1)
-        ]
-        let maxRadius = 80
-        var widths: [Double] = []
-
-        for polyline in samplesPerPolyline {
-            for point in polyline {
-                guard point.x >= 0, point.x < width,
-                      point.y >= 0, point.y < height else {
-                    continue
-                }
-                let start = point.y * width + point.x
-                guard grid[start] else { continue }
-
-                var distances: [Int: Int] = [start: 0]
-                var queue = [start]
-                var head = 0
-                var nearestBackground: Int?
-
-                while head < queue.count {
-                    let current = queue[head]
-                    head += 1
-                    let currentDistance = distances[current] ?? 0
-                    let cx = current % width
-                    let cy = current / width
-
-                    if !grid[current] {
-                        nearestBackground = currentDistance
-                        break
-                    }
-                    if currentDistance >= maxRadius {
-                        continue
-                    }
-
-                    for (dx, dy) in directions {
-                        let nx = cx + dx
-                        let ny = cy + dy
-                        guard nx >= 0, nx < width, ny >= 0, ny < height else {
-                            continue
-                        }
-                        let neighbor = ny * width + nx
-                        guard distances[neighbor] == nil else { continue }
-                        distances[neighbor] = currentDistance + 1
-                        queue.append(neighbor)
-                    }
-                }
-
-                if let nearestBackground {
-                    widths.append(Double(nearestBackground) * 2)
-                }
-            }
-        }
-
-        guard !widths.isEmpty else { return (0, 0) }
-        let sum = widths.reduce(0, +)
-        return (
-            maxWidthPx: widths.max() ?? 0,
-            averageWidthPx: sum / Double(widths.count)
-        )
-    }
-
-    /// 用二值掩码到背景的 8 邻域距离场估算裂缝宽度：
-    /// 每个前景点到最近背景的距离视为“半宽”，宽度=2×半宽。
-    /// 返回最大宽度与平均宽度（像素）。
-    private static func crackWidthStats(
-        grid: [Bool],
-        width: Int,
-        height: Int,
-        samplesPerPolyline: [[CrackPoint]]
-    ) -> (maxWidthPx: Double, averageWidthPx: Double) {
-        guard width > 0, height > 0, grid.count == width * height else {
-            return (0, 0)
-        }
-        let directions = [
-            (1, 0), (-1, 0), (0, 1), (0, -1),
-            (1, 1), (1, -1), (-1, 1), (-1, -1)
-        ]
-        let maxRadius = 80
-        var widths: [Double] = []
-        for polyline in samplesPerPolyline {
-            for point in polyline {
-                guard point.x >= 0, point.x < width,
-                      point.y >= 0, point.y < height else {
-                    continue
-                }
-                let index = point.y * width + point.x
-                guard grid[index] else { continue }
-
-                var visited = Set<Int>([index])
-                var queue = [index]
-                var head = 0
-                var halfWidth: Int?
-
-                while head < queue.count {
-                    let current = queue[head]
-                    head += 1
-                    let currentDistance =
-                        current == index ? 0 : visited.count > 0 ? current == index ? 0 : 0 : 0
-                    // 用与起点的 BFS 层数维护距离。
-                    if !grid[current] {
-                        halfWidth = max(1, current == index ? 0 : 0)
-                        break
-                    }
-                    if current != index {
-                        // 计算从起点到当前点的最短曼哈顿距离近似。
-                    }
-                    for (dx, dy) in directions {
-                        let nx = (current % width) + dx
-                        let ny = (current / width) + dy
-                        guard nx >= 0, nx < width, ny >= 0, ny < height else {
-                            continue
-                        }
-                        let neighbor = ny * width + nx
-                        guard !visited.contains(neighbor) else { continue }
-                        visited.insert(neighbor)
-                        queue.append(neighbor)
-                        if !grid[neighbor] {
-                            halfWidth = max(1, min(halfWidth ?? .max, current == index ? 1 : 1))
-                            break
-                        }
-                    }
-                    if halfWidth != nil { break }
-                }
-
-                if let halfWidth {
-                    widths.append(Double(halfWidth) * 2)
-                }
-            }
-        }
-        guard !widths.isEmpty else { return (0, 0) }
-        let sum = widths.reduce(0, +)
-        let count = widths.count
-        let maxWidth = widths.max() ?? 0
-        return (
-            maxWidthPx: maxWidth,
-            averageWidthPx: sum / Double(count)
-        )
-    }
-
-    /// 骨架图上 BFS 求直径（两次 BFS），返回从一端到另一端的有序路径。
-    private static func longestPath(
-        in points: Set<CrackPoint>,
-        spacing: Int
-    ) -> [CrackPoint] {
-        guard let start = points.first else { return [] }
-        let step = max(1, spacing)
-
-        func bfs(
-            from source: CrackPoint
-        ) -> (CrackPoint, [CrackPoint: CrackPoint]) {
-            var visited = Set<CrackPoint>([source])
-            var parent: [CrackPoint: CrackPoint] = [:]
-            var queue = [source]
-            var queueIndex = 0
-            var last = source
-            while queueIndex < queue.count {
-                let current = queue[queueIndex]
-                queueIndex += 1
-                last = current
-                for dy in -step...step where dy % step == 0 {
-                    for dx in -step...step where dx % step == 0 {
-                        if dy == 0 && dx == 0 { continue }
-                        let next = CrackPoint(
-                            x: current.x + dx,
-                            y: current.y + dy
-                        )
-                        if points.contains(next), !visited.contains(next) {
-                            visited.insert(next)
-                            parent[next] = current
-                            queue.append(next)
-                        }
-                    }
-                }
-            }
-            return (last, parent)
-        }
-
-        let (farEnd, _) = bfs(from: start)
-        let (otherEnd, parent) = bfs(from: farEnd)
-
-        var path: [CrackPoint] = []
-        var current: CrackPoint? = otherEnd
-        while let point = current {
-            path.append(point)
-            current = parent[point]
-        }
-        return path.reversed()
     }
 
     /// 有序折线像素长度（直接累加相邻点欧氏距离）。

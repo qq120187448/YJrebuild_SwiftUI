@@ -24,7 +24,8 @@ enum CaptureFrameSurfaceMapper {
         room: CapturedRoom,
         samplePointsPerPolyline: [[CrackPoint]],
         imageToViewScale: CGFloat,
-        captureTime: Date? = nil
+        captureTime: Date? = nil,
+        centerlinesPerPolyline: [[CrackPoint]] = []
     ) -> Raycast4BReport {
         let raycastStart = Date()
         let surfaces =
@@ -65,82 +66,85 @@ enum CaptureFrameSurfaceMapper {
         var missReasons: [String: Int] = [:]
         var polylines: [Raycast4BPolylineResult] = []
 
+        // 单点：拍照帧相机射线 → RoomPlan Surface 平面求交。
+        func surfacePoint(_ point: CrackPoint) -> Raycast4BPointResult {
+            totalSamples += 1
+            let viewPoint = CGPoint(
+                x: CGFloat(point.x) * imageToViewScale,
+                y: CGFloat(point.y) * imageToViewScale
+            )
+            let sensorPoint = Self.sensorPoint(
+                viewPoint: viewPoint,
+                displayTransform: displayTransform,
+                imageWidth: imageWidth,
+                imageHeight: imageHeight
+            )
+            let localDirection = SIMD3<Float>(
+                (sensorPoint.x - cx) / fx,
+                (sensorPoint.y - cy) / fy,
+                -1
+            )
+            let worldDirection = simd_normalize(
+                rotation * localDirection
+            )
+
+            guard let hit = Self.nearestSurfaceIntersection(
+                origin: cameraOrigin,
+                direction: worldDirection,
+                surfaces: surfaces
+            ) else {
+                missReasons["noSurfaceIntersection", default: 0] += 1
+                return Raycast4BPointResult(
+                    source: point,
+                    world: nil,
+                    projected: nil,
+                    errorPx: nil,
+                    missReason: "noSurfaceIntersection",
+                    raycastResultsCount: 0,
+                    firstRaycastDistance: nil,
+                    raycastAnchorType: nil,
+                    raycastTarget: nil,
+                    raycastTargetAlignment: nil,
+                    existingWorld: nil,
+                    existingFirstRaycastDistance: nil,
+                    existingRaycastAnchorType: nil,
+                    existingRaycastResultsCount: 0
+                )
+            }
+
+            hitCount += 1
+            validCount += 1
+            let distance = Double(
+                simd_distance(hit.world, cameraOrigin)
+            )
+            return Raycast4BPointResult(
+                source: point,
+                world: hit.world,
+                projected: nil,
+                errorPx: nil,
+                missReason: nil,
+                raycastResultsCount: 1,
+                firstRaycastDistance: distance,
+                raycastAnchorType: nil,
+                raycastTarget: "estimatedPlane",
+                raycastTargetAlignment: "any",
+                existingWorld: nil,
+                existingFirstRaycastDistance: nil,
+                existingRaycastAnchorType: nil,
+                existingRaycastResultsCount: 0
+            )
+        }
+
         for (index, polyline) in samplePointsPerPolyline.enumerated() {
             var points: [Raycast4BPointResult] = []
             var polyHits = 0
 
             for point in polyline {
-                totalSamples += 1
-                let viewPoint = CGPoint(
-                    x: CGFloat(point.x) * imageToViewScale,
-                    y: CGFloat(point.y) * imageToViewScale
-                )
-                let sensorPoint = Self.sensorPoint(
-                    viewPoint: viewPoint,
-                    displayTransform: displayTransform,
-                    imageWidth: imageWidth,
-                    imageHeight: imageHeight
-                )
-                let localDirection = SIMD3<Float>(
-                    (sensorPoint.x - cx) / fx,
-                    (sensorPoint.y - cy) / fy,
-                    -1
-                )
-                let worldDirection = simd_normalize(
-                    rotation * localDirection
-                )
-
-                guard let hit = Self.nearestSurfaceIntersection(
-                    origin: cameraOrigin,
-                    direction: worldDirection,
-                    surfaces: surfaces
-                ) else {
-                    missReasons["noSurfaceIntersection", default: 0] += 1
-                    points.append(
-                        Raycast4BPointResult(
-                            source: point,
-                            world: nil,
-                            projected: nil,
-                            errorPx: nil,
-                            missReason: "noSurfaceIntersection",
-                            raycastResultsCount: 0,
-                            firstRaycastDistance: nil,
-                            raycastAnchorType: nil,
-                            raycastTarget: nil,
-                            raycastTargetAlignment: nil,
-                            existingWorld: nil,
-                            existingFirstRaycastDistance: nil,
-                            existingRaycastAnchorType: nil,
-                            existingRaycastResultsCount: 0
-                        )
-                    )
-                    continue
+                let result = surfacePoint(point)
+                points.append(result)
+                if result.world != nil {
+                    polyHits += 1
                 }
-
-                hitCount += 1
-                polyHits += 1
-                validCount += 1
-                let distance = Double(
-                    simd_distance(hit.world, cameraOrigin)
-                )
-                points.append(
-                    Raycast4BPointResult(
-                        source: point,
-                        world: hit.world,
-                        projected: nil,
-                        errorPx: nil,
-                        missReason: nil,
-                        raycastResultsCount: 1,
-                        firstRaycastDistance: distance,
-                        raycastAnchorType: nil,
-                        raycastTarget: "estimatedPlane",
-                        raycastTargetAlignment: "any",
-                        existingWorld: nil,
-                        existingFirstRaycastDistance: nil,
-                        existingRaycastAnchorType: nil,
-                        existingRaycastResultsCount: 0
-                    )
-                )
             }
 
             polylines.append(
@@ -148,6 +152,30 @@ enum CaptureFrameSurfaceMapper {
                     index: index,
                     sampleCount: polyline.count,
                     hitCount: polyHits,
+                    errors: [],
+                    orderInversions: 0,
+                    orderPairs: 0,
+                    points: points
+                )
+            )
+        }
+
+        var centerlinePolylines: [Raycast4BPolylineResult] = []
+        for (index, centerline) in centerlinesPerPolyline.enumerated() {
+            var points: [Raycast4BPointResult] = []
+            var centerlineHits = 0
+            for point in centerline {
+                let result = surfacePoint(point)
+                if result.world != nil {
+                    centerlineHits += 1
+                }
+                points.append(result)
+            }
+            centerlinePolylines.append(
+                Raycast4BPolylineResult(
+                    index: index,
+                    sampleCount: centerline.count,
+                    hitCount: centerlineHits,
                     errors: [],
                     orderInversions: 0,
                     orderPairs: 0,
@@ -164,6 +192,7 @@ enum CaptureFrameSurfaceMapper {
             errors: [],
             missReasons: missReasons,
             polylines: polylines,
+            centerlinePolylines: centerlinePolylines,
             orderInversions: 0,
             orderPairs: 0,
             captureToRaycastDelayMs: captureTime.map {

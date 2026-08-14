@@ -550,7 +550,9 @@ struct CrackSurfaceUV4CView: View {
                             room: room,
                             samplePointsPerPolyline: samples,
                             imageToViewScale: scale,
-                            captureTime: captureTime
+                            captureTime: captureTime,
+                            centerlinesPerPolyline:
+                                viewModel.centerlineResult?.polylines ?? []
                         )
                     } else {
                         raycast = CrackRaycast4B.measure(
@@ -558,7 +560,9 @@ struct CrackSurfaceUV4CView: View {
                             scenario: scenario,
                             samplePointsPerPolyline: samples,
                             imageToViewScale: scale,
-                            captureTime: captureTime
+                            captureTime: captureTime,
+                            centerlinesPerPolyline:
+                                viewModel.centerlineResult?.polylines ?? []
                         )
                     }
                     let sessionDiagnosticText = Self.sessionDiagnosticText(

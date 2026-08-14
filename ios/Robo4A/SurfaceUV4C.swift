@@ -333,58 +333,14 @@ enum SurfaceUV4C {
         var existingWorldPoints: [SIMD3<Float>] = []
         var raycastTargetSummary: [String: Int] = [:]
 
-        for polyline in raycast.polylines {
-            var points: [MappedPoint] = []
-            var assignedCount = 0
-            var counts: [UUID: Int] = [:]
-            var uvPoints: [(u: Double, v: Double)] = []
-
-            for (_, point) in polyline.points.enumerated() {
-                totalSamples += 1
-                guard let world = point.world else {
-                    let existingCandidate = point.existingWorld.flatMap {
-                        candidateDiagnostics(
-                            world: $0,
-                            surfaces: surfaces,
-                            allowedCategories: diagnosticCategories
-                        ).first
-                    }
-                    points.append(
-                        MappedPoint(
-                            source: point.source,
-                            world: nil,
-                            surfaceID: nil,
-                            category: nil,
-                            u: nil,
-                            v: nil,
-                            localZ: nil,
-                            status: "miss",
-                            raycastResultsCount: point.raycastResultsCount,
-                            firstRaycastDistance: point.firstRaycastDistance,
-                            raycastAnchorType: point.raycastAnchorType,
-                            raycastTarget: point.raycastTarget,
-                            raycastTargetAlignment: point.raycastTargetAlignment,
-                            existingWorld: point.existingWorld,
-                            existingLocalZ: existingCandidate.map { Double($0.local.z) },
-                            existingPlaneDistance: existingCandidate.map { Double($0.planeDistance) },
-                            candidates: []
-                        )
-                    )
-                    continue
-                }
-                totalWorldHits += 1
-                worldPoints.append(world)
-                if let existingWorld = point.existingWorld {
-                    existingWorldPoints.append(existingWorld)
-                }
-                if let target = point.raycastTarget {
-                    raycastTargetSummary[target, default: 0] += 1
-                }
-                let candidates = candidateDiagnostics(
-                    world: world,
-                    surfaces: surfaces,
-                    allowedCategories: diagnosticCategories
-                )
+        // 把一个 raycast 单点结果映射为 MappedPoint（密集采样与简化折线共用）。
+        func mappedPoint(
+            from point: Raycast4BPointResult,
+            surfaces: [CapturedRoom.Surface],
+            toleranceM: Float,
+            diagnosticCategories: [CapturedRoom.Surface.Category]
+        ) -> MappedPoint {
+            guard let world = point.world else {
                 let existingCandidate = point.existingWorld.flatMap {
                     candidateDiagnostics(
                         world: $0,
@@ -392,91 +348,97 @@ enum SurfaceUV4C {
                         allowedCategories: diagnosticCategories
                     ).first
                 }
-                if let mapped = map(
-                    world: world,
-                    surfaces: surfaces,
-                    toleranceM: Float(toleranceM)
-                ) {
-                    assignedCount += 1
-                    totalAssigned += 1
-                    counts[mapped.surface.identifier, default: 0] += 1
-                    let u = Double(mapped.local.x)
-                    let v = Double(mapped.local.y)
-                    uvPoints.append((u, v))
-                    points.append(
-                        MappedPoint(
-                            source: point.source,
-                            world: world,
-                            surfaceID: mapped.surface.identifier,
-                            category: mapped.surface.category,
-                            u: u,
-                            v: v,
-                            localZ: Double(mapped.local.z),
-                            status: "assigned",
-                            raycastResultsCount: point.raycastResultsCount,
-                            firstRaycastDistance: point.firstRaycastDistance,
-                            raycastAnchorType: point.raycastAnchorType,
-                            raycastTarget: point.raycastTarget,
-                            raycastTargetAlignment: point.raycastTargetAlignment,
-                            existingWorld: point.existingWorld,
-                            existingLocalZ: existingCandidate.map { Double($0.local.z) },
-                            existingPlaneDistance: existingCandidate.map { Double($0.planeDistance) },
-                            candidates: candidates
-                        )
-                    )
-                } else {
-                    points.append(
-                        MappedPoint(
-                            source: point.source,
-                            world: world,
-                            surfaceID: nil,
-                            category: nil,
-                            u: nil,
-                            v: nil,
-                            localZ: nil,
-                            status: "noSurface",
-                            raycastResultsCount: point.raycastResultsCount,
-                            firstRaycastDistance: point.firstRaycastDistance,
-                            raycastAnchorType: point.raycastAnchorType,
-                            raycastTarget: point.raycastTarget,
-                            raycastTargetAlignment: point.raycastTargetAlignment,
-                            existingWorld: point.existingWorld,
-                            existingLocalZ: existingCandidate.map { Double($0.local.z) },
-                            existingPlaneDistance: existingCandidate.map { Double($0.planeDistance) },
-                            candidates: candidates
-                        )
-                    )
-                }
-            }
-
-            let dominantID = counts.max { $0.value < $1.value }?.key
-            let category = surfaces
-                .first { $0.identifier == dominantID }?
-                .category
-            polylines.append(
-                PolylineUV(
-                    index: polyline.index,
-                    sampleCount: polyline.sampleCount,
-                    worldHitCount: polyline.hitCount,
-                    assignedCount: assignedCount,
-                    surfaceID: dominantID,
-                    category: category,
-                    points: points,
-                    uvPoints: uvPoints
+                return MappedPoint(
+                    source: point.source,
+                    world: nil,
+                    surfaceID: nil,
+                    category: nil,
+                    u: nil,
+                    v: nil,
+                    localZ: nil,
+                    status: "miss",
+                    raycastResultsCount: point.raycastResultsCount,
+                    firstRaycastDistance: point.firstRaycastDistance,
+                    raycastAnchorType: point.raycastAnchorType,
+                    raycastTarget: point.raycastTarget,
+                    raycastTargetAlignment: point.raycastTargetAlignment,
+                    existingWorld: point.existingWorld,
+                    existingLocalZ: existingCandidate.map { Double($0.local.z) },
+                    existingPlaneDistance: existingCandidate.map { Double($0.planeDistance) },
+                    candidates: []
                 )
+            }
+            let candidates = candidateDiagnostics(
+                world: world,
+                surfaces: surfaces,
+                allowedCategories: diagnosticCategories
+            )
+            let existingCandidate = point.existingWorld.flatMap {
+                candidateDiagnostics(
+                    world: $0,
+                    surfaces: surfaces,
+                    allowedCategories: diagnosticCategories
+                ).first
+            }
+            if let mapped = map(
+                world: world,
+                surfaces: surfaces,
+                toleranceM: toleranceM
+            ) {
+                return MappedPoint(
+                    source: point.source,
+                    world: world,
+                    surfaceID: mapped.surface.identifier,
+                    category: mapped.surface.category,
+                    u: Double(mapped.local.x),
+                    v: Double(mapped.local.y),
+                    localZ: Double(mapped.local.z),
+                    status: "assigned",
+                    raycastResultsCount: point.raycastResultsCount,
+                    firstRaycastDistance: point.firstRaycastDistance,
+                    raycastAnchorType: point.raycastAnchorType,
+                    raycastTarget: point.raycastTarget,
+                    raycastTargetAlignment: point.raycastTargetAlignment,
+                    existingWorld: point.existingWorld,
+                    existingLocalZ: existingCandidate.map { Double($0.local.z) },
+                    existingPlaneDistance: existingCandidate.map { Double($0.planeDistance) },
+                    candidates: candidates
+                )
+            }
+            return MappedPoint(
+                source: point.source,
+                world: world,
+                surfaceID: nil,
+                category: nil,
+                u: nil,
+                v: nil,
+                localZ: nil,
+                status: "noSurface",
+                raycastResultsCount: point.raycastResultsCount,
+                firstRaycastDistance: point.firstRaycastDistance,
+                raycastAnchorType: point.raycastAnchorType,
+                raycastTarget: point.raycastTarget,
+                raycastTargetAlignment: point.raycastTargetAlignment,
+                existingWorld: point.existingWorld,
+                existingLocalZ: existingCandidate.map { Double($0.local.z) },
+                existingPlaneDistance: existingCandidate.map { Double($0.planeDistance) },
+                candidates: candidates
             )
         }
 
-        var uvLengthSegments: [UVLengthSegment] = []
-        var crossSurfaceTransitionCount = 0
-        for polyline in polylines {
+        // 按连续同面 assigned 点累计 UV 长度（跨面跳变不计入）。
+        func computeLengthSegments(
+            _ points: [MappedPoint]
+        ) -> (segments: [UVLengthSegment], transitions: Int, total: Double?) {
+            var segments: [UVLengthSegment] = []
+            var transitions = 0
             var segmentSurfaceID: UUID?
             var segmentCategory: CapturedRoom.Surface.Category?
             var segmentLength = 0.0
             var segmentPointCount = 0
             var previousPoint: MappedPoint?
 
-            for point in polyline.points {
+            for point in points {
                 guard point.status == "assigned",
                       let surfaceID = point.surfaceID,
                       let u = point.u,
@@ -499,7 +461,7 @@ enum SurfaceUV4C {
                 } else {
                     if let previousSurfaceID = segmentSurfaceID {
                         if segmentPointCount >= 2 {
-                            uvLengthSegments.append(
+                            segments.append(
                                 UVLengthSegment(
                                     surfaceID: previousSurfaceID,
                                     category: segmentCategory,
@@ -508,7 +470,7 @@ enum SurfaceUV4C {
                                 )
                             )
                         }
-                        crossSurfaceTransitionCount += 1
+                        transitions += 1
                     }
                     segmentSurfaceID = surfaceID
                     segmentCategory = point.category
@@ -520,7 +482,7 @@ enum SurfaceUV4C {
 
             if let previousSurfaceID = segmentSurfaceID,
                segmentPointCount >= 2 {
-                uvLengthSegments.append(
+                segments.append(
                     UVLengthSegment(
                         surfaceID: previousSurfaceID,
                         category: segmentCategory,
@@ -529,10 +491,85 @@ enum SurfaceUV4C {
                     )
                 )
             }
+            let total = segments.isEmpty
+                ? nil
+                : segments.reduce(0) { $0 + $1.lengthM }
+            return (segments, transitions, total)
         }
-        let uvLengthM = uvLengthSegments.isEmpty
-            ? nil
-            : uvLengthSegments.reduce(0) { $0 + $1.lengthM }
+
+        for polyline in raycast.polylines {
+            var points: [MappedPoint] = []
+            var assignedCount = 0
+            var counts: [UUID: Int] = [:]
+            var uvPoints: [(u: Double, v: Double)] = []
+
+            for (_, point) in polyline.points.enumerated() {
+                totalSamples += 1
+                let mapped = mappedPoint(
+                    from: point,
+                    surfaces: surfaces,
+                    toleranceM: Float(toleranceM),
+                    diagnosticCategories: diagnosticCategories
+                )
+                points.append(mapped)
+                if mapped.world != nil {
+                    totalWorldHits += 1
+                    worldPoints.append(mapped.world!)
+                    if let existingWorld = point.existingWorld {
+                        existingWorldPoints.append(existingWorld)
+                    }
+                    if let target = point.raycastTarget {
+                        raycastTargetSummary[target, default: 0] += 1
+                    }
+                }
+                if mapped.status == "assigned",
+                   let surfaceID = mapped.surfaceID,
+                   let u = mapped.u,
+                   let v = mapped.v {
+                    assignedCount += 1
+                    totalAssigned += 1
+                    counts[surfaceID, default: 0] += 1
+                    uvPoints.append((u, v))
+                }
+            }
+
+            let dominantID = counts.max { $0.value < $1.value }?.key
+            let category = surfaces
+                .first { $0.identifier == dominantID }?
+                .category
+            polylines.append(
+                PolylineUV(
+                    index: polyline.index,
+                    sampleCount: polyline.sampleCount,
+                    worldHitCount: polyline.hitCount,
+                    assignedCount: assignedCount,
+                    surfaceID: dominantID,
+                    category: category,
+                    points: points,
+                    uvPoints: uvPoints
+                )
+            )
+        }
+
+        // 4D.1 长度：优先用每条裂缝的简化折线（≤7 段）UV 长度；
+        // 未提供简化折线时（如 4B 路径）回退到密集采样点。
+        let lengthPoints: [MappedPoint]
+        if raycast.centerlinePolylines.isEmpty {
+            lengthPoints = polylines.flatMap { $0.points }
+        } else {
+            lengthPoints = raycast.centerlinePolylines.flatMap { $0.points }.map {
+                mappedPoint(
+                    from: $0,
+                    surfaces: surfaces,
+                    toleranceM: Float(toleranceM),
+                    diagnosticCategories: diagnosticCategories
+                )
+            }
+        }
+        let lengthResult = computeLengthSegments(lengthPoints)
+        let uvLengthSegments = lengthResult.segments
+        let crossSurfaceTransitionCount = lengthResult.transitions
+        let uvLengthM = lengthResult.total
         let averageWidthM: Double?
         let maxWidthM: Double?
         if let uvLengthM,
