@@ -113,6 +113,14 @@ class ContentViewModel: ObservableObject {
             self?.processing = true
         }
         await runVisionInference()
+        // 0.742B：中心线计算已移到后台，等待其完成（最多约 5s）后再返回。
+        for _ in 0..<100 {
+            let done = await MainActor.run { [weak self] in
+                self?.centerlineResult != nil
+            }
+            if done { break }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
     }
 }
 
@@ -228,22 +236,33 @@ extension ContentViewModel {
                 guard let self else { return }
                 self.maskPredictions = maskPredictions
                 self.processing = false
+                self.stageTimings["maskDecode"] = maskDecodeDuration
                 if let uiImage = self.uiImage {
-                    let skeletonStart = CFAbsoluteTimeGetCurrent()
-                    let result = CrackCenterlineOverlay.compute(
-                        masks: maskPredictions,
-                        imageSize: uiImage.size,
-                        includeWidthStats: !deferWidthStats
-                    )
-                    let skeletonDuration =
-                        (CFAbsoluteTimeGetCurrent() - skeletonStart) * 1000
-                    self.centerlineResult = result
-                    self.centerlineStats = CrackCenterlineOverlay.statsText(
-                        detectionCount: maskPredictions.count,
-                        result: result
-                    )
-                    self.stageTimings["maskDecode"] = maskDecodeDuration
-                    self.stageTimings["centerline"] = skeletonDuration
+                    // 0.742B：中心线计算移到后台（纯计算），避免阻塞主线程导致镜头卡顿。
+                    let imageSize = uiImage.size
+                    let widthOn = !self.deferWidthStats
+                    Task.detached(priority: .userInitiated) {
+                        let skeletonStart = CFAbsoluteTimeGetCurrent()
+                        let result = CrackCenterlineOverlay.compute(
+                            masks: maskPredictions,
+                            imageSize: imageSize,
+                            includeWidthStats: widthOn
+                        )
+                        let skeletonDuration =
+                            (CFAbsoluteTimeGetCurrent() - skeletonStart)
+                            * 1000
+                        await MainActor.run { [weak self] in
+                            guard let self else { return }
+                            self.centerlineResult = result
+                            self.centerlineStats =
+                                CrackCenterlineOverlay.statsText(
+                                    detectionCount: maskPredictions.count,
+                                    result: result
+                                )
+                            self.stageTimings["centerline"] =
+                                skeletonDuration
+                        }
+                    }
                 }
             }
             await setStatus(to: nil)

@@ -6,6 +6,8 @@
 
 ### 2026-08-14 · 0.742B（分支 codex/4b-mask-roi-0742b）：以 4B 为基座四项改造
 
+- 全流程异步化（保持镜头不卡顿）：中心线计算（CrackCenterlineOverlay.compute）从 MainActor 移出到 Task.detached 后台执行，完成后回主线程更新；runInference 等待中心线完成（最多 5s）再返回；Vision perform/maskDecode 本就在后台线程，主线程不再被半秒~1.8 秒的中心线计算阻塞；
+
 - centerline 性能：宽度统计边界检测 stride=2 降采样（计算量降约 4 倍）；4B 宽度统计延迟异步（compute 增加 includeWidthStats 开关，长度先出、宽度后台 Task 补，不阻塞拍照→出数）；
 
 - A/B 验证：投影/长度回退官方 raycast 世界点（帧锁定自研射线+平面求交暂不启用，验证其是否为红线不重合根因）；历史投影颜色循环保留；
