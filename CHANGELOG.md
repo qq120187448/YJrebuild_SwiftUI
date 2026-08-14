@@ -4,6 +4,16 @@
 
 ## 未发布 · 当前分支 codex/arkit-only-poc
 
+### 2026-08-14 · 0.74D：RoomPlan 降级为语义层，ARKit 成为测量主链（专家架构变更）
+
+- 架构调整：ARKit = 测量与长期空间层（工程量以 ARKit 出数为准）；RoomPlan = 建筑/房间语义层（统计/3D 报告可选，不参与工程量计算主链）；
+- 版本号 0.74D（project.yml MARKETING_VERSION）；
+- P1 纯 ARKit Surface：新增 ARMeasurementSurface.swift——ARSurfaceHit（id/category/transform/localPoint/confidence/source）+ ARMeasurementSurfaceProvider 协议 + ARPlaneSurfaceProvider（ARPlaneAnchor 主测量，vertical→wall、horizontal→floor；射线求交 + 点归属）；
+- P2/P3/P4：AROnlyScanView 测量改 CaptureFrame Isect（拍照帧射线 → ARKit Surface 求交 → surface-local XY → UV 长度），同时输出 3D 长度与 UV 长度、表面数量；
+- P5 SpatialSessionManager.swift：统一 start/stop/autoSaveWorldMap/loadWorldMap/poll 状态机（READY/TRACKING/SPATIAL_DEGRADED/RELOCALIZING/RECOVERED/UNSAFE），mapped 自动保存、失配自动 initialWorldMap 恢复；
+- 冻结（待 ARKit 基座通过）：RoomPlan Surface Snap、RoomPlan/ARWorld 对齐、RoomPlan 参与工程量、existingPlaneGeometry fallback、多 WorldMap、跨面高级算法、3D 热力图；
+- 性能优化（ROI 掩码）按专家方案列为下一独立提交。
+
 ### 2026-08-14 · ARKit-Only 补全：阶段计时 + 持久化累计日志 + 历史投影
 
 - 拍照到出工程量阶段计时（requestSetup/coreML/maskDecode/centerline/spatial/total + computeUnitsPolicy）写入日志；

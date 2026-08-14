@@ -17,10 +17,11 @@ struct AROnlyScanView: View {
     @State private var statusText = "对准裂缝拍照测量（ARKit-Only，无 RoomPlan）"
     @State private var isRunning = false
     @State private var reportText = ""
-    @State private var savedWorldMap: ARWorldMap?
-    @State private var isRelocalizing = false
+    /// 0.74D：统一空间会话管理（WorldMap/relocalization/状态机）。
+    @State private var spatialSession = SpatialSessionManager()
+    /// 0.74D：ARKit 测量表面提供者（当前 ARPlaneAnchor 主测量）。
+    @State private var surfaceProvider = ARPlaneSurfaceProvider()
     @State private var worldAnchors: [AnchorEntity] = []
-    @State private var autoSaved = false
     /// 历史投影颜色循环（区分每次测量，观察漂移）。
     @State private var colorIndex = 0
     @State private var reportLog: [String] = []
@@ -47,12 +48,25 @@ struct AROnlyScanView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal)
             }
+            if !spatialSession.lastDiagnostic.isEmpty {
+                Text(spatialSession.lastDiagnostic)
+                    .font(.caption2)
+                    .foregroundStyle(
+                        spatialSession.isMeasurementAllowed
+                            ? Color.secondary
+                            : Color.orange
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+            }
 
             HStack(spacing: 12) {
                 Button(isRunning ? "分析中…" : "拍照测量") {
                     measure()
                 }
-                .disabled(isRunning || isRelocalizing)
+                .disabled(
+                    isRunning || !spatialSession.isMeasurementAllowed
+                )
                 if !worldAnchors.isEmpty {
                     Button("清除投影") {
                         clearWorldVisualization()
@@ -95,9 +109,12 @@ struct AROnlyScanView: View {
             reportLog = UserDefaults.standard.stringArray(
                 forKey: Self.reportLogKey
             ) ?? []
+            spatialSession.onLog = { [self] text in
+                appendReportLog("会话：" + text)
+            }
         }
         .onDisappear {
-            session.pause()
+            spatialSession.stop(session: session)
         }
     }
 
@@ -106,15 +123,7 @@ struct AROnlyScanView: View {
     // MARK: - 会话配置
 
     private func runConfiguration(arView: ARView) {
-        let configuration = ARWorldTrackingConfiguration()
-        configuration.planeDetection = [.horizontal, .vertical]
-        if ARWorldTrackingConfiguration.supportsSceneReconstruction(
-            .meshWithClassification
-        ) {
-            configuration.sceneReconstruction = .meshWithClassification
-        }
-        configuration.environmentTexturing = .automatic
-        session.run(configuration)
+        spatialSession.start(arView: arView)
     }
 
     // MARK: - 测量（raycast → world 3D 折线长度）
@@ -125,6 +134,23 @@ struct AROnlyScanView: View {
         isRunning = true
         statusText = "拍照中…"
         let totalStart = Date()
+        // 0.74D Isect：保留拍照帧空间上下文（射线基于拍照瞬间，移动不影响对应关系）。
+        let captureFrame = arView.session.currentFrame
+        let orientation =
+            arView.window?.windowScene?.interfaceOrientation ?? .portrait
+        let captureContext = captureFrame.map { frame in
+            CaptureFrameSpatialContext(
+                timestamp: frame.timestamp,
+                cameraTransform: frame.camera.transform,
+                cameraIntrinsics: frame.camera.intrinsics,
+                imageResolution: frame.camera.imageResolution,
+                displayTransform: frame.displayTransform(
+                    for: orientation,
+                    viewportSize: arView.bounds.size
+                ),
+                viewportSize: arView.bounds.size
+            )
+        }
         arView.snapshot(saveToHDR: false) { image in
             Task { @MainActor in
                 defer { isRunning = false }
@@ -148,12 +174,19 @@ struct AROnlyScanView: View {
                     ? arView.bounds.width / imageWidth
                     : 1
 
+                // 刷新 ARKit 测量表面（ARPlaneAnchor）
+                if let captureFrame {
+                    surfaceProvider.refresh(from: captureFrame)
+                }
                 let spatialStart = Date()
                 var totalSamples = 0
                 var hits = 0
                 var errors: [Double] = []
                 var totalLength = 0.0
+                var uvLength = 0.0
                 var collectedWorldPoints: [SIMD3<Float>] = []
+                var previousSurfaceID: UUID?
+                var previousUV: SIMD2<Double>?
                 for polyline in samples {
                     var previousWorld: SIMD3<Float>?
                     for point in polyline {
@@ -162,14 +195,52 @@ struct AROnlyScanView: View {
                             x: CGFloat(point.x) * scale,
                             y: CGFloat(point.y) * scale
                         )
-                        let results = arView.raycast(
-                            from: viewPoint,
-                            allowing: .estimatedPlane,
-                            alignment: .any
+                        // Isect：拍照帧相机射线 → ARKit 测量表面求交
+                        guard let captureContext else { continue }
+                        let sensor = CaptureFrameSurfaceMapper.sensorPoint(
+                            viewPoint: viewPoint,
+                            displayTransform: captureContext.displayTransform,
+                            viewportSize: captureContext.viewportSize,
+                            imageWidth: captureContext.imageResolution.width,
+                            imageHeight: captureContext.imageResolution.height
                         )
-                        guard let hit = results.first else { continue }
+                        let fx = captureContext.cameraIntrinsics.columns.0.x
+                        let fy = captureContext.cameraIntrinsics.columns.1.y
+                        let cx = captureContext.cameraIntrinsics.columns.2.x
+                        let cy = captureContext.cameraIntrinsics.columns.2.y
+                        let localDirection = SIMD3<Float>(
+                            (sensor.x - cx) / fx,
+                            -(sensor.y - cy) / fy,
+                            -1
+                        )
+                        let t = captureContext.cameraTransform
+                        let rotation = simd_float3x3(columns: (
+                            SIMD3<Float>(
+                                t.columns.0.x,
+                                t.columns.0.y,
+                                t.columns.0.z
+                            ),
+                            SIMD3<Float>(
+                                t.columns.1.x,
+                                t.columns.1.y,
+                                t.columns.1.z
+                            ),
+                            SIMD3<Float>(
+                                t.columns.2.x,
+                                t.columns.2.y,
+                                t.columns.2.z
+                            )
+                        ))
+                        let worldDirection = simd_normalize(
+                            rotation * localDirection
+                        )
+                        guard let surfaceHit = surfaceProvider.intersect(
+                            origin: captureContext.cameraTransform.position,
+                            direction: worldDirection,
+                            toleranceM: 0.02
+                        ) else { continue }
                         hits += 1
-                        let world = hit.worldTransform.position
+                        let world = surfaceHit.worldPoint
                         collectedWorldPoints.append(world)
                         if let previousWorld {
                             totalLength += Double(
@@ -177,6 +248,21 @@ struct AROnlyScanView: View {
                             )
                         }
                         previousWorld = world
+                        // UV：同表面连续累加（surface-local XY）
+                        let uv = SIMD2<Double>(
+                            Double(surfaceHit.localPoint.x),
+                            Double(surfaceHit.localPoint.y)
+                        )
+                        if let previousSurfaceID,
+                           previousSurfaceID == surfaceHit.id,
+                           let previousUV {
+                            uvLength += hypot(
+                                uv.x - previousUV.x,
+                                uv.y - previousUV.y
+                            )
+                        }
+                        previousSurfaceID = surfaceHit.id
+                        previousUV = uv
                         if let projected = arView.project(world) {
                             errors.append(
                                 hypot(
@@ -224,13 +310,15 @@ struct AROnlyScanView: View {
                     viewModel.inferenceHardware
                 ].joined(separator: " · ")
                 reportText = String(
-                    format: "长度 %.3f m · 命中 %.1f%% (%d/%d) · 重投影 avg %.2fpx · tracking %@",
+                    format: "长度(3D) %.3f m · 长度(UV) %.3f m · 命中 %.1f%% (%d/%d) · 重投影 avg %.2fpx · tracking %@ · 表面 %d",
                     totalLength,
+                    uvLength,
                     hitRate,
                     hits,
                     totalSamples,
                     avgError,
-                    tracking
+                    tracking,
+                    surfaceProvider.surfaceCount
                 )
                 statusText = "测量完成"
                 appendReportLog("测量：\(reportText)")
@@ -239,129 +327,28 @@ struct AROnlyScanView: View {
                     arView: arView,
                     worldPoints: collectedWorldPoints
                 )
-                // WorldMap 自动保存（mapped 时，仅一次）
-                if !autoSaved {
-                    autoSaveWorldMapIfMapped(arView: arView)
-                }
-                // 自动失配检测 → 自动 recovery
-                autoDetectAndRecover(
+                // 0.74D：SpatialSessionManager 状态机 + WorldMap 自动保存 + 失配自动恢复
+                spatialSession.poll(
                     arView: arView,
-                    totalSamples: totalSamples,
-                    hits: hits,
-                    avgError: avgError
+                    hitRate: totalSamples > 0
+                        ? Double(hits) / Double(totalSamples)
+                        : nil
                 )
-            }
-        }
-    }
-
-    // MARK: - WorldMap 自动保存 / 自动恢复
-
-    /// mapped 时自动保存基准 WorldMap（仅一次）。
-    private func autoSaveWorldMapIfMapped(arView: ARView) {
-        guard let frame = arView.session.currentFrame else { return }
-        guard frame.worldMappingStatus == .mapped else {
-            appendReportLog(
-                "WorldMap 未保存：worldMappingStatus=\(frame.worldMappingStatus)（等待 mapped）"
-            )
-            return
-        }
-        arView.session.getCurrentWorldMap { map, error in
-            if let map {
-                savedWorldMap = map
-                autoSaved = true
-                appendReportLog(
-                    "WorldMap 已自动保存（\(map.anchors.count) 锚点，mapped）"
-                )
-            } else {
-                appendReportLog(
-                    "WorldMap 自动保存失败：\(error?.localizedDescription ?? "未知")"
-                )
-            }
-        }
-    }
-
-    /// 失配检测（命中率/重投影/tracking）→ 自动 ARWorldMap recovery。
-    @MainActor
-    private func autoDetectAndRecover(
-        arView: ARView,
-        totalSamples: Int,
-        hits: Int,
-        avgError: Double
-    ) {
-        let tracking = arView.session.currentFrame?.camera.trackingState
-        let trackingText = Self.trackingText(tracking)
-        let hitRate = totalSamples > 0
-            ? Double(hits) / Double(totalSamples)
-            : 0
-        var mismatch = false
-        var reason = ""
-        if tracking != .normal {
-            mismatch = true
-            reason = "tracking=\(trackingText)"
-        } else if hitRate < 0.8 {
-            mismatch = true
-            reason = String(
-                format: "命中率 %.1f%% <80%%",
-                hitRate * 100
-            )
-        } else if avgError > 3 {
-            mismatch = true
-            reason = String(format: "重投影 %.1fpx >3px", avgError)
-        }
-        guard mismatch else {
-            appendReportLog(
-                String(
-                    format: "空间健康 GOOD（命中 %.1f%% · 重投影 %.2fpx · %@）",
-                    hitRate * 100,
-                    avgError,
-                    trackingText
-                )
-            )
-            return
-        }
-        appendReportLog("空间失配（\(reason)），自动触发 recovery")
-        recoverWorldMap()
-    }
-
-    /// 用 initialWorldMap 重启会话并等待 normal（自动恢复测量）。
-    @MainActor
-    private func recoverWorldMap() {
-        guard let arView = arViewRef, let savedWorldMap else {
-            appendReportLog("无已保存 WorldMap，无法自动恢复")
-            return
-        }
-        guard !isRelocalizing else { return }
-        let configuration = ARWorldTrackingConfiguration()
-        configuration.initialWorldMap = savedWorldMap
-        configuration.planeDetection = [.horizontal, .vertical]
-        if ARWorldTrackingConfiguration.supportsSceneReconstruction(
-            .meshWithClassification
-        ) {
-            configuration.sceneReconstruction = .meshWithClassification
-        }
-        configuration.environmentTexturing = .automatic
-        arView.session.run(
-            configuration,
-            options: [.resetTracking, .removeExistingAnchors]
-        )
-        isRelocalizing = true
-        statusText = "正在自动重新定位空间…请缓慢移动手机观察已扫描区域"
-        appendReportLog("ARWorldMap 自动 recovery 已触发（relocalizing…）")
-
-        Task { @MainActor in
-            for _ in 0..<120 {
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                guard let frame = arView.session.currentFrame else { continue }
-                if frame.camera.trackingState == .normal {
-                    isRelocalizing = false
-                    statusText = "recovery 成功：tracking normal"
-                    appendReportLog("recovery 成功：tracking normal")
-                    return
+                if spatialSession.state == .tracking
+                    || spatialSession.state == .recovered {
+                    Task { @MainActor in
+                        _ = await spatialSession.autoSaveWorldMap(
+                            arView: arView
+                        )
+                    }
+                }
+                if spatialSession.state == .spatialDegraded {
+                    appendReportLog(
+                        "会话：" + spatialSession.lastDiagnostic
+                    )
+                    _ = spatialSession.loadWorldMap(arView: arView)
                 }
             }
-            isRelocalizing = false
-            statusText = "recovery 超时（60s），请回到已扫描区域"
-            appendReportLog("recovery 超时（60s），请回到已扫描区域")
         }
     }
 
