@@ -750,8 +750,10 @@ enum CrackSkeleton {
                 var queue = [start]
                 visited.insert(start)
                 var points: [CrackPoint] = []
-                while !queue.isEmpty {
-                    let current = queue.removeFirst()
+                var queueIndex = 0
+                while queueIndex < queue.count {
+                    let current = queue[queueIndex]
+                    queueIndex += 1
                     points.append(CrackPoint(x: current % width, y: current / width))
                     let cx = current % width
                     let cy = current / width

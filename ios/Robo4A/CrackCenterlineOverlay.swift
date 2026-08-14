@@ -81,30 +81,11 @@ enum CrackCenterlineOverlay {
         let height = max(1, Int(imageSize.height.rounded()))
 
         // 1. mask → 全图 bool 网格（每个 mask 单元覆盖整片像素，保证连通）
-        var grid = [Bool](repeating: false, count: width * height)
-        for prediction in masks {
-            let maskWidth = prediction.maskSize.width
-            let maskHeight = prediction.maskSize.height
-            guard maskWidth > 0, maskHeight > 0,
-                  prediction.mask.count >= maskWidth * maskHeight else {
-                continue
-            }
-            let scaleX = CGFloat(width) / CGFloat(maskWidth)
-            let scaleY = CGFloat(height) / CGFloat(maskHeight)
-            for y in 0..<maskHeight {
-                for x in 0..<maskWidth where prediction.mask[y * maskWidth + x] > 0 {
-                    let x0 = Int(CGFloat(x) * scaleX)
-                    let x1 = Int(CGFloat(x + 1) * scaleX)
-                    let y0 = Int(CGFloat(y) * scaleY)
-                    let y1 = Int(CGFloat(y + 1) * scaleY)
-                    for py in y0..<max(y0 + 1, y1) {
-                        for px in x0..<max(x0 + 1, x1) {
-                            grid[py * width + px] = true
-                        }
-                    }
-                }
-            }
-        }
+        let grid = mergedGrid(
+            masks: masks,
+            imageWidth: width,
+            imageHeight: height
+        )
 
         var maskPixelCount = 0
         for value in grid where value {
@@ -158,11 +139,11 @@ enum CrackCenterlineOverlay {
         samplesPerPolyline = keptIndices.map { samplesPerPolyline[$0] }
         // 宽度统计可延迟（先出折线/采样点，宽度由调用方后台异步补充）。
         let widthStats = includeWidthStats
-            ? contourWidthStats(
+            ? widthStatsViaNormalScan(
                 masks: masks,
                 imageWidth: width,
                 imageHeight: height,
-                samplesPerPolyline: samplesPerPolyline
+                polylines: polylines
             )
             : CrackWidthStats()
 
@@ -349,14 +330,215 @@ enum CrackCenterlineOverlay {
         imageSize: CGSize,
         samplesPerPolyline: [[CrackPoint]]
     ) -> CrackWidthStats {
-        contourWidthStats(
+        widthStatsViaNormalScan(
             masks: masks,
             imageWidth: max(1, Int(imageSize.width.rounded())),
             imageHeight: max(1, Int(imageSize.height.rounded())),
-            samplesPerPolyline: samplesPerPolyline
+            polylines: samplesPerPolyline
         )
     }
 
+    /// New fast width stats: per crack, 50 arc-length samples; for each sample,
+    /// walk both normal directions on the merged binary mask. O(50 x width)
+    /// instead of the old O(samples x contour) nearest-boundary search.
+    /// Output keeps min/avg/max, P10/P50/P90, 10-segment profile and quality.
+    private static func widthStatsViaNormalScan(
+        masks: [MaskPrediction],
+        imageWidth: Int,
+        imageHeight: Int,
+        polylines: [[CrackPoint]]
+    ) -> CrackWidthStats {
+        guard imageWidth > 0, imageHeight > 0 else { return CrackWidthStats() }
+        let grid = mergedGrid(
+            masks: masks,
+            imageWidth: imageWidth,
+            imageHeight: imageHeight
+        )
+
+        let sampleCount = 50
+        let maxScanRadius = 400.0
+        var perPolylineWidths: [[Double]] = []
+        for polyline in polylines {
+            guard polyline.count >= 2 else { continue }
+            let samples = resampleArcLength(polyline, count: sampleCount)
+            var polylineWidths: [Double] = []
+            for index in 0..<samples.count {
+                let point = samples[index]
+                let previous = index > 0 ? samples[index - 1] : nil
+                let next = index < samples.count - 1 ? samples[index + 1] : nil
+                var dirX = 0.0
+                var dirY = 0.0
+                if let previous, let next {
+                    dirX = next.x - previous.x
+                    dirY = next.y - previous.y
+                } else if let next {
+                    dirX = next.x - point.x
+                    dirY = next.y - point.y
+                } else if let previous {
+                    dirX = point.x - previous.x
+                    dirY = point.y - previous.y
+                } else {
+                    continue
+                }
+                let directionLength = hypot(dirX, dirY)
+                guard directionLength > 1e-6 else { continue }
+                let normalX = -dirY / directionLength
+                let normalY = dirX / directionLength
+                let width = scanMaskWidth(
+                    at: point,
+                    normalX: normalX,
+                    normalY: normalY,
+                    grid: grid,
+                    imageWidth: imageWidth,
+                    imageHeight: imageHeight,
+                    maxRadius: maxScanRadius
+                )
+                if width > 0 {
+                    polylineWidths.append(width)
+                }
+            }
+            if !polylineWidths.isEmpty {
+                perPolylineWidths.append(polylineWidths)
+            }
+        }
+        let widths = perPolylineWidths.flatMap { $0 }
+        guard !widths.isEmpty else { return CrackWidthStats() }
+        let sorted = widths.sorted()
+        let average = widths.reduce(0, +) / Double(widths.count)
+        var stats = CrackWidthStats()
+        stats.minPx = sorted.first ?? 0
+        stats.averagePx = average
+        stats.maxPx = sorted.last ?? 0
+        stats.p10Px = percentile(sorted, 10)
+        stats.p50Px = percentile(sorted, 50)
+        stats.p90Px = percentile(sorted, 90)
+        stats.profile10Px = profile10(perPolylineWidths)
+        if average < 2 {
+            stats.quality = .lowResolution
+        } else if average <= 4 {
+            stats.quality = .limited
+        } else {
+            stats.quality = .normal
+        }
+        return stats
+    }
+
+    /// Merge all instance masks into one full-image bool grid.
+    private static func mergedGrid(
+        masks: [MaskPrediction],
+        imageWidth: Int,
+        imageHeight: Int
+    ) -> [Bool] {
+        var grid = [Bool](repeating: false, count: imageWidth * imageHeight)
+        for prediction in masks {
+            let maskWidth = prediction.maskSize.width
+            let maskHeight = prediction.maskSize.height
+            guard maskWidth > 0, maskHeight > 0,
+                  prediction.mask.count >= maskWidth * maskHeight else {
+                continue
+            }
+            let scaleX = CGFloat(imageWidth) / CGFloat(maskWidth)
+            let scaleY = CGFloat(imageHeight) / CGFloat(maskHeight)
+            for y in 0..<maskHeight {
+                for x in 0..<maskWidth where prediction.mask[y * maskWidth + x] > 0 {
+                    let x0 = Int(CGFloat(x) * scaleX)
+                    let x1 = Int(CGFloat(x + 1) * scaleX)
+                    let y0 = Int(CGFloat(y) * scaleY)
+                    let y1 = Int(CGFloat(y + 1) * scaleY)
+                    for py in y0..<max(y0 + 1, y1) {
+                        for px in x0..<max(x0 + 1, x1) {
+                            grid[py * imageWidth + px] = true
+                        }
+                    }
+                }
+            }
+        }
+        return grid
+    }
+
+    /// Arc-length uniform resampling, keeps both endpoints.
+    private static func resampleArcLength(
+        _ points: [CrackPoint],
+        count: Int
+    ) -> [(x: Double, y: Double)] {
+        guard points.count >= 2, count >= 2 else {
+            return points.map { (x: Double($0.x), y: Double($0.y)) }
+        }
+        var cumulative: [Double] = [0]
+        for index in 1..<points.count {
+            cumulative.append(
+                cumulative[index - 1]
+                    + hypot(
+                        Double(points[index].x - points[index - 1].x),
+                        Double(points[index].y - points[index - 1].y)
+                    )
+            )
+        }
+        let total = cumulative.last ?? 0
+        guard total > 1e-6 else {
+            return points.map { (x: Double($0.x), y: Double($0.y)) }
+        }
+        var result: [(x: Double, y: Double)] = []
+        result.reserveCapacity(count)
+        var targetIndex = 1
+        for sampleIndex in 0..<count {
+            let target = total * Double(sampleIndex) / Double(count - 1)
+            while targetIndex < cumulative.count - 1,
+                  cumulative[targetIndex] < target {
+                targetIndex += 1
+            }
+            let t0 = cumulative[targetIndex - 1]
+            let t1 = cumulative[targetIndex]
+            let fraction = t1 > t0 ? (target - t0) / (t1 - t0) : 0
+            let x = Double(points[targetIndex - 1].x)
+                + fraction * Double(points[targetIndex].x - points[targetIndex - 1].x)
+            let y = Double(points[targetIndex - 1].y)
+                + fraction * Double(points[targetIndex].y - points[targetIndex - 1].y)
+            result.append((x: x, y: y))
+        }
+        return result
+    }
+
+    /// Walk both normal directions on the merged grid.
+    /// Width = distance of last mask pixel on each side + 1px.
+    private static func scanMaskWidth(
+        at point: (x: Double, y: Double),
+        normalX: Double,
+        normalY: Double,
+        grid: [Bool],
+        imageWidth: Int,
+        imageHeight: Int,
+        maxRadius: Double
+    ) -> Double {
+        func isMask(_ x: Double, _ y: Double) -> Bool {
+            let px = Int(x.rounded())
+            let py = Int(y.rounded())
+            guard px >= 0, px < imageWidth, py >= 0, py < imageHeight else {
+                return false
+            }
+            return grid[py * imageWidth + px]
+        }
+        guard isMask(point.x, point.y) else { return 0 }
+
+        var tPositive = 0.0
+        var t = 0.0
+        while t <= maxRadius {
+            if !isMask(point.x + t * normalX, point.y + t * normalY) { break }
+            tPositive = t
+            t += 1.0
+        }
+        var tNegative = 0.0
+        t = 0.0
+        while t <= maxRadius {
+            if !isMask(point.x - t * normalX, point.y - t * normalY) { break }
+            tNegative = t
+            t += 1.0
+        }
+        return tPositive + tNegative + 1
+    }
+
+    // NOTE: contourWidthStats below is superseded by widthStatsViaNormalScan.
+    // It is kept only as reference; it is no longer called anywhere.
     private static func contourWidthStats(
         masks: [MaskPrediction],
         imageWidth: Int,
