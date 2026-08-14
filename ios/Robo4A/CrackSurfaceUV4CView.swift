@@ -738,8 +738,13 @@ struct CrackSurfaceUV4CView: View {
                         aStar.snapDistancesMM,
                         p: 95
                     )
+                    let assignmentRatio = aStar.total > 0
+                        ? Double(aStar.assignmentRaw)
+                            / Double(aStar.total)
+                        : nil
                     let needRecovery = recoveryManager.evaluate(
                         snapDistanceMM: snapP95,
+                        assignmentRatio: assignmentRatio,
                         tracking: trackingText
                     )
                     if needRecovery {

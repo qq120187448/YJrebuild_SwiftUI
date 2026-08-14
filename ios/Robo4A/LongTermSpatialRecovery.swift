@@ -125,6 +125,7 @@ final class SpatialRecoveryManager {
     @MainActor
     func evaluate(
         snapDistanceMM: Double?,
+        assignmentRatio: Double?,
         tracking: String
     ) -> Bool {
         guard tracking == "normal" else {
@@ -134,10 +135,21 @@ final class SpatialRecoveryManager {
             )
             return true
         }
+        // 主指标：Raw 分配率（20mm 容差）。失配时大部分点 noSurface，分配率骤降。
+        if let assignmentRatio, assignmentRatio < 0.8 {
+            setState(
+                .relocalizationRequired,
+                text: String(
+                    format: "空间失配（Raw 分配率 %.1f%% <80%%），触发 recovery",
+                    assignmentRatio * 100
+                )
+            )
+            return true
+        }
         guard let snapDistanceMM else {
             setState(
                 .relocalizationRequired,
-                text: "无 snapDistance（未分配表面），空间失配"
+                text: "无 snapDistance，空间失配"
             )
             return true
         }
