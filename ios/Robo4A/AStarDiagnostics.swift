@@ -7,7 +7,7 @@ import UIKit
 /// A' 三轨对照实验（专家批准，2026-08-14）：
 /// 同一批采样点同时计算三套结果：
 ///   Raw   —— estimatedPlane 原始世界点 → 20mm 正式分配（snapMaxM=nil）
-///   Snap  —— 法向吸附到最近 RoomPlan Surface（debugSafetyCap=150mm，仅实验）
+///   Snap  —— 法向吸附到最近 RoomPlan Surface（正式门控 ≤20mm，专家定稿）
 ///   Isect —— 拍照帧相机射线 → RoomPlan Surface 直接求交（方案 C 验证基准）
 /// 输出：assignment、snapDistance P50/P90/P95/max、三路 reprojection、
 /// 三路 UV length、A vs C 长度差异、trackingState、anchor 门控。
@@ -44,9 +44,9 @@ enum AStarDiagnostics {
                 )
             )
             let snap = AStarDiagnostics.percentileText(snapDistancesMM)
-            lines.append("snapDistance(debugSafetyCap=150mm): \(snap)")
+            lines.append("snapDistance(门控≤20mm): \(snap)")
             lines.append(
-                "reprojection(px): Raw \(AStarDiagnostics.statsText(rawErrorsPx)) · Snap \(AStarDiagnostics.statsText(snapErrorsPx)) · Isect \(AStarDiagnostics.statsText(isectErrorsPx))"
+                "reprojection(px): Raw \(AStarDiagnostics.statsText(rawErrorsPx)) · Snap \(AStarDiagnostics.statsText(snapErrorsPx)) · Isect roundTrip \(AStarDiagnostics.statsText(isectErrorsPx))"
             )
             lines.append(
                 String(
@@ -123,12 +123,12 @@ enum AStarDiagnostics {
                     uvRaw.append((nil, nil, nil))
                 }
 
-                // Snap：法向吸附（debugSafetyCap=150mm）
+                // Snap：法向吸附（正式门控 ≤20mm）
                 let snapMapped = SurfaceUV4C.map(
                     world: worldRaw,
                     surfaces: surfaces,
                     toleranceM: 0.02,
-                    snapMaxM: 0.15
+                    snapMaxM: 0.02
                 )
                 if let snapMapped {
                     assignmentSnap += 1
@@ -272,7 +272,7 @@ enum AStarDiagnostics {
 
     /// 拍照帧相机投影：world → 相机局部 → sensor 像素 → displayTransform → 屏幕点。
     /// 用于 Isect 路重投影（Isect 世界点基于拍照帧，不能用当前帧 arView.project）。
-    private static func projectToCaptureFrame(
+    static func projectToCaptureFrame(
         _ world: SIMD3<Float>,
         context: CaptureFrameSpatialContext
     ) -> CGPoint? {

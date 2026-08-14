@@ -134,6 +134,7 @@ struct CrackSurfaceUV4CView: View {
     @State private var meshControl: MeshControl = .baseline
     @State private var surfaceToleranceMM: Double = 20
     @State private var showParameterPanel = false
+    @State private var showCalibration = false
     @State private var reportLog: [String] = []
     @State private var performanceText = ""
     /// P4C-Drift 第一阶段（专家批准）：只检测/诊断，不改测量。
@@ -254,6 +255,13 @@ struct CrackSurfaceUV4CView: View {
                     isRunning || capturedRoom == nil
                         || arViewReference == nil || phase != .ready
                 )
+                Button("标定") {
+                    showCalibration = true
+                }
+                .disabled(
+                    capturedRoom == nil
+                        || arViewReference == nil || phase != .ready
+                )
 
                 if let report {
                     Button("复制报告") {
@@ -339,6 +347,16 @@ struct CrackSurfaceUV4CView: View {
         }
         .sheet(isPresented: $showParameterPanel) {
             parameterPanel
+        }
+        .sheet(isPresented: $showCalibration) {
+            if let arView = arViewReference, let room = capturedRoom {
+                CalibrationView(
+                    arView: arView,
+                    room: room
+                ) { text in
+                    appendReportLog(text)
+                }
+            }
         }
         .onReceive(driftPulse) { _ in
             sampleDrift()

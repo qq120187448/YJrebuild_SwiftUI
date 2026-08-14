@@ -4,6 +4,15 @@
 
 ## 未发布 · 当前分支 codex/defect-mesh-uv-polyline
 
+### 2026-08-14 · 4D.1A 标定决策阶段（专家批复，只做标定版不改算法）
+
+- 不直接上线 A/C，进入 Ground Truth 标定：新增 CalibrationView（4C 页面"标定"入口），已知长度 500/1000/2000mm × 方向 0/45/90° × 距离 1/2m，照片点选线段两端 → Raw/Snap/Isect 三路长度与误差（mm + %），记入累计日志；
+- 固定 CrackSamplePoint 数据模型（pixel/rawWorld/snapWorld/snapDistanceMM/surfaceID/surfaceLocal/uvMeters/trackingState/anchorQuality/reprojection），rawWorld 用于 AR 显示、snapWorld/uv 用于持久化测量（测量与显示分离）；
+- Isect 0px 指标改名 roundTripReprojectionError（数学闭环自证，不代表真实精度）；
+- 正式吸附门控 snapDistance ≤20mm（取消 150mm 实验帽）；Snap 仅 abs(localZ)≤20mm 才吸附，超限不强吸附；
+- existingPlaneGeometry 措辞修正：有潜力备用候选，未达生产 fallback 证据级别，不做 estimated→existing 自动切换；
+- 4D 长度算法冻结暂缓：先完成 A/Snap/Isect 真值标定再定主测量路径。
+
 ### 2026-08-14 · A' 修复：Isect 路传感器坐标归一化 + 拍照帧投影
 
 - 真机 A' 数据发现 Isect 路异常（reprojection 34079px、UV length 3.234m）：根因一为 sensorPoint 缺"除以 viewportSize 归一化"步骤（displayTransform 输入输出均为归一化 [0,1]，当前直接拿屏幕点逆变换导致射线方向错误）；根因二为 Isect 世界点基于拍照帧相机，却用当前帧 arView.project 投影（用户拍照后移动 0.8~1.8m 必然巨大偏差）；
