@@ -234,6 +234,15 @@ enum SurfaceUV4C {
             return String(full[..<cut]) + "\n…（已截断至 \(limit) 字符）"
         }
 
+        /// 完整报告（含表面总数、每条裂缝分配详情、未分配候选 local/planeDistance/inside 诊断）
+        /// 截断到指定字符数以内，用于累计日志定位分配失败。
+        func clippedFullText(limit: Int = 1800) -> String {
+            let full = text()
+            guard full.count > limit else { return full }
+            let cut = full.index(full.startIndex, offsetBy: limit)
+            return String(full[..<cut]) + "\n…（已截断至 \(limit) 字符，可调大 limit 后重测）"
+        }
+
         /// 当前 4D.1 阶段精简日志：只保留裂缝总长、平均宽度、最大宽度。
         func compactText() -> String {
             var lines = [

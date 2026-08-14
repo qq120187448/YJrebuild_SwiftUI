@@ -4,6 +4,12 @@
 
 ## 未发布 · 当前分支 codex/defect-mesh-uv-polyline
 
+### 2026-08-14 · 0.74C 累计日志补全 4C 完整诊断
+
+- 累计日志与"复制报告"由精简版（仅长度/宽度）改为完整版：含表面总数（wall/floor/other）、每条裂缝采样点/world 命中/分配率、未分配候选 local/planeDistance/insideX/Y/Z、20/30/40/50mm 阈值分配率、estimated vs existing raycast 对比；
+- 目的：真机出现"world 命中但分配率 0"时，可直接从日志定量判断世界点与 RoomPlan 表面的偏移方向与量级，落实专家"0% 分配单独诊断"要求；
+- UI 报告区仍显示精简版，不占屏幕。
+
 ### 2026-08-14 · 定稿 0.74C（fa14c9e 方案为 4C 正式基线）
 
 - 版本号更新为 0.74C（project.yml MARKETING_VERSION）；

@@ -242,7 +242,7 @@ struct CrackSurfaceUV4CView: View {
 
                 if let report {
                     Button("复制报告") {
-                        let full = [report.clippedText(limit: 1000), comparisonText]
+                        let full = [report.clippedFullText(limit: 1800), comparisonText]
                             .filter { !$0.isEmpty }
                             .joined(separator: "\n")
                         UIPasteboard.general.string = full
@@ -566,7 +566,7 @@ struct CrackSurfaceUV4CView: View {
                     comparisonText = compareWithPrevious(surfaceReport)
                     lastReports[scenario] = surfaceReport
                     report = surfaceReport
-                    appendReportLog(surfaceReport.clippedText(limit: 1000))
+                    appendReportLog(surfaceReport.clippedFullText(limit: 1800))
                     let spatialDuration =
                         Date().timeIntervalSince(spatialStart) * 1000
                     let totalDuration =
