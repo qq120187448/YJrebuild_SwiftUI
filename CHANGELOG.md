@@ -4,6 +4,11 @@
 
 ## 未发布 · 当前分支 codex/defect-mesh-uv
 
+### 2026-08-14 · 取消 RoomPlan 在线小窗，恢复 AR 红线投影（9a97e55 后修复）
+
+- 移除拍照阶段右下角 RoomCaptureView 小窗与“RoomPlan 在线”标签：该实现会在 ready 时重建视图并再次 `captureSession.run`，等于重开 RoomPlan 会话，导致 ARView.raycast 红线投影失效；
+- 保留：全宽正方形取景、下半部重排、锚点漂移诊断（只检测不改测量）。
+
 ### 2026-08-14 · 4C 漂移诊断 + 取景 UI（ea689e0, 9a97e55）
 
 - 取景改全宽严格正方形（左右贴屏幕边无空隙、顶部贴安全区上缘/灵动岛下方），下半部重新排版；
